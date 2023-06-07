@@ -1,4 +1,3 @@
-use crate::vulkan;
 use crate::render;
 
 use std::ffi::CStr;
@@ -118,7 +117,7 @@ pub struct RasterPipelineDesc<'a> {
 
 impl RasterPipeline {
     pub fn create_impl(
-        device: &vulkan::Device,
+        device: &render::Device,
         bindless_layout: vk::PipelineLayout,
         desc: &RasterPipelineDesc,
     ) -> RasterPipeline {
@@ -201,21 +200,21 @@ impl RasterPipeline {
         RasterPipeline { handle }
     }
 
-    pub fn destroy_impl(device: &vulkan::Device, pipeline: &RasterPipeline) {
+    pub fn destroy_impl(device: &render::Device, pipeline: &RasterPipeline) {
         unsafe {
             device.raw.destroy_pipeline(pipeline.handle, None);
         }
     }
 }
 
-pub fn create_shader_module(device: &vulkan::Device, spv: &[u32], name: &str) -> vk::ShaderModule {
+pub fn create_shader_module(device: &render::Device, spv: &[u32], name: &str) -> vk::ShaderModule {
     let create_info = vk::ShaderModuleCreateInfo::builder().code(spv);
     let handle = unsafe { device.raw.create_shader_module(&create_info, None).unwrap() };
     device.set_debug_name(handle, name);
     handle
 }
 
-pub fn destroy_shader_module(device: &vulkan::Device, module: vk::ShaderModule) {
+pub fn destroy_shader_module(device: &render::Device, module: vk::ShaderModule) {
     unsafe { device.raw.destroy_shader_module(module, None) };
 }
 

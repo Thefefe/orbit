@@ -2,16 +2,21 @@ use std::ptr::NonNull;
 
 use ash::vk;
 use gpu_allocator::vulkan::{AllocationScheme, AllocationCreateDesc};
-use crate::vulkan;
 use crate::render;
 
 pub struct Buffer {
-    pub handle: vk::Buffer,
-    pub alloc_index: vulkan::AllocIndex,
-    pub descriptor_index: Option<vulkan::BufferDescriptorIndex>,
-    pub size: u64,
+    buffer_view: render::BufferView,
+    pub alloc_index: render::AllocIndex,
     pub usage: vk::BufferUsageFlags,
     pub mapped_ptr: Option<NonNull<u8>>,
+}
+
+impl std::ops::Deref for Buffer {
+    type Target = render::BufferView;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer_view
+    }
 }
 
 pub struct BufferDesc<'a> {
@@ -22,7 +27,7 @@ pub struct BufferDesc<'a> {
 }
 
 impl Buffer {
-    fn create_impl(device: &vulkan::Device, descriptors: &vulkan::BindlessDescriptors, desc: &BufferDesc) -> Buffer {
+    fn create_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, desc: &BufferDesc) -> Buffer {
         let create_info = vk::BufferCreateInfo::builder()
             .size(desc.size)
             .usage(desc.usage)
@@ -53,16 +58,18 @@ impl Buffer {
         device.set_debug_name(handle, desc.name);
 
         Buffer {
-            handle,
+            buffer_view: render::BufferView {
+                handle,
+                descriptor_index,
+                size: desc.size,
+            },
             alloc_index,
-            descriptor_index,
-            size: desc.size,
             usage: desc.usage,
             mapped_ptr,
         }
     }
 
-    fn destroy_impl(device: &vulkan::Device, buffer: &Buffer) {
+    fn destroy_impl(device: &render::Device, buffer: &Buffer) {
         unsafe {
             device.raw.destroy_buffer(buffer.handle, None);
         }

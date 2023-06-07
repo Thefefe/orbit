@@ -2,7 +2,7 @@ use ash::vk;
 use std::marker::PhantomData;
 use std::ops::Range;
 
-use crate::{vulkan, render};
+use crate::render;
 use crate::utils::Unsync;
 
 pub struct CommandPool {
@@ -14,7 +14,7 @@ pub struct CommandPool {
 }
 
 impl CommandPool {
-    pub fn new(device: &vulkan::Device) -> Self {
+    pub fn new(device: &render::Device) -> Self {
         let command_pool_create_info =
             vk::CommandPoolCreateInfo::builder().queue_family_index(device.queue_family_index);
 
@@ -34,7 +34,7 @@ impl CommandPool {
         &self.command_buffers[0..self.used_buffers]
     }
 
-    pub fn reset(&mut self, device: &vulkan::Device) {
+    pub fn reset(&mut self, device: &render::Device) {
         unsafe {
             device.raw.reset_command_pool(self.handle, vk::CommandPoolResetFlags::empty()).unwrap();
             for command_buffer in self.command_buffers.iter_mut() {
@@ -45,11 +45,7 @@ impl CommandPool {
         }
     }
 
-    pub fn begin_new<'a>(
-        &mut self,
-        device: &vulkan::Device,
-        flags: vk::CommandBufferUsageFlags,
-    ) -> &mut CommandBuffer {
+    pub fn begin_new<'a>(&mut self, device: &render::Device, flags: vk::CommandBufferUsageFlags) -> &mut CommandBuffer {
         let index = self.get_next_command_buffer_index(device);
         let command_buffer = &mut self.command_buffers[index];
 
@@ -60,7 +56,7 @@ impl CommandPool {
         command_buffer
     }
 
-    fn get_next_command_buffer_index(&mut self, device: &vulkan::Device) -> usize {
+    fn get_next_command_buffer_index(&mut self, device: &render::Device) -> usize {
         if self.used_buffers >= self.command_buffers.len() {
             let alloc_info = vk::CommandBufferAllocateInfo::builder()
                 .command_pool(self.handle)
@@ -83,13 +79,14 @@ impl CommandPool {
         index
     }
 
-    pub fn destroy(&self, device: &vulkan::Device) {
+    pub fn destroy(&self, device: &render::Device) {
         unsafe {
             device.raw.destroy_command_pool(self.handle, None);
         }
     }
 }
 
+#[derive(Debug)]
 pub struct CommandBuffer {
     command_buffer_info: vk::CommandBufferSubmitInfo,
     pub wait_infos: Vec<vk::SemaphoreSubmitInfo>,
@@ -109,21 +106,31 @@ impl CommandBuffer {
             .signal_semaphore_infos(&self.signal_infos)
             .build()
     }
-    
+
     pub fn wait_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
-        self.wait_infos.push(vk::SemaphoreSubmitInfo::builder().semaphore(semaphore).stage_mask(stage).build())
+        self.wait_infos
+            .push(vk::SemaphoreSubmitInfo::builder().semaphore(semaphore).stage_mask(stage).build())
     }
 
     pub fn signal_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
-        self.signal_infos.push(vk::SemaphoreSubmitInfo::builder().semaphore(semaphore).stage_mask(stage).build())
+        self.signal_infos
+            .push(vk::SemaphoreSubmitInfo::builder().semaphore(semaphore).stage_mask(stage).build())
     }
 
-    pub fn record<'a>(&'a self, device: &'a vulkan::Device) -> CommandRecorder<'a> {
-        CommandRecorder { device, command_buffer: self }
+    pub fn record<'a>(
+        &'a self,
+        device: &'a render::Device,
+        descriptor: &'a render::BindlessDescriptors,
+    ) -> CommandRecorder<'a> {
+        CommandRecorder {
+            device,
+            descriptor,
+            command_buffer: self,
+        }
     }
 }
 
-impl vulkan::Device {
+impl render::Device {
     pub fn submit(&self, command_buffers: &[CommandBuffer], fence: vk::Fence) {
         let submit_infos: Vec<_> = command_buffers.iter().map(|buf| buf.submit_info()).collect();
         unsafe {
@@ -132,9 +139,9 @@ impl vulkan::Device {
     }
 }
 
-
 pub struct CommandRecorder<'a> {
-    pub device: &'a vulkan::Device,
+    pub device: &'a render::Device,
+    pub descriptor: &'a render::BindlessDescriptors,
     pub command_buffer: &'a CommandBuffer,
 }
 
@@ -169,7 +176,7 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
-    pub fn begin_rendering(&self, rendering_info: &vk::RenderingInfo) -> RenderPassRecorder<'a> {
+    pub fn begin_rendering(&self, rendering_info: &vk::RenderingInfo) {
         unsafe {
             self.device.raw.cmd_begin_rendering(self.buffer(), rendering_info);
 
@@ -189,16 +196,7 @@ impl<'a> CommandRecorder<'a> {
                 }],
             );
 
-            self.device.raw.cmd_set_scissor(
-                self.buffer(),
-                0,
-                std::slice::from_ref(&rendering_info.render_area),
-            );
-
-            RenderPassRecorder {
-                device: self.device,
-                command_buffer: self.command_buffer,
-            }
+            self.device.raw.cmd_set_scissor(self.buffer(), 0, std::slice::from_ref(&rendering_info.render_area));
         }
     }
 
@@ -208,23 +206,6 @@ impl<'a> CommandRecorder<'a> {
             self.device.raw.cmd_end_rendering(self.buffer());
         }
     }
-}
-
-impl Drop for CommandRecorder<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.raw.end_command_buffer(self.buffer()).unwrap();
-        }
-    }
-}
-
-pub struct RenderPassRecorder<'a> {
-    pub device: &'a vulkan::Device,
-    pub command_buffer: &'a CommandBuffer,
-}
-
-impl RenderPassRecorder<'_> {
-
     #[inline(always)]
     pub fn set_viewport(&self, first_viewport: u32, viewports: &[vk::Viewport]) {
         unsafe {
@@ -242,23 +223,26 @@ impl RenderPassRecorder<'_> {
     #[inline(always)]
     pub fn bind_raster_pipeline(&self, pipeline: &render::RasterPipeline) {
         unsafe {
-            self.device.raw.cmd_bind_pipeline(
-                self.buffer(),
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.handle,
-            );
+            self.device.raw.cmd_bind_pipeline(self.buffer(), vk::PipelineBindPoint::GRAPHICS, pipeline.handle);
         }
     }
 
     #[inline(always)]
     pub fn bind_index_buffer(&self, buffer: &render::Buffer) {
         unsafe {
-            self.device.raw.cmd_bind_index_buffer(
+            self.device.raw.cmd_bind_index_buffer(self.buffer(), buffer.handle, 0, vk::IndexType::UINT32);
+        }
+    }
+
+    pub fn push_bindings(&self, bindings: &[render::RawDescriptorIndex]) {
+        unsafe {
+            self.device.raw.cmd_push_constants(
                 self.buffer(),
-                buffer.handle,
+                self.descriptor.layout(),
+                vk::ShaderStageFlags::ALL,
                 0,
-                vk::IndexType::UINT32
-            );
+                bytemuck::cast_slice(bindings),
+            )
         }
     }
 
@@ -284,21 +268,16 @@ impl RenderPassRecorder<'_> {
                 instances.len() as u32,
                 indices.start,
                 vertex_offset,
-                instances.start
+                instances.start,
             );
         }
     }
-
-    #[inline(always)]
-    pub fn buffer(&self) -> vk::CommandBuffer {
-        self.command_buffer.handle()
-    }
 }
 
-impl Drop for RenderPassRecorder<'_> {
+impl Drop for CommandRecorder<'_> {
     fn drop(&mut self) {
         unsafe {
-            self.device.raw.cmd_end_rendering(self.buffer());
+            self.device.raw.end_command_buffer(self.buffer()).unwrap();
         }
     }
 }

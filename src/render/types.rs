@@ -1,25 +1,12 @@
-mod device;
+use crate::render;
+
 use std::ops::Range;
-
-pub use device::*;
-
-mod swapchain;
-pub use swapchain::*;
-
-mod commands;
-pub use commands::*;
-
-mod bindless_descriptor;
-pub use bindless_descriptor::*;
-
-mod sync;
-pub use sync::*;
-
 use ash::vk;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImageView {
     pub handle: vk::Image,
+    pub descriptor_index: Option<render::ImageDescriptorIndex>,
     pub view: vk::ImageView,
     pub extent: vk::Extent2D,
     pub subresource_range: vk::ImageSubresourceRange,
@@ -60,4 +47,11 @@ impl ImageView   {
             layer_count: layers.len() as u32,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BufferView {
+    pub handle: vk::Buffer,
+    pub descriptor_index: Option<render::BufferDescriptorIndex>,
+    pub size: u64
 }

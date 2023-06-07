@@ -1,5 +1,5 @@
+use crate::render;
 use ash::vk;
-use crate::vulkan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadWriteKind {
@@ -7,8 +7,9 @@ pub enum ReadWriteKind {
     Write,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AccessKind {
+    #[default]
     None,
     IndirectBuffer,
     IndexBuffer,
@@ -154,9 +155,9 @@ impl AccessKind {
 
 #[inline]
 pub fn image_barrier(
-    image: &vulkan::ImageView,
-    src_access: vulkan::AccessKind,
-    dst_access: vulkan::AccessKind,
+    image: &render::ImageView,
+    src_access: AccessKind,
+    dst_access: AccessKind,
 ) -> vk::ImageMemoryBarrier2 {
     vk::ImageMemoryBarrier2 {
         src_stage_mask: src_access.stage_mask(),

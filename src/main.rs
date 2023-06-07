@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use ash::vk;
 use gpu_allocator::MemoryLocation;
-use vulkan::DescriptorHandle;
+use render::DescriptorHandle;
 use winit::{
     event::{ElementState, Event, KeyboardInput, VirtualKeyCode as KeyCode, WindowEvent},
     event_loop::EventLoop,
@@ -11,7 +11,6 @@ use winit::{
 #[allow(unused_imports)]
 use glam::{Vec2, Vec3, Vec3A, Vec4, vec2, vec3, vec3a, vec4};
 
-mod vulkan;
 mod render;
 mod utils;
 
@@ -113,78 +112,50 @@ fn main() {
             let window_size = context.window().inner_size();
             if window_size.width == 0 || window_size.height == 0 { return }
 
-            let frame = context.begin_frame();
+            let mut frame = context.begin_frame();
 
-            // temporary
-            let device = &frame.context.device;
-            let descriptors = &frame.context.descriptors;
+            let swapchain_image = frame.get_swapchain_image();
 
-            let acquired_image = frame.acquired_image;
+            let vertex_buffer = frame.import_buffer("vertex_buffer", &vertex_buffer, &Default::default());
 
-            let frame_index = frame.context.frame_index;
-            let frame = &mut frame.context.frames[frame_index];
+            frame.add_pass(
+                "triangle_pass",
+                &[
+                    (swapchain_image, render::AccessKind::ColorAttachmentWrite),
+                    (vertex_buffer, render::AccessKind::VertexShaderRead),
+                ],
+                move |cmd, graph| {
+                    let swapchain_image = graph.get_image(swapchain_image).unwrap();
+                    let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
 
-            let command_buffer = frame.command_pool.begin_new(&device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            // --------------
+                    let color_attachment = vk::RenderingAttachmentInfo::builder()
+                        .image_view(swapchain_image.view)
+                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .load_op(vk::AttachmentLoadOp::CLEAR)
+                        .clear_value(vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                float32: [0.0, 0.0, 0.0, 1.0],
+                            },
+                        })
+                        .store_op(vk::AttachmentStoreOp::STORE);
 
-            command_buffer.wait_semaphore(
-                frame.image_available_semaphore,
-                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    let rendering_info = vk::RenderingInfo::builder()
+                        .render_area(swapchain_image.full_rect())
+                        .layer_count(1)
+                        .color_attachments(std::slice::from_ref(&color_attachment));
+
+                    cmd.begin_rendering(&rendering_info);
+
+                    cmd.bind_raster_pipeline(&pipeline);
+
+                    cmd.push_bindings(&[
+                        vertex_buffer.descriptor_index.unwrap().to_raw()
+                    ]);
+                    cmd.draw(0..3, 0..1);
+
+                    cmd.end_rendering();
+                }
             );
-
-            command_buffer.signal_semaphore(
-                frame.render_finished_semaphore,
-                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            );
-
-            let recorder = command_buffer.record(&device);
-
-            recorder.barrier(&[], &[
-                vulkan::image_barrier(
-                    &acquired_image,
-                    vulkan::AccessKind::None,
-                    vulkan::AccessKind::ColorAttachmentWrite,
-                )
-            ], &[]);
-
-            {
-                let color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(acquired_image.view)
-                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .clear_value(vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            float32: [0.0, 0.0, 0.0, 1.0],
-                        },
-                    })
-                    .store_op(vk::AttachmentStoreOp::STORE);
-
-                let rendering_info = vk::RenderingInfo::builder()
-                    .render_area(acquired_image.full_rect())
-                    .layer_count(1)
-                    .color_attachments(std::slice::from_ref(&color_attachment));
-
-                let render_pass = recorder.begin_rendering(&rendering_info);
-
-                descriptors.bind_descriptors(&render_pass, vk::PipelineBindPoint::GRAPHICS);
-                render_pass.bind_raster_pipeline(&pipeline);
-
-                // device.raw.cmd_set_scissor(command_buffer.handle(), 0, &[acquired_image.full_rect()]);
-                // device.raw.cmd_set_viewport(command_buffer.handle(), 0, &[acquired_image.full_viewport()]);
-
-                descriptors.push_bindings(&render_pass, &[
-                    vertex_buffer.descriptor_index.unwrap().to_raw()
-                ]);
-                render_pass.draw(0..3, 0..1);
-            }
-
-            recorder.barrier(&[], &[
-                vulkan::image_barrier(
-                    &acquired_image,
-                    vulkan::AccessKind::ColorAttachmentWrite,
-                    vulkan::AccessKind::Present,
-                )
-            ], &[]);
         }
         Event::LoopDestroyed => {
             unsafe {

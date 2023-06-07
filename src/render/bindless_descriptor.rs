@@ -1,9 +1,9 @@
+use crate::render;
+
 use std::sync::{
     atomic::{self, AtomicU32},
     Mutex,
 };
-
-use crate::vulkan;
 use ash::vk;
 
 #[repr(C)]
@@ -67,7 +67,7 @@ impl DescriptorTableType {
         }
     }
 
-    fn max_count(self, device: &vulkan::Device) -> u32 {
+    fn max_count(self, device: &render::Device) -> u32 {
         let props = &device.gpu.properties.properties12;
         match self {
             DescriptorTableType::Buffer => u32::min(
@@ -149,7 +149,7 @@ pub struct BindlessDescriptors {
 }
 
 impl BindlessDescriptors {
-    pub fn new(device: &vulkan::Device, immutable_samplers: &[vk::Sampler]) -> Self {
+    pub fn new(device: &render::Device, immutable_samplers: &[vk::Sampler]) -> Self {
         let descriptor_layouts: Vec<_> = DescriptorTableType::all_types()
             .map(|desc_type| {
                 let mut descriptor_binding_flags = vec![
@@ -263,7 +263,7 @@ impl BindlessDescriptors {
 
     pub fn bind_descriptors(
         &self,
-        recorder: &vulkan::RenderPassRecorder,
+        recorder: &render::CommandRecorder,
         bind_point: vk::PipelineBindPoint
     ) {
         unsafe {
@@ -278,23 +278,7 @@ impl BindlessDescriptors {
         }
     }
 
-    pub fn push_bindings(
-        &self,
-        recorder: &vulkan::RenderPassRecorder,
-        bindings: &[RawDescriptorIndex],
-    ) {
-        unsafe {
-            recorder.device.raw.cmd_push_constants(
-                recorder.buffer(),
-                self.pipeline_layout,
-                vk::ShaderStageFlags::ALL,
-                0,
-                bytemuck::cast_slice(bindings),
-            )
-        }
-    }
-
-    pub fn alloc_buffer_resource(&self, device: &vulkan::Device, handle: vk::Buffer) -> BufferDescriptorIndex {
+    pub fn alloc_buffer_resource(&self, device: &render::Device, handle: vk::Buffer) -> BufferDescriptorIndex {
         let index = self.global_index_allocator.alloc();
 
         unsafe {
@@ -318,7 +302,7 @@ impl BindlessDescriptors {
         self.global_index_allocator.free(handle.to_raw().0);
     }
 
-    pub fn alloc_image_resource(&self, device: &vulkan::Device, image: &vulkan::ImageView) -> ImageDescriptorIndex {
+    pub fn alloc_image_resource(&self, device: &render::Device, image: &render::ImageView) -> ImageDescriptorIndex {
         let index = self.global_index_allocator.alloc();
 
         unsafe {
@@ -340,7 +324,7 @@ impl BindlessDescriptors {
         ImageDescriptorIndex(index)
     }
 
-    pub fn destroy(&self, device: &vulkan::Device) {
+    pub fn destroy(&self, device: &render::Device) {
         unsafe {
             device.raw.destroy_descriptor_pool(self.pool, None);
 

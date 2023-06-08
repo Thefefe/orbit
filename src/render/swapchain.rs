@@ -89,7 +89,7 @@ impl SwapchainInner {
 impl render::SurfaceInfo {
     pub fn choose_surface_format(&self) -> vk::SurfaceFormatKHR {
         for surface_format in self.formats.iter().copied() {
-            if surface_format.format == vk::Format::B8G8R8A8_SRGB
+            if surface_format.format == vk::Format::B8G8R8A8_UNORM
                 && surface_format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
             {
                 return surface_format;
@@ -194,11 +194,13 @@ impl Swapchain {
         self.config.surface_format.format
     }
 
-    fn recreate_if_needed(&mut self, device: &render::Device) {
+    fn recreate_if_needed(&mut self, device: &mut render::Device) {
         if self.config == self.inner.config {
             return;
         }
 
+        device.refresh_surface_capabilities();
+        self.config.extent = device.gpu.surface_info.choose_extent(self.config.extent);
         let mut swapchain = SwapchainInner::new(&device, Some(self.inner.handle), self.config);
 
         std::mem::swap(&mut swapchain, &mut self.inner);
@@ -208,7 +210,7 @@ impl Swapchain {
 
     pub fn acquire_image(
         &mut self,
-        device: &render::Device,
+        device: &mut render::Device,
         frame_index: usize, // used for old swapchain lifetime management
         acquired_semaphore: vk::Semaphore,
     ) -> Result<AcquiredImage, SwapchainOutOfDate> {

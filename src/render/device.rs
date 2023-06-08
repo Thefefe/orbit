@@ -122,15 +122,17 @@ pub struct SurfaceInfo {
 }
 
 impl SurfaceInfo {
-    unsafe fn new(surface_fns: &khr::Surface, physical_device: vk::PhysicalDevice, surface: vk::SurfaceKHR) -> Self {
-        let capabilities = surface_fns.get_physical_device_surface_capabilities(physical_device, surface).unwrap();
-        let present_modes = surface_fns.get_physical_device_surface_present_modes(physical_device, surface).unwrap();
-        let formats = surface_fns.get_physical_device_surface_formats(physical_device, surface).unwrap();
+    fn new(surface_fns: &khr::Surface, physical_device: vk::PhysicalDevice, surface: vk::SurfaceKHR) -> Self {
+        unsafe {
+            let capabilities = surface_fns.get_physical_device_surface_capabilities(physical_device, surface).unwrap();
+            let present_modes = surface_fns.get_physical_device_surface_present_modes(physical_device, surface).unwrap();
+            let formats = surface_fns.get_physical_device_surface_formats(physical_device, surface).unwrap();
 
-        Self {
-            capabilities,
-            present_modes,
-            formats,
+            Self {
+                capabilities,
+                present_modes,
+                formats,
+            }
         }
     }
 }
@@ -559,6 +561,15 @@ impl Device {
         })
     }
 
+    pub fn refresh_surface_info(&mut self) {
+        self.gpu.surface_info = SurfaceInfo::new(&self.surface_fns, self.gpu.handle, self.surface);
+    }
+    pub fn refresh_surface_capabilities(&mut self) {
+        self.gpu.surface_info.capabilities = unsafe {
+            self.surface_fns.get_physical_device_surface_capabilities(self.gpu.handle, self.surface).unwrap()
+        };
+    }
+
     pub fn create_fence(&self, name: &str, signaled: bool) -> vk::Fence {
         let create_info = vk::FenceCreateInfo::builder().flags(if signaled {
             vk::FenceCreateFlags::SIGNALED
@@ -640,13 +651,11 @@ impl Device {
 
 unsafe extern "system" fn vk_debug_log_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    _message_type: vk::DebugUtilsMessageTypeFlagsEXT,
     p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     _p_user_data: *mut c_void,
 ) -> vk::Bool32 {
     use vk::DebugUtilsMessageSeverityFlagsEXT as Severity;
-    use vk::DebugUtilsMessageTypeFlagsEXT as MessageType;
-
     let level = match message_severity {
         Severity::VERBOSE => log::Level::Trace,
         Severity::WARNING => log::Level::Warn,
@@ -654,19 +663,22 @@ unsafe extern "system" fn vk_debug_log_callback(
         Severity::INFO => log::Level::Info,
         _ => log::Level::Debug,
     };
-    let target = match message_type {
-        MessageType::GENERAL => "vk_general",
-        MessageType::PERFORMANCE => "vk_performance",
-        MessageType::VALIDATION => "vk_validation",
-        _ => "vk_unknown",
-    };
+
+    // use vk::DebugUtilsMessageTypeFlagsEXT as MessageType;
+    // let target = match message_type {
+    //     MessageType::GENERAL => "vk_general",
+    //     MessageType::PERFORMANCE => "vk_performance",
+    //     MessageType::VALIDATION => "vk_validation",
+    //     _ => "vk_unknown",
+    // };
+    
     let message_cstr = CStr::from_ptr((*p_callback_data).p_message);
 
     if let Ok(message) = message_cstr.to_str() {
-        log::log!(target: target, level, "{}", message);
+        log::log!(target: "vulkan", level, "{}", message);
     } else {
         log::error!("failed to parse debug callback message, displaying cstr...");
-        log::log!(target: target, level, "{:?}", message_cstr);
+        log::log!(target: "vulkan", level, "{:?}", message_cstr);
     }
 
     vk::FALSE

@@ -67,6 +67,8 @@ impl Context {
                 image_count,
             };
 
+            log::info!("swapchain config: {config:#?}");
+
             render::Swapchain::new(&device, config)
         };
 
@@ -148,7 +150,7 @@ impl Context {
 
         let acquired_image = self
             .swapchain
-            .acquire_image(&self.device, self.frame_index, frame.image_available_semaphore)
+            .acquire_image(&mut self.device, self.frame_index, frame.image_available_semaphore)
             .unwrap();
 
         self.graph.clear();

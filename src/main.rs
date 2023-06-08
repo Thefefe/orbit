@@ -29,12 +29,14 @@ const VERTECES: &[Vertex] = &[
 ];
 
 fn main() {
-    if let Err(err) = utils::init_logger() {
-        eprintln!("failed to initialize logger: {err}");
-    };
+    utils::init_logger();
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().with_title("orbit").build(&event_loop).expect("failed to build window");
+    let window = WindowBuilder::new()
+        .with_title("orbit")
+        .with_resizable(true)
+        .build(&event_loop)
+        .expect("failed to build window");
 
     let mut context = render::Context::new(
         window,

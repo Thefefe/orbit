@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use ash::vk;
 use winit::window::Window;
 
@@ -14,11 +16,17 @@ pub struct Frame {
 
 const FRAME_COUNT: usize = 2;
 
+struct RecordSubmitStuff {
+    command_pool: render::CommandPool,
+    fence: vk::Fence,
+}
+
 pub struct Context {
     pub window: Window,
 
     pub device: render::Device,
     pub descriptors: render::BindlessDescriptors,
+    samplers: Vec<vk::Sampler>,
     pub swapchain: render::Swapchain,
 
     pub graph: RenderGraph,
@@ -26,6 +34,8 @@ pub struct Context {
 
     pub frames: [Frame; FRAME_COUNT],
     pub frame_index: usize,
+
+    record_submit_stuff: Mutex<RecordSubmitStuff>,
 }
 
 pub struct ContextDesc {
@@ -36,7 +46,28 @@ impl Context {
     pub fn new(window: Window, desc: &ContextDesc) -> Self {
         let device = render::Device::new(&window).expect("failed to create device");
 
-        let descriptors = render::BindlessDescriptors::new(&device, &[]);
+        let mut samplers = Vec::new();
+
+        {
+            let create_info = vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .anisotropy_enable(false)
+                .min_filter(vk::Filter::LINEAR)
+                .mag_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE);
+
+            let handle = unsafe {
+                device.raw.create_sampler(&create_info, None).unwrap()
+            };
+
+            samplers.push(handle);
+        };
+
+        let descriptors = render::BindlessDescriptors::new(&device, samplers.as_slice());
 
         let swapchain = {
             let surface_info = &device.gpu.surface_info;
@@ -64,10 +95,9 @@ impl Context {
                 extent,
                 present_mode,
                 surface_format,
+                frame_count: FRAME_COUNT,
                 image_count,
             };
-
-            log::info!("swapchain config: {config:#?}");
 
             render::Swapchain::new(&device, config)
         };
@@ -88,11 +118,19 @@ impl Context {
             }
         });
 
+        let record_submit_stuff = {
+            let command_pool = render::CommandPool::new(&device);
+            let fence = device.create_fence("record_submit_fence", false);
+
+            Mutex::new(RecordSubmitStuff { command_pool, fence })  
+        };
+
         Self {
             window,
 
             device,
             descriptors,
+            samplers,
             swapchain,
             
             graph: RenderGraph::new(),
@@ -100,6 +138,22 @@ impl Context {
             
             frames,
             frame_index: 0,
+
+            record_submit_stuff,
+        }
+    }
+
+    pub fn record_and_submit(&self, f: impl FnOnce(&render::CommandRecorder)) {
+        let mut record_submit_stuff = self.record_submit_stuff.lock().unwrap();
+        record_submit_stuff.command_pool.reset(&self.device);
+        let buffer = record_submit_stuff.command_pool.begin_new(&self.device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        f(&buffer.record(&self.device, &self.descriptors));
+        unsafe {
+            self.device.raw.reset_fences(&[record_submit_stuff.fence]).unwrap();
+        }
+        self.device.submit(&record_submit_stuff.command_pool.buffers(), record_submit_stuff.fence);
+        unsafe {
+            self.device.raw.wait_for_fences(&[record_submit_stuff.fence], false, u64::MAX).unwrap();
         }
     }
 
@@ -113,6 +167,12 @@ impl Drop for Context {
         unsafe {
             self.device.raw.device_wait_idle().unwrap();
         }
+
+        let record_submit_stuff = self.record_submit_stuff.lock().unwrap(); 
+        unsafe {
+            self.device.raw.destroy_fence(record_submit_stuff.fence, None);
+        }
+        record_submit_stuff.command_pool.destroy(&self.device);
         
         for frame in self.frames.iter() {
             unsafe {
@@ -122,6 +182,12 @@ impl Drop for Context {
             }
 
             frame.command_pool.destroy(&self.device);
+        }
+
+        for sampler in self.samplers.iter() {
+            unsafe {
+                self.device.raw.destroy_sampler(*sampler, None);
+            }
         }
 
         self.swapchain.destroy(&self.device);
@@ -134,6 +200,14 @@ pub struct FrameContext<'a> {
     pub context: &'a mut Context,
     pub acquired_image: render::AcquiredImage,
     pub acquired_image_handle: render::ResourceHandle,
+}
+
+impl std::ops::Deref for FrameContext<'_> {
+    type Target = Context;
+
+    fn deref(&self) -> &Self::Target {
+        self.context
+    }
 }
 
 impl Context {
@@ -188,6 +262,15 @@ impl FrameContext<'_> {
         self.context.graph.import_resource(name.into(), render::AnyResourceView::Buffer(*buffer), desc)
     }
 
+    pub fn import_image(
+        &mut self,
+        name: impl Into<String>,
+        image: &render::ImageView,
+        desc: &render::GraphResourceImportDesc,
+    ) -> render::ResourceHandle {
+        self.context.graph.import_resource(name.into(), render::AnyResourceView::Image(*image), desc)
+    }
+
     pub fn add_pass(
         &mut self,
         name: impl Into<String>,
@@ -227,7 +310,7 @@ impl Drop for FrameContext<'_> {
             recorder.barrier(&[], batch.begin_image_barriers, &[batch.memory_barrier]);
 
             for pass in batch.passes {
-                pass(&recorder, &self.context.compiled_graph);
+                (pass.func)(&recorder, &self.context.compiled_graph);
             }
 
             recorder.barrier(&[], batch.finish_image_barriers, &[]);

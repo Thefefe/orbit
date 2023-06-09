@@ -151,6 +151,34 @@ impl<'a> CommandRecorder<'a> {
         self.command_buffer.handle()
     }
 
+    pub fn copy_buffer(&self, src: &render::BufferView, dst: &render::BufferView, regions: &[vk::BufferCopy]) {
+        unsafe {
+            self.device.raw.cmd_copy_buffer(
+                self.buffer(),
+                src.handle,
+                dst.handle,
+                regions
+            )
+        }
+    }
+
+    pub fn copy_buffer_to_image(
+        &self,
+        src: &render::BufferView,
+        dst: &render::ImageView,
+        regions: &[vk::BufferImageCopy]
+    ) {
+        unsafe {
+            self.device.raw.cmd_copy_buffer_to_image(
+                self.buffer(),
+                src.handle,
+                dst.handle,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                regions
+            )
+        }
+    }
+
     #[inline(always)]
     pub fn barrier(
         &self,
@@ -221,14 +249,14 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
-    pub fn bind_raster_pipeline(&self, pipeline: &render::RasterPipeline) {
+    pub fn bind_raster_pipeline(&self, pipeline: render::RasterPipeline) {
         unsafe {
             self.device.raw.cmd_bind_pipeline(self.buffer(), vk::PipelineBindPoint::GRAPHICS, pipeline.handle);
         }
     }
 
     #[inline(always)]
-    pub fn bind_index_buffer(&self, buffer: &render::Buffer) {
+    pub fn bind_index_buffer(&self, buffer: &render::BufferView) {
         unsafe {
             self.device.raw.cmd_bind_index_buffer(self.buffer(), buffer.handle, 0, vk::IndexType::UINT32);
         }

@@ -298,17 +298,17 @@ impl BindlessDescriptors {
         BufferDescriptorIndex(index)
     }
 
-    pub fn free_descriptor_handle(&self, handle: impl DescriptorHandle) {
+    pub fn free_descriptor_index(&self, handle: impl DescriptorHandle) {
         self.global_index_allocator.free(handle.to_raw().0);
     }
 
-    pub fn alloc_image_resource(&self, device: &render::Device, image: &render::ImageView) -> ImageDescriptorIndex {
+    pub fn alloc_image_resource(&self, device: &render::Device, view_handle: vk::ImageView) -> ImageDescriptorIndex {
         let index = self.global_index_allocator.alloc();
 
         unsafe {
             let image_info = vk::DescriptorImageInfo::builder()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(image.view)
+                .image_view(view_handle)
                 .build();
 
             let write_info = vk::WriteDescriptorSet::builder()

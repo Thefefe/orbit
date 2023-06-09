@@ -22,6 +22,9 @@ pub use context::*;
 mod buffer;
 pub use buffer::*;
 
+mod image;
+pub use image::*;
+
 mod pipeline;
 pub use pipeline::*;
 

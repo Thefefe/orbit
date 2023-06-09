@@ -8,7 +8,18 @@ pub type ResourceHandle = usize;
 pub type PassHandle = thunderdome::Index;
 pub type DependencyHandle = usize;
 
-pub type PassFn = Box<dyn Fn(&render::CommandRecorder, &render::CompiledRenderGraph)>;
+type PassFn = Box<dyn Fn(&render::CommandRecorder, &render::CompiledRenderGraph)>;
+
+pub struct Pass {
+    pub name: String,
+    pub func: PassFn,
+}
+
+impl std::fmt::Debug for Pass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.name.fmt(f)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
@@ -31,11 +42,13 @@ impl AnyResourceView {
     }
 }
 
+#[derive(Debug)]
 pub enum ResourceSource {
     Import,
     Pass { dependency: DependencyHandle },
 }
 
+#[derive(Debug)]
 pub struct ResourceVersion {
     initial_access: render::AccessKind,
     source: ResourceSource,
@@ -43,6 +56,7 @@ pub struct ResourceVersion {
     reads: Vec<DependencyHandle>,
 }
 
+#[derive(Debug)]
 pub struct ResourceData {
     name: String,
 
@@ -55,13 +69,13 @@ pub struct ResourceData {
     versions: Vec<ResourceVersion>,
 }
 
+#[derive(Debug)]
 pub struct PassData {
-    name: String,
-
-    func: PassFn,
+    pass: Pass,
     dependencies: Vec<DependencyHandle>,
 }
 
+#[derive(Debug)]
 struct DependencyData {
     access: render::AccessKind,
     pass_handle: PassHandle,
@@ -69,6 +83,7 @@ struct DependencyData {
     resource_version: usize,
 }
 
+#[derive(Debug)]
 pub struct RenderGraph {
     resources: Vec<ResourceData>,
     passes: thunderdome::Arena<PassData>,
@@ -129,8 +144,7 @@ impl RenderGraph {
 
     pub fn add_pass(&mut self, name: String, func: PassFn) -> PassHandle {
         self.passes.insert(PassData {
-            name,
-            func,
+            pass: Pass { name, func },
             dependencies: Vec::new(),
         })
     }
@@ -167,6 +181,7 @@ impl RenderGraph {
     }
 }
 
+#[derive(Debug)]
 pub struct BatchData {
     pub wait_semaphore_range: Range<usize>,
     pub memory_barrier: vk::MemoryBarrier2,
@@ -181,10 +196,22 @@ pub struct BatchData {
 #[derive(Default)]
 pub struct CompiledRenderGraph {
     pub resources: Vec<AnyResourceView>,
-    pub passes: Vec<PassFn>,
+    pub passes: Vec<Pass>,
     pub image_barriers: Vec<vk::ImageMemoryBarrier2>,
     pub semaphores: Vec<vk::Semaphore>,
     pub batches: Vec<BatchData>,
+}
+
+impl std::fmt::Debug for CompiledRenderGraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompiledRenderGraph")
+            .field("resources", &self.resources)
+            .field("passes", &self.passes)
+            .field("image_barriers", &self.image_barriers)
+            .field("semaphores", &self.semaphores)
+            .field("batches", &self.batches)
+            .finish()
+    }
 }
 
 pub struct Batch<'a> {
@@ -192,7 +219,7 @@ pub struct Batch<'a> {
     pub memory_barrier: vk::MemoryBarrier2,
     pub begin_image_barriers: &'a [vk::ImageMemoryBarrier2],
 
-    pub passes: &'a [PassFn],
+    pub passes: &'a [Pass],
 
     pub finish_image_barriers: &'a [vk::ImageMemoryBarrier2],
     pub finish_semaphores: &'a [vk::Semaphore],
@@ -272,9 +299,11 @@ impl RenderGraph {
                     let resource_data = &self.resources[dependency.resource_handle];
                     let resource_kind = resource_data.resource.kind();
 
-                    if let Some(semaphore) = resource_data.wait_semaphore {
-                        batch.wait_semaphore_range.end += 1;
-                        compiled.semaphores.push(semaphore);
+                    if dependency.resource_version == 0 {
+                        if let Some(semaphore) = resource_data.wait_semaphore {
+                            batch.wait_semaphore_range.end += 1;
+                            compiled.semaphores.push(semaphore);
+                        }
                     }
 
                     let src_access =
@@ -325,7 +354,9 @@ impl RenderGraph {
                         }
 
                         if let AnyResourceView::Image(image) = &resource_data.resource {
-                            if resource_data.target_access != render::AccessKind::None {
+                            if resource_data.target_access != render::AccessKind::None &&
+                                dependency.access != resource_data.target_access
+                            {
                                 batch.finish_image_barrier_range.end += 1;
                                 compiled.image_barriers.push(render::image_barrier(
                                     image,
@@ -337,7 +368,7 @@ impl RenderGraph {
                     }
                 }
 
-                compiled.passes.push(pass.func);
+                compiled.passes.push(pass.pass);
             }
 
             compiled.batches.push(batch);
@@ -347,6 +378,7 @@ impl RenderGraph {
     }
 }
 
+#[derive(Debug)]
 struct SortedPasses {
     ranges: Vec<Range<usize>>,
     passes: Vec<u32>,

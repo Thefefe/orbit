@@ -478,9 +478,11 @@ impl Device {
             .queue_family_index(universal_queue_family.index)
             .queue_priorities(&[1.0]);
 
-        let vulkan10_features = vk::PhysicalDeviceFeatures::builder().build();
+        let vulkan10_features = vk::PhysicalDeviceFeatures::builder()
+            .build();
 
-        let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder().build();
+        let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()
+            .build();
 
         let mut vulkan12_features = vk::PhysicalDeviceVulkan12Features::builder()
             .shader_sampled_image_array_non_uniform_indexing(true)
@@ -491,6 +493,8 @@ impl Device {
             .descriptor_binding_partially_bound(true)
             .descriptor_binding_variable_descriptor_count(true)
             .buffer_device_address(true)
+            .shader_int8(true)
+            .uniform_and_storage_buffer8_bit_access(true)
             .build();
 
         let mut vulkan13_features =

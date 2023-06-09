@@ -1,7 +1,7 @@
 use std::ptr::NonNull;
 
 use ash::vk;
-use gpu_allocator::vulkan::{AllocationScheme, AllocationCreateDesc};
+use gpu_allocator::{vulkan::{AllocationScheme, AllocationCreateDesc}, MemoryLocation};
 use crate::render;
 
 pub struct Buffer {
@@ -19,11 +19,12 @@ impl std::ops::Deref for Buffer {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct BufferDesc<'a> {
     pub name: &'a str,
     pub size: u64,
     pub usage: vk::BufferUsageFlags,
-    pub memory_location: gpu_allocator::MemoryLocation,
+    pub memory_location: MemoryLocation,
 }
 
 impl Buffer {
@@ -83,18 +84,77 @@ impl render::Context {
     }
 
     pub fn create_buffer_init(&self, desc: &BufferDesc, init: &[u8]) -> Buffer {
-        let buffer = Buffer::create_impl(&self.device, &self.descriptors, desc);
+        let mut desc = *desc;
+        
+        if desc.memory_location != MemoryLocation::CpuToGpu {
+            desc.usage |= vk::BufferUsageFlags::TRANSFER_DST;
+        }
 
+        let buffer = Buffer::create_impl(&self.device, &self.descriptors, &desc);
+
+        let init_size = usize::min(buffer.size as usize, init.len());
         if let Some(mapped_ptr) = buffer.mapped_ptr {
-            let count = usize::min(buffer.size as usize, init.len());
             unsafe {
-                std::ptr::copy_nonoverlapping(init.as_ptr(), mapped_ptr.as_ptr(), count);
+                std::ptr::copy_nonoverlapping(init.as_ptr(), mapped_ptr.as_ptr(), init_size);
             }
         } else {
-            todo!()
+            let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, &BufferDesc {
+                name: "scratch_buffer",
+                size: init_size as u64,
+                usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                memory_location: MemoryLocation::CpuToGpu,
+            });
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(init.as_ptr(), scratch_buffer.mapped_ptr.unwrap().as_ptr(), init_size);
+            }
+
+            self.record_and_submit(|cmd| {
+                cmd.copy_buffer(&scratch_buffer, &buffer, &[
+                    vk::BufferCopy {
+                        src_offset: 0,
+                        dst_offset: 0,
+                        size: init_size as u64,
+                    }
+                ]);
+            });
+
+            Buffer::destroy_impl(&self.device, &scratch_buffer);
         }
 
         buffer
+    }
+
+    pub fn immediate_write_buffer(&self, buffer: &render::Buffer, data: &[u8], offset: usize) {
+        let copy_size = usize::min(buffer.size as usize - offset, data.len());
+        if let Some(mapped_ptr) = buffer.mapped_ptr {
+            unsafe {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), mapped_ptr.as_ptr(), copy_size);
+            }
+        } else {
+            let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, &BufferDesc {
+                name: "scratch_buffer",
+                size: copy_size as u64,
+                usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                memory_location: MemoryLocation::CpuToGpu,
+            });
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), scratch_buffer.mapped_ptr.unwrap().as_ptr(), copy_size);
+            }
+
+            self.record_and_submit(|cmd| {
+                cmd.copy_buffer(&scratch_buffer, &buffer, &[
+                    vk::BufferCopy {
+                        src_offset: 0,
+                        dst_offset: offset as u64,
+                        size: copy_size as u64,
+                    }
+                ]);
+            });
+
+            Buffer::destroy_impl(&self.device, &scratch_buffer);
+        }
     }
 
     pub fn destroy_buffer(&self, buffer: &Buffer) {

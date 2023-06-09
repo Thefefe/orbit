@@ -8,6 +8,7 @@ pub struct SwapchainConfig {
     pub extent: vk::Extent2D,
     pub present_mode: vk::PresentModeKHR,
     pub surface_format: vk::SurfaceFormatKHR,
+    pub frame_count: usize,
     pub image_count: u32,
 }
 
@@ -217,7 +218,9 @@ impl Swapchain {
         self.recreate_if_needed(device);
         
         while let Some(swapchain) = self.old.front() {
-            if swapchain.last_frame_index.as_ref().map_or(false, |&index| frame_index != index) {
+            if swapchain.last_frame_index
+                .as_ref()
+                .map_or(false, |&index| frame_index > index + self.config.image_count as usize) {
                 break;
             }
             swapchain.destroy(&device);

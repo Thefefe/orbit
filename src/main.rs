@@ -44,8 +44,129 @@ const VERTECES: &[Vertex] = &[
 
 use egui_renderer::EguiRenderer;
 
+struct App {
+    basic_pipeline: render::RasterPipeline,
+    vertex_buffer: render::Buffer,
+}
+
+impl App {
+    fn new(context: &render::Context) -> Self {
+        let basic_pipeline = {
+            let vertex_shader = utils::load_spv("shaders/basic.vert.spv").unwrap();
+            let fragment_shader = utils::load_spv("shaders/basic.frag.spv").unwrap();
+    
+            let vertex_module = context.create_shader_module(&vertex_shader, "basic_vertex_shader");
+            let fragment_module = context.create_shader_module(&fragment_shader, "basic_fragment_shader");
+    
+            let entry = cstr::cstr!("main");
+    
+            let pipeline = context.create_raster_pipeline(&render::RasterPipelineDesc {
+                name: "basic_pipeline",
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: render::ShaderStage {
+                    module: fragment_module,
+                    entry,
+                },
+                vertex_input: render::VertexInput::default(),
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                },
+                color_attachments: &[render::PipelineColorAttachment {
+                    format: context.swapchain.format(),
+                    ..Default::default()
+                }],
+                depth_state: None,
+                multisample: render::MultisampleCount::None,
+            });
+    
+            context.destroy_shader_module(vertex_module);
+            context.destroy_shader_module(fragment_module);
+    
+            pipeline
+        };
+    
+        let vertex_buffer = context.create_buffer_init(
+            &render::BufferDesc {
+                name: "buffer",
+                size: 120,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+            bytemuck::cast_slice(VERTECES),
+        );
+
+        Self {
+            basic_pipeline,
+            vertex_buffer,
+        }
+    }
+
+    fn update(&mut self, egui_ctx: &egui::Context) {
+        puffin::profile_function!();
+        puffin_egui::profiler_window(&egui_ctx);        
+    }
+
+    fn render(&mut self, frame_ctx: &mut render::FrameContext) {
+        puffin::profile_function!();
+        let swapchain_image = frame_ctx.get_swapchain_image();
+
+        let vertex_buffer = frame_ctx.import_buffer("vertex_buffer", &self.vertex_buffer, &Default::default());
+
+        let pipeline = self.basic_pipeline;
+
+        frame_ctx.add_pass(
+            "triangle",
+            &[
+                (swapchain_image, render::AccessKind::ColorAttachmentWrite),
+                (vertex_buffer, render::AccessKind::VertexShaderRead),
+            ],
+            move |cmd, graph| {
+                let swapchain_image = graph.get_image(swapchain_image).unwrap();
+                let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
+
+                let color_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(swapchain_image.view)
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .clear_value(vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                    })
+                    .store_op(vk::AttachmentStoreOp::STORE);
+
+                let rendering_info = vk::RenderingInfo::builder()
+                    .render_area(swapchain_image.full_rect())
+                    .layer_count(1)
+                    .color_attachments(std::slice::from_ref(&color_attachment));
+
+                cmd.begin_rendering(&rendering_info);
+
+                cmd.bind_raster_pipeline(pipeline);
+
+                cmd.push_bindings(&[vertex_buffer.descriptor_index.unwrap().to_raw()]);
+                cmd.draw(0..3, 0..1);
+
+                cmd.end_rendering();
+            },
+        );
+    }
+
+    fn destroy(&self, context: &render::Context) {
+        context.destroy_raster_pipeline(&self.basic_pipeline);
+        context.destroy_buffer(&self.vertex_buffer);
+    }
+}
+
 fn main() {
     utils::init_logger();
+    puffin::set_scopes_on(true);
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -61,63 +182,11 @@ fn main() {
         },
     );
 
-    let pipeline = {
-        let vertex_shader = utils::load_spv("shaders/basic.vert.spv").unwrap();
-        let fragment_shader = utils::load_spv("shaders/basic.frag.spv").unwrap();
-
-        let vertex_module = context.create_shader_module(&vertex_shader, "basic_vertex_shader");
-        let fragment_module = context.create_shader_module(&fragment_shader, "basic_fragment_shader");
-
-        let entry = cstr::cstr!("main");
-
-        let pipeline = context.create_raster_pipeline(&render::RasterPipelineDesc {
-            name: "basic_pipeline",
-            vertex_stage: render::ShaderStage {
-                module: vertex_module,
-                entry,
-            },
-            fragment_stage: render::ShaderStage {
-                module: fragment_module,
-                entry,
-            },
-            vertex_input: render::VertexInput::default(),
-            rasterizer: render::RasterizerDesc {
-                primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                polygon_mode: vk::PolygonMode::FILL,
-                front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                cull_mode: vk::CullModeFlags::NONE,
-            },
-            color_attachments: &[render::PipelineColorAttachment {
-                format: context.swapchain.format(),
-                ..Default::default()
-            }],
-            depth_state: None,
-            multisample: render::MultisampleCount::None,
-        });
-
-        context.destroy_shader_module(vertex_module);
-        context.destroy_shader_module(fragment_module);
-
-        pipeline
-    };
-
-    let vertex_buffer = context.create_buffer_init(
-        &render::BufferDesc {
-            name: "buffer",
-            size: 120,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            memory_location: MemoryLocation::GpuOnly,
-        },
-        bytemuck::cast_slice(VERTECES),
-    );
-
     let egui_ctx = egui::Context::default();
     let mut egui_state = egui_winit::State::new(&event_loop);
     let mut egui_renderer = EguiRenderer::new(&context);
 
-    // egui demo stuff
-    let mut age = 0;
-    let mut name = String::new();
+    let mut app = App::new(&context);
 
     event_loop.run(move |event, _target, control_flow| match event {
         Event::WindowEvent { event, .. } => {
@@ -145,21 +214,13 @@ fn main() {
             }
         }
         Event::MainEventsCleared => {
+            puffin::GlobalProfiler::lock().new_frame();
+            puffin::profile_scope!("update");
+
             let raw_input = egui_state.take_egui_input(&context.window());
             egui_ctx.begin_frame(raw_input);
 
-            egui::Window::new("egui demo").show(&egui_ctx, |ui| {
-                ui.heading("My egui Application");
-                ui.horizontal(|ui| {
-                    ui.label("Your name: ");
-                    ui.text_edit_singleline(&mut name);
-                });
-                ui.add(egui::Slider::new(&mut age, 0..=120).text("age"));
-                if ui.button("Click each year").clicked() {
-                    age += 1;
-                }
-                ui.label(format!("Hello '{name}', age {age}"));
-            });
+            app.update(&egui_ctx);
 
             let full_output = egui_ctx.end_frame();
             egui_state.handle_platform_output(&context.window(), &egui_ctx, full_output.platform_output);
@@ -169,61 +230,27 @@ fn main() {
                 return;
             }
 
-            let mut frame = context.begin_frame();
+            let mut frame_ctx = context.begin_frame();
 
-            let swapchain_image = frame.get_swapchain_image();
+            let swapchain_image = frame_ctx.get_swapchain_image();
 
-            let vertex_buffer = frame.import_buffer("vertex_buffer", &vertex_buffer, &Default::default());
+            app.render(&mut frame_ctx);            
 
-            frame.add_pass(
-                "triangle",
-                &[
-                    (swapchain_image, render::AccessKind::ColorAttachmentWrite),
-                    (vertex_buffer, render::AccessKind::VertexShaderRead),
-                ],
-                move |cmd, graph| {
-                    let swapchain_image = graph.get_image(swapchain_image).unwrap();
-                    let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
-
-                    let color_attachment = vk::RenderingAttachmentInfo::builder()
-                        .image_view(swapchain_image.view)
-                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                        .load_op(vk::AttachmentLoadOp::CLEAR)
-                        .clear_value(vk::ClearValue {
-                            color: vk::ClearColorValue {
-                                float32: [0.0, 0.0, 0.0, 1.0],
-                            },
-                        })
-                        .store_op(vk::AttachmentStoreOp::STORE);
-
-                    let rendering_info = vk::RenderingInfo::builder()
-                        .render_area(swapchain_image.full_rect())
-                        .layer_count(1)
-                        .color_attachments(std::slice::from_ref(&color_attachment));
-
-                    cmd.begin_rendering(&rendering_info);
-
-                    cmd.bind_raster_pipeline(pipeline);
-
-                    cmd.push_bindings(&[vertex_buffer.descriptor_index.unwrap().to_raw()]);
-                    cmd.draw(0..3, 0..1);
-
-                    cmd.end_rendering();
-                },
-            );
-
-            let clipped_primitives = egui_ctx.tessellate(full_output.shapes);
-            egui_renderer.render(&mut frame, &clipped_primitives, &full_output.textures_delta, swapchain_image);
+            let clipped_primitives = {
+                puffin::profile_scope!("egui_tessellate");
+                egui_ctx.tessellate(full_output.shapes)
+            };
+            egui_renderer.render(&mut frame_ctx, &clipped_primitives, &full_output.textures_delta, swapchain_image);
         }
         Event::LoopDestroyed => {
             unsafe {
                 context.device.raw.device_wait_idle().unwrap();
             }
 
+            app.destroy(&context);
+
             egui_renderer.destroy(&context);
             
-            context.destroy_raster_pipeline(&pipeline);
-            context.destroy_buffer(&vertex_buffer);
         }
         _ => {}
     })

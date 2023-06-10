@@ -19,8 +19,8 @@ pub struct EguiRenderer {
 }
 
 impl EguiRenderer {
-    const MAX_VERTEX_COUNT: usize = 20000;
-    const MAX_INDEX_COUNT: usize = 20000;
+    const MAX_VERTEX_COUNT: usize = 200000;
+    const MAX_INDEX_COUNT: usize = 200000;
     const IMAGE_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
     pub fn new(context: &render::Context) -> Self {
@@ -131,6 +131,7 @@ impl EguiRenderer {
         clipped_primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
     ) -> Vec<ClippedBatch> {
+        puffin::profile_function!();
         for (id, delta) in textures_delta.set.iter() {
             self.update_texture(&context, *id, delta);
         }
@@ -208,6 +209,7 @@ impl EguiRenderer {
     }
 
     pub fn update_texture(&mut self, context: &render::Context, id: egui::TextureId, delta: &egui::epaint::ImageDelta) {
+        puffin::profile_function!();
         let [width, height] = delta.image.size();
         let bytes: Vec<u8> = match &delta.image {
             egui::ImageData::Color(image) => {
@@ -283,7 +285,7 @@ impl EguiRenderer {
         textures_delta: &egui::TexturesDelta,
         target_image: render::ResourceHandle
     ) {
-
+        puffin::profile_function!();
         let index_buffer = context.import_buffer(
             "egui_index_buffer",
             &self.index_buffer,

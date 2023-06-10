@@ -267,7 +267,8 @@ impl CompiledRenderGraph {
 }
 
 impl RenderGraph {
-    pub fn flush(&mut self, compiled: &mut CompiledRenderGraph) {
+    pub fn compile_and_flush(&mut self, compiled: &mut CompiledRenderGraph) {
+        puffin::profile_function!();
         compiled.clear();
 
         let sorted_passes = self.topology_sort(None);
@@ -412,6 +413,7 @@ impl RenderGraph {
     }
 
     fn topology_sort(&self, dead_stripped: Option<&[bool]>) -> SortedPasses {
+        puffin::profile_function!();
         // TODO: maybe use a better algo,
         // though this seems to be fast enough
 

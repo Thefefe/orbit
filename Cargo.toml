@@ -22,4 +22,6 @@ bytemuck = { version = "1.13.1", features = ["derive"] }
 glam = { version = "0.24.0", features = ["bytemuck"] }
 egui = "0.22.0"
 egui-winit = "0.22.0"
+puffin = "0.16.0"
+puffin_egui = "0.22.0"
 

@@ -212,6 +212,7 @@ impl std::ops::Deref for FrameContext<'_> {
 
 impl Context {
     pub fn begin_frame(&mut self) -> FrameContext {
+        puffin::profile_function!();
         let frame = &mut self.frames[self.frame_index];
 
         unsafe {
@@ -283,14 +284,11 @@ impl FrameContext<'_> {
         }
         pass
     }
-}
 
-impl Drop for FrameContext<'_> {
-    fn drop(&mut self) {
-        self.context.graph.flush(&mut self.context.compiled_graph);
+    fn record(&mut self) {
+        self.context.graph.compile_and_flush(&mut self.context.compiled_graph);
 
         let frame = &mut self.context.frames[self.context.frame_index];
-
 
         for batch in self.context.compiled_graph.iter_batches() {
             let cmd_buffer = frame.command_pool
@@ -323,7 +321,12 @@ impl Drop for FrameContext<'_> {
             self.acquired_image,
             frame.render_finished_semaphore,
         );
+    }
+}
 
+impl Drop for FrameContext<'_> {
+    fn drop(&mut self) {
+        self.record();
         self.context.frame_index = (self.context.frame_index + 1) % FRAME_COUNT;
     }
 }

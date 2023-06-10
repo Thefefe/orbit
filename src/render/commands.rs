@@ -118,7 +118,7 @@ impl CommandBuffer {
     }
 
     pub fn record<'a>(
-        &'a self,
+        &'a mut self,
         device: &'a render::Device,
         descriptor: &'a render::BindlessDescriptors,
     ) -> CommandRecorder<'a> {
@@ -142,7 +142,7 @@ impl render::Device {
 pub struct CommandRecorder<'a> {
     pub device: &'a render::Device,
     pub descriptor: &'a render::BindlessDescriptors,
-    pub command_buffer: &'a CommandBuffer,
+    pub command_buffer: &'a mut CommandBuffer,
 }
 
 impl<'a> CommandRecorder<'a> {
@@ -259,6 +259,12 @@ impl<'a> CommandRecorder<'a> {
     pub fn bind_index_buffer(&self, buffer: &render::BufferView) {
         unsafe {
             self.device.raw.cmd_bind_index_buffer(self.buffer(), buffer.handle, 0, vk::IndexType::UINT32);
+        }
+    }
+
+    pub fn bind_vertex_buffer(&self, binding: u32, buffer: &render::BufferView, offset: u64) {
+        unsafe {
+            self.device.raw.cmd_bind_vertex_buffers(self.buffer(), binding, &[buffer.handle], &[offset])
         }
     }
 

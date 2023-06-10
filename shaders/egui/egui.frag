@@ -9,9 +9,9 @@ layout(location = 0) out vec4 outColor;
 
 // layout(binding = 0, set = 0) uniform sampler2D font_texture;
 
-BindSlot(input_texture, 4);
+BindSlot(input_texture, 2);
 
 void main() {
-    // outColor = inColor * texture(sampler2D(GetTexture(input_texture), _uSamplers[0]), inUV);
-    outColor = inColor;
+    outColor = inColor * texture(sampler2D(GetTexture(input_texture), _uSamplers[0]), inUV);
+    // outColor = inColor;
 }

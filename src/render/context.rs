@@ -291,6 +291,7 @@ impl Drop for FrameContext<'_> {
 
         let frame = &mut self.context.frames[self.context.frame_index];
 
+
         for batch in self.context.compiled_graph.iter_batches() {
             let cmd_buffer = frame.command_pool
                 .begin_new(&self.context.device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -302,9 +303,9 @@ impl Drop for FrameContext<'_> {
             for semaphore in batch.finish_semaphores   {
                 cmd_buffer.signal_semaphore(*semaphore, batch.memory_barrier.dst_stage_mask);
             }
-
+            
             let recorder = cmd_buffer.record(&self.context.device, &self.context.descriptors);
-
+                
             self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
 
             recorder.barrier(&[], batch.begin_image_barriers, &[batch.memory_barrier]);

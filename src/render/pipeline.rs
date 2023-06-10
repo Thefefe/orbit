@@ -21,6 +21,12 @@ impl<'a> ShaderStage<'a> {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct VertexInput<'a> {
+    pub bindings: &'a [vk::VertexInputBindingDescription],
+    pub attributes: &'a [vk::VertexInputAttributeDescription],
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RasterizerDesc {
     pub primitive_topology: vk::PrimitiveTopology,
     pub polygon_mode: vk::PolygonMode,
@@ -109,6 +115,7 @@ pub struct RasterPipelineDesc<'a> {
     pub name: &'a str,
     pub vertex_stage: ShaderStage<'a>,
     pub fragment_stage: ShaderStage<'a>,
+    pub vertex_input: VertexInput<'a>,
     pub rasterizer: RasterizerDesc,
     pub color_attachments: &'a [PipelineColorAttachment],
     pub depth_state: Option<DepthState>,
@@ -126,7 +133,9 @@ impl RasterPipeline {
             desc.fragment_stage.to_vk().stage(vk::ShaderStageFlags::FRAGMENT).build(),
         ];
 
-        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
+        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+            .vertex_binding_descriptions(desc.vertex_input.bindings)
+            .vertex_attribute_descriptions(desc.vertex_input.attributes);
 
         let input_assembly =
             vk::PipelineInputAssemblyStateCreateInfo::builder().topology(desc.rasterizer.primitive_topology);

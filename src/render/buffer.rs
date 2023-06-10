@@ -129,7 +129,7 @@ impl render::Context {
         let copy_size = usize::min(buffer.size as usize - offset, data.len());
         if let Some(mapped_ptr) = buffer.mapped_ptr {
             unsafe {
-                std::ptr::copy_nonoverlapping(data.as_ptr(), mapped_ptr.as_ptr(), copy_size);
+                std::ptr::copy_nonoverlapping(data.as_ptr(), mapped_ptr.as_ptr().add(offset), copy_size);
             }
         } else {
             let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, &BufferDesc {

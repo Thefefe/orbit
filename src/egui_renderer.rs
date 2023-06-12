@@ -286,6 +286,15 @@ impl EguiRenderer {
         target_image: render::ResourceHandle
     ) {
         puffin::profile_function!();
+
+        let clipped_batches = self.update(context, clipped_primitives, textures_delta);
+
+        if clipped_batches.is_empty() {return;}
+
+        let window_size: [u32; 2] = context.window().inner_size().into();
+        let screen_size = window_size.map(|n| n as f32);
+        let pipeline = self.pipeline;
+
         let index_buffer = context.import_buffer(
             "egui_index_buffer",
             &self.index_buffer,
@@ -297,12 +306,6 @@ impl EguiRenderer {
             &self.vertex_buffer,
             &render::GraphResourceImportDesc::default(),
         );
-
-        let clipped_batches = self.update(context, clipped_primitives, textures_delta);
-        let pipeline = self.pipeline;
-
-        let window_size: [u32; 2] = context.window().inner_size().into();
-        let screen_size = window_size.map(|n| n as f32);
 
         context.add_pass(
             "egui_draw",

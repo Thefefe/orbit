@@ -73,6 +73,7 @@ pub struct ResourceData {
 pub struct PassData {
     pass: Pass,
     dependencies: Vec<DependencyHandle>,
+    alive: bool,
 }
 
 #[derive(Debug)]
@@ -146,6 +147,7 @@ impl RenderGraph {
         self.passes.insert(PassData {
             pass: Pass { name, func },
             dependencies: Vec::new(),
+            alive: false,
         })
     }
 
@@ -254,14 +256,14 @@ impl CompiledRenderGraph {
     pub fn get_buffer(&self, handle: render::ResourceHandle) -> Option<&render::BufferView> {
         match &self.resources[handle] {
             AnyResourceView::Buffer(buffer) => Some(buffer),
-            _ => None
+            _ => None,
         }
     }
 
     pub fn get_image(&self, handle: render::ResourceHandle) -> Option<&render::ImageView> {
         match &self.resources[handle] {
             AnyResourceView::Image(image) => Some(image),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -271,7 +273,7 @@ impl RenderGraph {
         puffin::profile_function!();
         compiled.clear();
 
-        let sorted_passes = self.topology_sort(None);
+        let sorted_passes = self.topology_sort();
 
         compiled.resources.extend(self.resources.iter().map(|res| res.resource));
 
@@ -290,8 +292,8 @@ impl RenderGraph {
 
             let passes = &sorted_passes.passes[pass_range.clone()];
 
-            for &pass_slot in passes {
-                let Some((_, pass)) = self.passes.remove_by_slot(pass_slot) else { continue };
+            for &pass in passes {
+                let Some(pass) = self.passes.remove(pass) else { continue };
 
                 // first pass of dependencies, order matters for limiting allocations
                 // while preserving data contiguity
@@ -333,7 +335,7 @@ impl RenderGraph {
                 if batch.memory_barrier.src_stage_mask.is_empty() {
                     batch.memory_barrier.src_stage_mask = vk::PipelineStageFlags2::TOP_OF_PIPE;
                 }
-            
+
                 if batch.memory_barrier.dst_stage_mask.is_empty() {
                     batch.memory_barrier.dst_stage_mask = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                 }
@@ -345,7 +347,7 @@ impl RenderGraph {
                     let dependency = &self.dependencies[dependency];
                     let resource_data = &self.resources[dependency.resource_handle];
 
-                    // 'creator' of the last version of the resource
+                    // source of the last version of the resource
                     if dependency.access.read_write_kind() == render::ReadWriteKind::Write
                         && dependency.resource_version == resource_data.versions.len() - 2
                     {
@@ -355,8 +357,8 @@ impl RenderGraph {
                         }
 
                         if let AnyResourceView::Image(image) = &resource_data.resource {
-                            if resource_data.target_access != render::AccessKind::None &&
-                                dependency.access != resource_data.target_access
+                            if resource_data.target_access != render::AccessKind::None
+                                && dependency.access != resource_data.target_access
                             {
                                 batch.finish_image_barrier_range.end += 1;
                                 compiled.image_barriers.push(render::image_barrier(
@@ -382,37 +384,17 @@ impl RenderGraph {
 #[derive(Debug)]
 struct SortedPasses {
     ranges: Vec<Range<usize>>,
-    passes: Vec<u32>,
+    passes: Vec<PassHandle>,
 }
 
 impl SortedPasses {
-    fn passes(&self) -> impl Iterator<Item = &[u32]> {
+    fn passes(&self) -> impl Iterator<Item = &[PassHandle]> {
         self.ranges.iter().map(|range| &self.passes[range.clone()])
     }
 }
 
 impl RenderGraph {
-    pub fn dead_strip(&mut self, output_passes: &[PassHandle]) -> Vec<bool> {
-        let mut alive = vec![false; self.passes.len()];
-
-        for pass in output_passes {
-            self.walk_alive_check(&mut alive, pass.slot());
-        }
-
-        alive
-    }
-
-    fn walk_alive_check(&self, alive: &mut [bool], pass_slot: u32) {
-        if !alive[pass_slot as usize] {
-            alive[pass_slot as usize] = true;
-
-            for pass in self.prev_passes(pass_slot) {
-                self.walk_alive_check(alive, pass);
-            }
-        }
-    }
-
-    fn topology_sort(&self, dead_stripped: Option<&[bool]>) -> SortedPasses {
+    fn topology_sort(&self) -> SortedPasses {
         puffin::profile_function!();
         // TODO: maybe use a better algo,
         // though this seems to be fast enough
@@ -422,12 +404,7 @@ impl RenderGraph {
             passes: Vec::with_capacity(self.passes.len()),
         };
 
-        let mut remainging_passes: HashSet<_> = if let Some(alive) = dead_stripped {
-            assert_eq!(alive.len(), self.passes.len());
-            (0..self.passes.len() as u32).filter(|&pass| alive[pass as usize]).collect()
-        } else {
-            (0..self.passes.len() as u32).collect()
-        };
+        let mut remainging_passes: HashSet<thunderdome::Index> = self.passes.iter().map(|(index, _)| index).collect();
 
         while !remainging_passes.is_empty() {
             let start = sorted_passes.passes.len();
@@ -450,16 +427,16 @@ impl RenderGraph {
         sorted_passes
     }
 
-    fn prev_passes(&self, pass: u32) -> impl Iterator<Item = u32> + '_ {
-        self.passes.get_by_slot(pass).unwrap().1.dependencies.iter().filter_map(|&dependency_handle| {
+    fn prev_passes(&self, pass: PassHandle) -> impl Iterator<Item = PassHandle> + '_ {
+        self.passes.get(pass).map(|pass| pass.dependencies.iter().filter_map(|&dependency_handle| {
             let handle = self.dependencies[dependency_handle].resource_handle;
             let version = self.dependencies[dependency_handle].resource_version;
 
             if let ResourceSource::Pass { dependency } = self.resources[handle].versions[version].source {
-                Some(self.dependencies[dependency].pass_handle.slot())
+                Some(self.dependencies[dependency].pass_handle)
             } else {
                 None
             }
-        })
+        })).into_iter().flatten()
     }
 }

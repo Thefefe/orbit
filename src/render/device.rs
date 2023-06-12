@@ -596,7 +596,6 @@ impl Device {
         unsafe { self.raw.get_buffer_device_address(&vk::BufferDeviceAddressInfo::builder().buffer(buffer)) }
     }
 
-    #[inline]
     pub fn set_debug_name<T: vk::Handle>(&self, handle: T, name: &str) {
         if let Some(debug_utils) = &self.debug_utils_fns {
             unsafe {

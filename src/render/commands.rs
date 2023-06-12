@@ -1,4 +1,5 @@
 use ash::vk;
+use std::ffi::CString;
 use std::marker::PhantomData;
 use std::ops::Range;
 
@@ -7,6 +8,7 @@ use crate::utils::Unsync;
 
 pub struct CommandPool {
     handle: vk::CommandPool,
+    name: String,
     command_buffers: Vec<CommandBuffer>,
     used_buffers: usize,
 
@@ -14,14 +16,17 @@ pub struct CommandPool {
 }
 
 impl CommandPool {
-    pub fn new(device: &render::Device) -> Self {
+    pub fn new(device: &render::Device, name: &str) -> Self {
         let command_pool_create_info =
             vk::CommandPoolCreateInfo::builder().queue_family_index(device.queue_family_index);
 
         let handle = unsafe { device.raw.create_command_pool(&command_pool_create_info, None).unwrap() };
 
+        device.set_debug_name(handle, &format!("{name}_command_pool"));
+
         Self {
             handle,
+            name: name.to_owned(),
             command_buffers: Vec::new(),
             used_buffers: 0,
 
@@ -64,6 +69,10 @@ impl CommandPool {
                 .command_buffer_count(1);
 
             let command_buffer = unsafe { device.raw.allocate_command_buffers(&alloc_info).unwrap()[0] };
+
+            let index = self.command_buffers.len();
+            device.set_debug_name(command_buffer, &format!("{}_command_buffer_#{index}", self.name));
+
             self.command_buffers.push(CommandBuffer {
                 command_buffer_info: vk::CommandBufferSubmitInfo {
                     command_buffer,
@@ -151,6 +160,27 @@ impl<'a> CommandRecorder<'a> {
         self.command_buffer.handle()
     }
 
+    pub fn begin_debug_label(&self, name: &str, color: Option<[f32; 4]>) {
+        if let Some(ref debug_utils) = self.device.debug_utils_fns {
+            unsafe {
+                let cname = CString::new(name).unwrap();
+                let label = vk::DebugUtilsLabelEXT::builder()
+                    .label_name(cname.as_c_str())
+                    .color(color.unwrap_or([0.0; 4]));
+                debug_utils.cmd_begin_debug_utils_label(self.buffer(), &label);
+            }
+        }
+    }
+
+    pub fn end_debug_label(&self) {
+        if let Some(ref debug_utils) = self.device.debug_utils_fns {
+            unsafe {
+                debug_utils.cmd_end_debug_utils_label(self.buffer());
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn copy_buffer(&self, src: &render::BufferView, dst: &render::BufferView, regions: &[vk::BufferCopy]) {
         unsafe {
             self.device.raw.cmd_copy_buffer(
@@ -162,6 +192,7 @@ impl<'a> CommandRecorder<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn copy_buffer_to_image(
         &self,
         src: &render::BufferView,

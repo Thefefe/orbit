@@ -2,10 +2,9 @@
 
 use ash::vk;
 use gpu_allocator::MemoryLocation;
-use render::DescriptorHandle;
 use winit::{
-    event::{ElementState, Event, KeyboardInput, VirtualKeyCode as KeyCode, WindowEvent},
-    event_loop::EventLoop,
+    event::{Event,  VirtualKeyCode as KeyCode},
+    event_loop::{EventLoop, ControlFlow},
     window::WindowBuilder,
 };
 
@@ -14,7 +13,11 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4};
 
 mod render;
 mod egui_renderer;
+mod input;
 mod utils;
+
+use render::DescriptorHandle;
+use input::Input;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -47,6 +50,8 @@ use egui_renderer::EguiRenderer;
 struct App {
     basic_pipeline: render::RasterPipeline,
     vertex_buffer: render::Buffer,
+
+    profiler_open: bool,
 }
 
 impl App {
@@ -104,12 +109,25 @@ impl App {
         Self {
             basic_pipeline,
             vertex_buffer,
+
+            profiler_open: false,
         }
     }
 
-    fn update(&mut self, egui_ctx: &egui::Context) {
+    fn update(&mut self, input: &Input, egui_ctx: &egui::Context, control_flow: &mut ControlFlow) {
         puffin::profile_function!();
-        puffin_egui::profiler_window(&egui_ctx);        
+
+        if input.key_pressed(KeyCode::F3) {
+            self.profiler_open = !self.profiler_open;
+        }
+
+        if self.profiler_open {
+            self.profiler_open = puffin_egui::profiler_window(&egui_ctx);
+        }
+
+        if input.close_requested() | input.key_pressed(KeyCode::Escape) {
+            control_flow.set_exit();
+        }
     }
 
     fn render(&mut self, frame_ctx: &mut render::FrameContext) {
@@ -186,41 +204,35 @@ fn main() {
     let mut egui_state = egui_winit::State::new(&event_loop);
     let mut egui_renderer = EguiRenderer::new(&context);
 
+    let mut input = Input::new();
+
     let mut app = App::new(&context);
 
-    event_loop.run(move |event, _target, control_flow| match event {
-        Event::WindowEvent { event, .. } => {
-            let response = egui_state.on_event(&egui_ctx, &event);
-
-            if response.consumed {
+    event_loop.run(move |event, _target, control_flow| {
+        if let Event::WindowEvent { event, .. } = &event {
+            if egui_state.on_event(&egui_ctx, &event).consumed {
                 return;
             }
+        };
 
-            match event {
-                WindowEvent::CloseRequested => control_flow.set_exit(),
-                WindowEvent::KeyboardInput {
-                    input:
-                        KeyboardInput {
-                            state: ElementState::Pressed,
-                            virtual_keycode: Some(keycode),
-                            ..
-                        },
-                    ..
-                } => match keycode {
-                    KeyCode::Escape => control_flow.set_exit(),
-                    _ => {}
-                },
-                _ => {}
+        if event == Event::LoopDestroyed {
+            unsafe {
+                context.device.raw.device_wait_idle().unwrap();
             }
+
+            app.destroy(&context);
+
+            egui_renderer.destroy(&context);
         }
-        Event::MainEventsCleared => {
+
+        if input.handle_event(&event) {
             puffin::GlobalProfiler::lock().new_frame();
             puffin::profile_scope!("update");
 
             let raw_input = egui_state.take_egui_input(&context.window());
             egui_ctx.begin_frame(raw_input);
 
-            app.update(&egui_ctx);
+            app.update(&input, &egui_ctx, control_flow);
 
             let full_output = egui_ctx.end_frame();
             egui_state.handle_platform_output(&context.window(), &egui_ctx, full_output.platform_output);
@@ -241,17 +253,8 @@ fn main() {
                 egui_ctx.tessellate(full_output.shapes)
             };
             egui_renderer.render(&mut frame_ctx, &clipped_primitives, &full_output.textures_delta, swapchain_image);
-        }
-        Event::LoopDestroyed => {
-            unsafe {
-                context.device.raw.device_wait_idle().unwrap();
-            }
 
-            app.destroy(&context);
-
-            egui_renderer.destroy(&context);
-            
+            input.clear_frame()
         }
-        _ => {}
     })
 }

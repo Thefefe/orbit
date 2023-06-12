@@ -102,12 +102,12 @@ impl Context {
             render::Swapchain::new(&device, config)
         };
 
-        let frames = std::array::from_fn(|_| {
+        let frames = std::array::from_fn(|frame_index| {
             let in_flight_fence = device.create_fence("in_flight_fence", true);
             let image_available_semaphore = device.create_semaphore("image_available_semaphore");
             let render_finished_semaphore = device.create_semaphore("render_finished_semaphore");
 
-            let command_pool = render::CommandPool::new(&device);
+            let command_pool = render::CommandPool::new(&device, &format!("frame{frame_index}"));
 
             Frame {
                 in_flight_fence,
@@ -119,7 +119,7 @@ impl Context {
         });
 
         let record_submit_stuff = {
-            let command_pool = render::CommandPool::new(&device);
+            let command_pool = render::CommandPool::new(&device, "global");
             let fence = device.create_fence("record_submit_fence", false);
 
             Mutex::new(RecordSubmitStuff { command_pool, fence })  
@@ -146,7 +146,7 @@ impl Context {
     pub fn record_and_submit(&self, f: impl FnOnce(&render::CommandRecorder)) {
         let mut record_submit_stuff = self.record_submit_stuff.lock().unwrap();
         record_submit_stuff.command_pool.reset(&self.device);
-        let buffer = record_submit_stuff.command_pool.begin_new(&self.device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let buffer = record_submit_stuff.command_pool.begin_new(&self.device, vk::CommandBufferUsageFlags::empty());
         f(&buffer.record(&self.device, &self.descriptors));
         unsafe {
             self.device.raw.reset_fences(&[record_submit_stuff.fence]).unwrap();
@@ -292,7 +292,7 @@ impl FrameContext<'_> {
 
         for batch in self.context.compiled_graph.iter_batches() {
             let cmd_buffer = frame.command_pool
-                .begin_new(&self.context.device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+                .begin_new(&self.context.device, vk::CommandBufferUsageFlags::empty());
 
             for semaphore in batch.wait_semaphores {
                 cmd_buffer.wait_semaphore(*semaphore, batch.memory_barrier.src_stage_mask);
@@ -309,7 +309,9 @@ impl FrameContext<'_> {
             recorder.barrier(&[], batch.begin_image_barriers, &[batch.memory_barrier]);
 
             for pass in batch.passes {
+                recorder.begin_debug_label(&pass.name, None);
                 (pass.func)(&recorder, &self.context.compiled_graph);
+                recorder.end_debug_label();
             }
 
             recorder.barrier(&[], batch.finish_image_barriers, &[]);

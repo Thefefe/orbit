@@ -51,6 +51,8 @@ impl Image {
 
         let handle = unsafe { device.raw.create_image(&create_info, None).unwrap() };
 
+        device.set_debug_name(handle, desc.name);
+
         let requirements = unsafe { device.raw.get_image_memory_requirements(handle) };
 
         let (memory, vk_memory, offset, _) = device.allocate(&AllocationCreateDesc {
@@ -82,6 +84,7 @@ impl Image {
         let view = unsafe {
             device.raw.create_image_view(&image_view_create_info, None).unwrap()
         };
+        device.set_debug_name(view, &format!("{}_view", desc.name));
 
         let descriptor_index = if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
             Some(descriptors.alloc_image_resource(device, view))

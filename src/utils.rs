@@ -25,11 +25,11 @@ pub type Unsync = Cell<()>;
 pub type Unsend = MutexGuard<'static, ()>;
 
 pub fn init_logger() {
-    log_panics::init();
     env_logger::builder()
-        .parse_filters("orbit,vulkan=warn")
+        .parse_filters("panic,orbit,vulkan=warn")
         .target(env_logger::Target::Stdout)
         .init();
+    log_panics::init();
 }
 
 #[cfg(test)]

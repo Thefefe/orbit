@@ -179,6 +179,7 @@ impl App {
     fn destroy(&self, context: &render::Context) {
         context.destroy_raster_pipeline(&self.basic_pipeline);
         context.destroy_buffer(&self.vertex_buffer);
+        
     }
 }
 
@@ -207,6 +208,7 @@ fn main() {
     let mut input = Input::new();
 
     let mut app = App::new(&context);
+
 
     event_loop.run(move |event, _target, control_flow| {
         if let Event::WindowEvent { event, .. } = &event {

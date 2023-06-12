@@ -19,8 +19,8 @@ pub struct EguiRenderer {
 }
 
 impl EguiRenderer {
-    const MAX_VERTEX_COUNT: usize = 200000;
-    const MAX_INDEX_COUNT: usize = 200000;
+    const MAX_VERTEX_COUNT: usize = 200_000;
+    const MAX_INDEX_COUNT: usize = 200_000;
     const IMAGE_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
     pub fn new(context: &render::Context) -> Self {
@@ -149,8 +149,14 @@ impl EguiRenderer {
 
         for clipped_primitive in clipped_primitives {
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_primitive.primitive {
-                assert!(vertex_cursor as usize + mesh.vertices.len() < Self::MAX_VERTEX_COUNT);
-                assert!(index_cursor as usize + mesh.indices.len() < Self::MAX_INDEX_COUNT);
+                // assert!(vertex_cursor as usize + mesh.vertices.len() < Self::MAX_VERTEX_COUNT);
+                // assert!(index_cursor as usize + mesh.indices.len() < Self::MAX_INDEX_COUNT);
+
+                if vertex_cursor as usize + mesh.vertices.len() > Self::MAX_VERTEX_COUNT ||
+                   index_cursor as usize + mesh.indices.len() > Self::MAX_INDEX_COUNT {
+                    log::error!("egui buffers are full, but there are to draw");
+                    break;
+                }
 
                 let vertices = unsafe {
                     std::slice::from_raw_parts(

@@ -21,10 +21,35 @@ impl std::fmt::Debug for Pass {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ResourceKind {
-    Buffer,
-    Image,
+trait RenderResource {
+    type View;
+    type Desc;
+
+    fn view(&self) -> Self::View;
+}
+
+impl RenderResource for render::Buffer {
+    type View = render::BufferView;
+    type Desc = render::BufferDesc;
+
+    fn view(&self) -> Self::View {
+        self.buffer_view
+    }
+}
+
+impl RenderResource for render::Image {
+    type View = render::ImageView;
+    type Desc = render::ImageDesc;
+
+    fn view(&self) -> Self::View {
+        self.image_view
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum AnyResource {
+    Buffer(render::Buffer),
+    Image(render::Image),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,40 +58,110 @@ pub enum AnyResourceView {
     Image(render::ImageView),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum AnyResourceDesc {
+    Buffer(render::BufferDesc),
+    Image(render::ImageDesc),
+}
+
+impl RenderResource for AnyResource {
+    type View = AnyResourceView;
+    type Desc = AnyResourceDesc;
+
+    fn view(&self) -> Self::View {
+        match self {
+            AnyResource::Buffer(buffer) => AnyResourceView::Buffer(buffer.view()),
+            AnyResource::Image(image) => AnyResourceView::Image(image.view()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceKind {
+    Buffer,
+    Image,
+}
+
+impl AnyResource {
+    pub fn kind(&self) -> ResourceKind {
+        match self {
+            AnyResource::Buffer(_)  => ResourceKind::Buffer,
+            AnyResource::Image(_)   => ResourceKind::Image,
+        }
+    }
+}
+
 impl AnyResourceView {
     pub fn kind(&self) -> ResourceKind {
         match self {
-            AnyResourceView::Buffer(_) => ResourceKind::Buffer,
-            AnyResourceView::Image(_) => ResourceKind::Image,
+            AnyResourceView::Buffer(_)  => ResourceKind::Buffer,
+            AnyResourceView::Image(_)   => ResourceKind::Image,
+        }
+    }
+}
+
+impl AnyResourceDesc {
+    pub fn kind(&self) -> ResourceKind {
+        match self {
+            AnyResourceDesc::Buffer(_)  => ResourceKind::Buffer,
+            AnyResourceDesc::Image(_)   => ResourceKind::Image,
         }
     }
 }
 
 #[derive(Debug)]
 pub enum ResourceSource {
-    Import,
-    Pass { dependency: DependencyHandle },
+    Import {
+        view: AnyResourceView,
+    },
+    Create {
+        desc: AnyResourceDesc,
+    }
 }
 
 #[derive(Debug)]
 pub struct ResourceVersion {
-    initial_access: render::AccessKind,
-    source: ResourceSource,
-
-    reads: Vec<DependencyHandle>,
+    last_access: render::AccessKind,
+    source_pass: PassHandle,
 }
 
 #[derive(Debug)]
 pub struct ResourceData {
     name: String,
 
-    resource: AnyResourceView,
+    source: ResourceSource,
+    resource_kind: ResourceKind,
+    is_transient: bool,
 
+    initial_access: render::AccessKind,
     target_access: render::AccessKind,
     wait_semaphore: Option<vk::Semaphore>,
     finish_semaphore: Option<vk::Semaphore>,
 
     versions: Vec<ResourceVersion>,
+}
+
+impl ResourceData {
+    fn current_version(&self) -> usize {
+        self.versions.len()
+    }
+
+    fn last_access(&self, version: usize) -> render::AccessKind {
+        assert!(version <= self.versions.len());
+        if version == 0 {
+            self.initial_access
+        } else {
+            self.versions[version - 1].last_access
+        }
+    }
+
+    fn source_pass(&self, version: usize) -> Option<PassHandle> {
+        if version != 0 {
+            Some(self.versions[version - 1].source_pass)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -84,19 +179,19 @@ struct DependencyData {
     resource_version: usize,
 }
 
-#[derive(Debug)]
-pub struct RenderGraph {
-    resources: Vec<ResourceData>,
-    passes: thunderdome::Arena<PassData>,
-    dependencies: Vec<DependencyData>,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GraphResourceImportDesc {
     pub initial_access: render::AccessKind,
     pub target_access: render::AccessKind,
     pub wait_semaphore: Option<vk::Semaphore>,
     pub finish_semaphore: Option<vk::Semaphore>,
+}
+
+#[derive(Debug)]
+pub struct RenderGraph {
+    resources: Vec<ResourceData>,
+    passes: thunderdome::Arena<PassData>,
+    dependencies: Vec<DependencyData>,
 }
 
 impl RenderGraph {
@@ -115,31 +210,51 @@ impl RenderGraph {
     }
 
     fn add_resource(&mut self, resource_data: ResourceData) -> ResourceHandle {
-        assert!(resource_data.versions.len() > 0);
         let index = self.resources.len();
         self.resources.push(resource_data);
         index
     }
 
+    pub fn add_transient_resource(
+        &mut self, 
+        name: String,
+        desc: AnyResourceDesc,
+    ) -> ResourceHandle {
+        self.add_resource(ResourceData {
+            name,
+            
+            source: ResourceSource::Create { desc },
+            resource_kind: desc.kind(),
+
+            is_transient: true,
+            initial_access: render::AccessKind::None,
+            target_access: render::AccessKind::None,
+            wait_semaphore: None,
+            finish_semaphore: None,
+
+            versions: vec![],
+        })
+    }
+
     pub fn import_resource(
         &mut self,
         name: String,
-        resource: AnyResourceView,
+        view: AnyResourceView,
         desc: &GraphResourceImportDesc,
     ) -> ResourceHandle {
         self.add_resource(ResourceData {
             name,
-            resource,
 
+            source: ResourceSource::Import { view },
+            resource_kind: view.kind(),
+            is_transient: false,
+
+            initial_access: desc.initial_access,
             target_access: desc.target_access,
             wait_semaphore: desc.wait_semaphore,
             finish_semaphore: desc.finish_semaphore,
 
-            versions: vec![ResourceVersion {
-                initial_access: desc.initial_access,
-                source: ResourceSource::Import,
-                reads: Vec::new(),
-            }],
+            versions: vec![],
         })
     }
 
@@ -157,7 +272,7 @@ impl RenderGraph {
         resource_handle: ResourceHandle,
         access: render::AccessKind,
     ) -> usize {
-        let resource_version = self.resources[resource_handle].versions.len() - 1;
+        let resource_version = self.resources[resource_handle].current_version();
 
         let dependency = self.dependencies.len();
         self.dependencies.push(DependencyData {
@@ -171,12 +286,9 @@ impl RenderGraph {
 
         if access.read_write_kind() == render::ReadWriteKind::Write {
             self.resources[resource_handle].versions.push(ResourceVersion {
-                initial_access: access,
-                source: ResourceSource::Pass { dependency },
-                reads: Vec::new(),
+                last_access: access,
+                source_pass: pass_handle,
             });
-        } else {
-            self.resources[resource_handle].versions[resource_version].reads.push(dependency);
         }
 
         dependency
@@ -195,25 +307,22 @@ pub struct BatchData {
     pub finish_semaphore_range: Range<usize>,
 }
 
-#[derive(Default)]
+#[derive(Debug)]
+pub struct GraphResource {
+    name: String,
+    resource: AnyResourceView,
+}
+
+#[derive(Debug, Default)]
 pub struct CompiledRenderGraph {
-    pub resources: Vec<AnyResourceView>,
+    pub resources: Vec<GraphResource>,
     pub passes: Vec<Pass>,
     pub image_barriers: Vec<vk::ImageMemoryBarrier2>,
     pub semaphores: Vec<vk::Semaphore>,
     pub batches: Vec<BatchData>,
-}
 
-impl std::fmt::Debug for CompiledRenderGraph {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CompiledRenderGraph")
-            .field("resources", &self.resources)
-            .field("passes", &self.passes)
-            .field("image_barriers", &self.image_barriers)
-            .field("semaphores", &self.semaphores)
-            .field("batches", &self.batches)
-            .finish()
-    }
+    pub transient_buffers: Vec<render::Buffer>,
+    pub transient_images: Vec<render::Image>,
 }
 
 pub struct Batch<'a> {
@@ -254,14 +363,14 @@ impl CompiledRenderGraph {
     }
 
     pub fn get_buffer(&self, handle: render::ResourceHandle) -> Option<&render::BufferView> {
-        match &self.resources[handle] {
+        match &self.resources[handle].resource {
             AnyResourceView::Buffer(buffer) => Some(buffer),
             _ => None,
         }
     }
 
     pub fn get_image(&self, handle: render::ResourceHandle) -> Option<&render::ImageView> {
-        match &self.resources[handle] {
+        match &self.resources[handle].resource {
             AnyResourceView::Image(image) => Some(image),
             _ => None,
         }
@@ -269,13 +378,61 @@ impl CompiledRenderGraph {
 }
 
 impl RenderGraph {
-    pub fn compile_and_flush(&mut self, compiled: &mut CompiledRenderGraph) {
+    pub fn compile_and_flush(
+        &mut self,
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+        compiled: &mut CompiledRenderGraph
+    ) {
         puffin::profile_function!();
         compiled.clear();
 
         let sorted_passes = self.topology_sort();
 
-        compiled.resources.extend(self.resources.iter().map(|res| res.resource));
+        for resource_data in self.resources.iter_mut() {
+            let mut name = String::new();
+            std::mem::swap(&mut name, &mut resource_data.name);
+            match &resource_data.source {
+                ResourceSource::Import { view } => {
+                    compiled.resources.push(GraphResource {
+                        name,
+                        resource: *view,
+                    });
+                },
+                ResourceSource::Create { desc } => {
+                    match desc {
+                        AnyResourceDesc::Buffer(desc) => {
+                            let buffer = render::Buffer::create_impl(
+                                device,
+                                descriptors,
+                                &resource_data.name,
+                                desc
+                            );
+                            
+                            compiled.resources.push(GraphResource {
+                                name,
+                                resource: AnyResourceView::Buffer(buffer.view()),
+                            });
+                            compiled.transient_buffers.push(buffer);
+                        },
+                        AnyResourceDesc::Image(desc) => {
+                            let image = render::Image::create_impl(
+                                device,
+                                descriptors,
+                                &resource_data.name,
+                                desc
+                            );
+                            
+                            compiled.resources.push(GraphResource {
+                                name,
+                                resource: AnyResourceView::Image(image.view()),
+                            });
+                            compiled.transient_images.push(image);
+                        },
+                    }
+                },
+            } 
+        }
 
         for pass_range in sorted_passes.ranges.iter() {
             let mut batch = BatchData {
@@ -300,7 +457,7 @@ impl RenderGraph {
                 for &dependency in pass.dependencies.iter() {
                     let dependency = &self.dependencies[dependency];
                     let resource_data = &self.resources[dependency.resource_handle];
-                    let resource_kind = resource_data.resource.kind();
+                    let resource_kind = resource_data.resource_kind;
 
                     if dependency.resource_version == 0 {
                         if let Some(semaphore) = resource_data.wait_semaphore {
@@ -309,9 +466,7 @@ impl RenderGraph {
                         }
                     }
 
-                    let src_access =
-                        self.resources[dependency.resource_handle].versions[dependency.resource_version].initial_access;
-
+                    let src_access = resource_data.last_access(dependency.resource_version);
                     let dst_access = dependency.access;
 
                     if resource_kind != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
@@ -324,7 +479,7 @@ impl RenderGraph {
                         if !batch.memory_barrier.src_access_mask.is_empty() {
                             batch.memory_barrier.dst_access_mask |= dst_access.access_mask();
                         }
-                    } else if let AnyResourceView::Image(image) = &resource_data.resource {
+                    } else if let AnyResourceView::Image(image) = &compiled.resources[dependency.resource_handle].resource {
                         batch.begin_image_barrier_range.end += 1;
                         compiled.image_barriers.push(render::image_barrier(image, src_access, dst_access));
                     } else {
@@ -349,14 +504,14 @@ impl RenderGraph {
 
                     // source of the last version of the resource
                     if dependency.access.read_write_kind() == render::ReadWriteKind::Write
-                        && dependency.resource_version == resource_data.versions.len() - 2
+                        && dependency.resource_version == resource_data.current_version() - 1
                     {
                         if let Some(semaphore) = resource_data.finish_semaphore {
                             batch.finish_semaphore_range.end += 1;
                             compiled.semaphores.push(semaphore);
                         }
 
-                        if let AnyResourceView::Image(image) = &resource_data.resource {
+                        if let AnyResourceView::Image(image) = &compiled.resources[dependency.resource_handle].resource {
                             if resource_data.target_access != render::AccessKind::None
                                 && dependency.access != resource_data.target_access
                             {
@@ -432,11 +587,7 @@ impl RenderGraph {
             let handle = self.dependencies[dependency_handle].resource_handle;
             let version = self.dependencies[dependency_handle].resource_version;
 
-            if let ResourceSource::Pass { dependency } = self.resources[handle].versions[version].source {
-                Some(self.dependencies[dependency].pass_handle)
-            } else {
-                None
-            }
+            self.resources[handle].source_pass(version)
         })).into_iter().flatten()
     }
 }

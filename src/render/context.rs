@@ -12,6 +12,9 @@ pub struct Frame {
     pub image_available_semaphore: vk::Semaphore,
     pub render_finished_semaphore: vk::Semaphore,
     pub command_pool: render::CommandPool,
+    
+    buffers_to_free: Vec<render::Buffer>,
+    images_to_free: Vec<render::Image>,
 }
 
 const FRAME_COUNT: usize = 2;
@@ -113,8 +116,10 @@ impl Context {
                 in_flight_fence,
                 image_available_semaphore,
                 render_finished_semaphore,
-
                 command_pool,
+                
+                buffers_to_free: Vec::new(),
+                images_to_free: Vec::new(),
             }
         });
 
@@ -182,6 +187,14 @@ impl Drop for Context {
             }
 
             frame.command_pool.destroy(&self.device);
+        
+            for buffer in frame.buffers_to_free.iter() {
+                render::Buffer::destroy_impl(&self.device, &self.descriptors, buffer);
+            }
+    
+            for image in frame.images_to_free.iter() {
+                render::Image::destroy_impl(&self.device, &self.descriptors, image);
+            }
         }
 
         for sampler in self.samplers.iter() {
@@ -221,6 +234,15 @@ impl Context {
         }
 
         frame.command_pool.reset(&self.device);
+
+        for buffer in frame.buffers_to_free.drain(..) {
+            render::Buffer::destroy_impl(&self.device, &self.descriptors, &buffer);
+        }
+
+        for image in frame.images_to_free.drain(..) {
+            render::Image::destroy_impl(&self.device, &self.descriptors, &image);
+        }
+
         self.swapchain.resize(self.window.inner_size().into());
 
         let acquired_image = self
@@ -250,6 +272,14 @@ impl Context {
 }
 
 impl FrameContext<'_> {
+    pub fn swapchain_extent(&self) -> vk::Extent2D {
+        self.acquired_image.extent
+    }
+
+    pub fn swapchain_format(&self) -> vk::Format {
+        self.acquired_image.format
+    }
+
     pub fn get_swapchain_image(&self) -> render::ResourceHandle {
         self.acquired_image_handle
     }
@@ -272,6 +302,24 @@ impl FrameContext<'_> {
         self.context.graph.import_resource(name.into(), render::AnyResourceView::Image(*image), desc)
     }
 
+    pub fn create_transient_buffer(
+        &mut self,
+        name: impl Into<String>,
+        desc: render::BufferDesc
+    ) -> render::ResourceHandle {
+        let name = name.into();
+        self.context.graph.add_transient_resource(name, render::AnyResourceDesc::Buffer(desc))
+    }
+    
+    pub fn create_transient_image(
+        &mut self,
+        name: impl Into<String>,
+        desc: render::ImageDesc
+    ) -> render::ResourceHandle {
+        let name = name.into();
+        self.context.graph.add_transient_resource(name, render::AnyResourceDesc::Image(desc))
+    }
+
     pub fn add_pass(
         &mut self,
         name: impl Into<String>,
@@ -286,9 +334,16 @@ impl FrameContext<'_> {
     }
 
     fn record(&mut self) {
-        self.context.graph.compile_and_flush(&mut self.context.compiled_graph);
+        self.context.graph.compile_and_flush(
+            &self.context.device,
+            &self.context.descriptors,
+            &mut self.context.compiled_graph
+        );
 
         let frame = &mut self.context.frames[self.context.frame_index];
+
+        std::mem::swap(&mut self.context.compiled_graph.transient_buffers, &mut frame.buffers_to_free);
+        std::mem::swap(&mut self.context.compiled_graph.transient_images, &mut frame.images_to_free);
 
         for batch in self.context.compiled_graph.iter_batches() {
             let cmd_buffer = frame.command_pool
@@ -306,7 +361,14 @@ impl FrameContext<'_> {
                 
             self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
 
-            recorder.barrier(&[], batch.begin_image_barriers, &[batch.memory_barrier]);
+            if batch.memory_barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE
+            || batch.memory_barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE
+            || batch.memory_barrier.src_access_mask | batch.memory_barrier.dst_access_mask != vk::AccessFlags2::NONE
+            {
+                recorder.barrier(&[], batch.begin_image_barriers, &[batch.memory_barrier]);
+            } else {
+                recorder.barrier(&[], batch.begin_image_barriers, &[]);
+            };
 
             for pass in batch.passes {
                 recorder.begin_debug_label(&pass.name, None);

@@ -61,6 +61,7 @@ impl SwapchainInner {
                 render::ImageView {
                     handle: image,
                     descriptor_index: None,
+                    format: config.surface_format.format,
                     view,
                     extent: config.extent,
                     subresource_range,
@@ -215,6 +216,7 @@ impl Swapchain {
         frame_index: usize, // used for old swapchain lifetime management
         acquired_semaphore: vk::Semaphore,
     ) -> Result<AcquiredImage, SwapchainOutOfDate> {
+        puffin::profile_function!();
         self.recreate_if_needed(device);
         
         while let Some(swapchain) = self.old.front() {

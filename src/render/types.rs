@@ -7,6 +7,7 @@ use ash::vk;
 pub struct ImageView {
     pub handle: vk::Image,
     pub descriptor_index: Option<render::ImageDescriptorIndex>,
+    pub format: vk::Format,
     pub view: vk::ImageView,
     pub extent: vk::Extent2D,
     pub subresource_range: vk::ImageSubresourceRange,

@@ -100,7 +100,7 @@ pub enum MultisampleCount {
 }
 
 impl MultisampleCount {
-    fn to_vk(self) -> vk::SampleCountFlags {
+    pub fn to_vk(self) -> vk::SampleCountFlags {
         match self {
             MultisampleCount::None => vk::SampleCountFlags::TYPE_1,
             MultisampleCount::X2 => vk::SampleCountFlags::TYPE_2,

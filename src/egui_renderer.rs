@@ -102,17 +102,15 @@ impl EguiRenderer {
         };
 
         let vertex_buffer_size = std::mem::size_of::<egui::epaint::Vertex>() * Self::MAX_VERTEX_COUNT;
-        let vertex_buffer = context.create_buffer(&render::BufferDesc {
-            name: "egui_vertex_buffer",
-            size: vertex_buffer_size as u64,
+        let vertex_buffer = context.create_buffer("egui_vertex_buffer", &render::BufferDesc {
+            size: vertex_buffer_size,
             usage: vk::BufferUsageFlags::VERTEX_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
 
         let index_buffer_size = std::mem::size_of::<u32>() * Self::MAX_VERTEX_COUNT;
-        let index_buffer = context.create_buffer(&render::BufferDesc {
-            name: "egui_index_buffer",
-            size: index_buffer_size as u64,
+        let index_buffer = context.create_buffer("egui_index_buffer", &render::BufferDesc {
+            size: index_buffer_size,
             usage: vk::BufferUsageFlags::INDEX_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
@@ -149,9 +147,6 @@ impl EguiRenderer {
 
         for clipped_primitive in clipped_primitives {
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_primitive.primitive {
-                // assert!(vertex_cursor as usize + mesh.vertices.len() < Self::MAX_VERTEX_COUNT);
-                // assert!(index_cursor as usize + mesh.indices.len() < Self::MAX_INDEX_COUNT);
-
                 if vertex_cursor as usize + mesh.vertices.len() > Self::MAX_VERTEX_COUNT ||
                    index_cursor as usize + mesh.indices.len() > Self::MAX_INDEX_COUNT {
                     log::error!("egui buffers are full, but there are to draw");
@@ -237,14 +232,13 @@ impl EguiRenderer {
                 egui::TextureId::User(number) => ("user", number),
             };
 
-            let image = context.create_image(&render::ImageDesc {
-                name: &format!("egui_image_{source}_{number}"),
+            let image = context.create_image(&format!("egui_image_{source}_{number}"), &render::ImageDesc {
                 format: Self::IMAGE_FORMAT,
                 width: width as u32,
                 height: height as u32,
                 mip_levels: 1,
+                samples: render::MultisampleCount::None,
                 usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-                tiling: vk::ImageTiling::OPTIMAL,
                 aspect: vk::ImageAspectFlags::COLOR,
             });
 

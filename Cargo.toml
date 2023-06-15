@@ -24,4 +24,5 @@ egui = "0.22.0"
 egui-winit = "0.22.0"
 puffin = "0.16.0"
 puffin_egui = "0.22.0"
+tobj = "4.0.0"
 

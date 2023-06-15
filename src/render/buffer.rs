@@ -4,8 +4,9 @@ use ash::vk;
 use gpu_allocator::{vulkan::{AllocationScheme, AllocationCreateDesc}, MemoryLocation};
 use crate::render;
 
+#[derive(Debug, Clone, Copy)]
 pub struct Buffer {
-    buffer_view: render::BufferView,
+    pub(super) buffer_view: render::BufferView,
     pub alloc_index: render::AllocIndex,
     pub usage: vk::BufferUsageFlags,
     pub mapped_ptr: Option<NonNull<u8>>,
@@ -20,17 +21,21 @@ impl std::ops::Deref for Buffer {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct BufferDesc<'a> {
-    pub name: &'a str,
-    pub size: u64,
+pub struct BufferDesc {
+    pub size: usize,
     pub usage: vk::BufferUsageFlags,
     pub memory_location: MemoryLocation,
 }
 
 impl Buffer {
-    fn create_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, desc: &BufferDesc) -> Buffer {
+    pub(super) fn create_impl(
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+        name: &str,
+        desc: &BufferDesc
+    ) -> Buffer {
         let create_info = vk::BufferCreateInfo::builder()
-            .size(desc.size)
+            .size(desc.size as u64)
             .usage(desc.usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
@@ -39,7 +44,7 @@ impl Buffer {
         let requirements = unsafe { device.raw.get_buffer_memory_requirements(handle) };
 
         let (alloc_index, memory, offset, mapped_ptr) = device.allocate(&AllocationCreateDesc {
-            name: desc.name,
+            name,
             requirements,
             location: desc.memory_location,
             linear: true,
@@ -56,13 +61,13 @@ impl Buffer {
             None
         };
 
-        device.set_debug_name(handle, desc.name);
+        device.set_debug_name(handle, name);
 
         Buffer {
             buffer_view: render::BufferView {
                 handle,
                 descriptor_index,
-                size: desc.size,
+                size: desc.size as u64,
             },
             alloc_index,
             usage: desc.usage,
@@ -70,7 +75,10 @@ impl Buffer {
         }
     }
 
-    fn destroy_impl(device: &render::Device, buffer: &Buffer) {
+    pub(super) fn destroy_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, buffer: &Buffer) {
+        if let Some(index) = buffer.descriptor_index {
+            descriptors.free_descriptor_index(index);
+        }
         unsafe {
             device.raw.destroy_buffer(buffer.handle, None);
         }
@@ -79,18 +87,18 @@ impl Buffer {
 }
 
 impl render::Context {
-    pub fn create_buffer(&self, desc: &BufferDesc) -> Buffer {
-        Buffer::create_impl(&self.device, &self.descriptors, desc)
+    pub fn create_buffer(&self, name: &str, desc: &BufferDesc) -> Buffer {
+        Buffer::create_impl(&self.device, &self.descriptors, name, desc)
     }
 
-    pub fn create_buffer_init(&self, desc: &BufferDesc, init: &[u8]) -> Buffer {
+    pub fn create_buffer_init(&self, name: &str, desc: &BufferDesc, init: &[u8]) -> Buffer {
         let mut desc = *desc;
         
         if desc.memory_location != MemoryLocation::CpuToGpu {
             desc.usage |= vk::BufferUsageFlags::TRANSFER_DST;
         }
 
-        let buffer = Buffer::create_impl(&self.device, &self.descriptors, &desc);
+        let buffer = Buffer::create_impl(&self.device, &self.descriptors, name, &desc);
 
         let init_size = usize::min(buffer.size as usize, init.len());
         if let Some(mapped_ptr) = buffer.mapped_ptr {
@@ -98,9 +106,8 @@ impl render::Context {
                 std::ptr::copy_nonoverlapping(init.as_ptr(), mapped_ptr.as_ptr(), init_size);
             }
         } else {
-            let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, &BufferDesc {
-                name: "scratch_buffer",
-                size: init_size as u64,
+            let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, "scratch_buffer", &BufferDesc {
+                size: init_size,
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: MemoryLocation::CpuToGpu,
             });
@@ -119,7 +126,7 @@ impl render::Context {
                 ]);
             });
 
-            Buffer::destroy_impl(&self.device, &scratch_buffer);
+            Buffer::destroy_impl(&self.device, &self.descriptors, &scratch_buffer);
         }
 
         buffer
@@ -132,9 +139,8 @@ impl render::Context {
                 std::ptr::copy_nonoverlapping(data.as_ptr(), mapped_ptr.as_ptr().add(offset), copy_size);
             }
         } else {
-            let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, &BufferDesc {
-                name: "scratch_buffer",
-                size: copy_size as u64,
+            let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, "scratch_bubbfer", &BufferDesc {
+                size: copy_size,
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: MemoryLocation::CpuToGpu,
             });
@@ -153,11 +159,11 @@ impl render::Context {
                 ]);
             });
 
-            Buffer::destroy_impl(&self.device, &scratch_buffer);
+            Buffer::destroy_impl(&self.device, &self.descriptors, &scratch_buffer);
         }
     }
 
     pub fn destroy_buffer(&self, buffer: &Buffer) {
-        Buffer::destroy_impl(&self.device, buffer)
+        Buffer::destroy_impl(&self.device, &self.descriptors, buffer)
     }
 }

@@ -658,6 +658,10 @@ unsafe extern "system" fn vk_debug_log_callback(
     p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     _p_user_data: *mut c_void,
 ) -> vk::Bool32 {
+    if std::thread::panicking() {
+        return vk::FALSE;
+    }
+
     use vk::DebugUtilsMessageSeverityFlagsEXT as Severity;
     let level = match message_severity {
         Severity::VERBOSE => log::Level::Trace,

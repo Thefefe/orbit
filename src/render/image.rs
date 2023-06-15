@@ -20,19 +20,23 @@ impl std::ops::Deref for Image {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ImageDesc<'a> {
-    pub name: &'a str,
+pub struct ImageDesc {
     pub format: vk::Format,
     pub width: u32,
     pub height: u32,
     pub mip_levels: u32,
-    pub tiling: vk::ImageTiling,
+    pub samples: render::MultisampleCount,
     pub usage: vk::ImageUsageFlags,
     pub aspect: vk::ImageAspectFlags,
 }
 
 impl Image {
-    fn create_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, desc: &ImageDesc) -> Image {
+    pub(super) fn create_impl(
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+        name: &str,
+        desc: &ImageDesc
+    ) -> Image {
         let create_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D {
@@ -43,23 +47,23 @@ impl Image {
             .mip_levels(desc.mip_levels)
             .array_layers(1)
             .format(desc.format)
-            .tiling(desc.tiling)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .samples(desc.samples.to_vk())
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .usage(desc.usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(vk::SampleCountFlags::TYPE_1);
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let handle = unsafe { device.raw.create_image(&create_info, None).unwrap() };
 
-        device.set_debug_name(handle, desc.name);
+        device.set_debug_name(handle, name);
 
         let requirements = unsafe { device.raw.get_image_memory_requirements(handle) };
 
         let (memory, vk_memory, offset, _) = device.allocate(&AllocationCreateDesc {
-            name: desc.name,
+            name,
             requirements,
             location: MemoryLocation::GpuOnly,
-            linear: desc.tiling == vk::ImageTiling::LINEAR,
+            linear: false,
             allocation_scheme: AllocationScheme::GpuAllocatorManaged,
         });
 
@@ -84,7 +88,7 @@ impl Image {
         let view = unsafe {
             device.raw.create_image_view(&image_view_create_info, None).unwrap()
         };
-        device.set_debug_name(view, &format!("{}_view", desc.name));
+        device.set_debug_name(view, &format!("{}_view", name));
 
         let descriptor_index = if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
             Some(descriptors.alloc_image_resource(device, view))
@@ -96,6 +100,7 @@ impl Image {
             image_view: render::ImageView {
                 handle,
                 descriptor_index,
+                format: desc.format,
                 view,
                 extent: vk::Extent2D { width: desc.width, height: desc.height },
                 subresource_range,
@@ -104,20 +109,21 @@ impl Image {
         }
     }
 
-    fn destroy_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, image: &render::Image) {
+    pub(super) fn destroy_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, image: &render::Image) {
         unsafe {
             device.raw.destroy_image_view(image.view, None);
             device.raw.destroy_image(image.handle, None);
         }
         if let Some(descriptor_index) = image.descriptor_index {
             descriptors.free_descriptor_index(descriptor_index);
-        } 
+        }
+        device.deallocate(image.alloc_index);
     }
 }
 
 impl render::Context {
-    pub fn create_image(&self, desc: &ImageDesc) -> Image {
-        Image::create_impl(&self.device, &self.descriptors, desc)
+    pub fn create_image(&self, name: &str, desc: &ImageDesc) -> Image {
+        Image::create_impl(&self.device, &self.descriptors, name, desc)
     }
 
     pub fn immediate_write_image(
@@ -130,9 +136,8 @@ impl render::Context {
         bytes: &[u8],
         subregion: Option<vk::Rect2D>
     ) {
-        let scratch_buffer = self.create_buffer_init(&render::BufferDesc {
-            name: "scratch_buffer",
-            size: bytes.len() as u64,
+        let scratch_buffer = self.create_buffer_init("scratch_buffer", &render::BufferDesc {
+            size: bytes.len(),
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             memory_location: MemoryLocation::CpuToGpu,
         }, bytes);

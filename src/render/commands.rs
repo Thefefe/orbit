@@ -337,6 +337,24 @@ impl<'a> CommandRecorder<'a> {
             );
         }
     }
+
+    pub fn draw_indexed_indirect(
+        &self,
+        indirect_buffer: &render::BufferView,
+        offset: vk::DeviceSize,
+        draw_count: u32,
+        stride: u32
+    ) {
+        unsafe {
+            self.device.raw.cmd_draw_indexed_indirect(
+                self.buffer(),
+                indirect_buffer.handle,
+                offset,
+                draw_count,
+                stride
+            );
+        }
+    }
 }
 
 impl Drop for CommandRecorder<'_> {

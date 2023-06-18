@@ -3,9 +3,10 @@
 use std::f32::consts::PI;
 
 use ash::vk;
-use glam::Mat3;
+use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
-use mesh::{MeshBuffer, MeshIndex};
+use assets::{GpuAssetStore, MeshData};
+use scene::{Transform, SceneBuffer, GpuDrawIndexedIndirectCommand, write_draw_commands_from_scene, EntityData};
 use time::Time;
 use winit::{
     event::{Event,  VirtualKeyCode as KeyCode, MouseButton},
@@ -19,49 +20,18 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
 mod input;
 mod time;
 mod render;
+mod assets;
+mod scene;
+mod collections;
 mod utils;
 
+mod gltf_loader;
+
 mod egui_renderer;
-mod mesh;
 
 use render::DescriptorHandle;
 use input::Input;
 use egui_renderer::EguiRenderer;
-
-#[derive(Debug, Clone, Copy)]
-pub struct Transform {
-    pub position: Vec3,
-    pub orientation: Quat,
-    pub scale: Vec3,
-}
-
-impl Default for Transform {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Transform {
-    pub fn new() -> Self {
-        Self {
-            position: Vec3::ZERO,
-            orientation: Quat::IDENTITY,
-            scale: Vec3::ONE,
-        }
-    }
-
-    pub fn translate(&mut self, translation: Vec3) {
-        self.position += self.orientation * translation;
-    }
-
-    pub fn compute_affine(&self) -> glam::Mat4 {
-        Mat4::from_scale_rotation_translation(self.scale, self.orientation, self.position)
-    }
-
-    pub fn compute_linear(&self) -> Mat3 {
-        Mat3::from_mat4(self.compute_affine())
-    }
-}
 
 struct CameraController {
     mouse_sensitivity: f32,
@@ -175,16 +145,22 @@ impl Camera {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct GlobalData {
+struct PerFrameData {
     viewproj: Mat4,
+    render_mode: u32,
+    _padding: [u32; 3],
 }
 
 struct App {
+    gpu_assets: GpuAssetStore,
+    scene: SceneBuffer,
+
     basic_pipeline: render::RasterPipeline,
-    mesh_buffer: MeshBuffer,
-    mesh_index: MeshIndex,
-    global_buffer: render::Buffer,
-    
+    per_frame_buffer: render::Buffer,
+
+    draw_command_buffer: render::Buffer,
+    draw_count: usize,
+
     camera: Camera,
     camera_controller: CameraController,
 
@@ -219,8 +195,8 @@ impl App {
                 rasterizer: render::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
+                    front_face: vk::FrontFace::CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::BACK,
                 },
                 color_attachments: &[render::PipelineColorAttachment {
                     format: context.swapchain.format(),
@@ -241,22 +217,54 @@ impl App {
             pipeline
         };
 
-        let mesh_data = mesh::MeshData::load_obj("D:/dev/models/obj/teapot.obj").unwrap();
-        let mut mesh_buffer = MeshBuffer::new(context, mesh_data.vertices.len(), mesh_data.indices.len());
-        let mesh_index = mesh_buffer.add_mesh(context, &mesh_data);
+        let mut gpu_assets = GpuAssetStore::new(context);
+        let mut scene = SceneBuffer::new(context);
+        
+        load_gltf("D:/dev/models/gltf/sponza-old/Sponza.gltf", context, &mut gpu_assets, &mut scene).unwrap();
 
-        let global_buffer = context.create_buffer("global_buffer", &render::BufferDesc {
-            size: std::mem::size_of::<GlobalData>(),
+        let teapot_data = MeshData::load_obj("D:/dev/models/obj/teapot.obj").unwrap();
+        let teapot_mesh = gpu_assets.add_mesh(context, &teapot_data);
+        let teapot_model = gpu_assets.add_model(&[teapot_mesh]);
+        scene.add_entity(EntityData {
+            transform: Transform {
+                scale: Vec3::ONE * 0.6,
+                ..Default::default()
+            },
+            model: Some(teapot_model),
+        });
+
+        scene.update_instances(context);
+
+        let mut draw_commands = Vec::new();
+        draw_commands.resize(1000, Default::default());
+
+        let draw_count = write_draw_commands_from_scene(&scene, &gpu_assets, draw_commands.as_mut_slice());
+
+        let draw_command_buffer = context.create_buffer_init("indirect_draw_commands", &render::BufferDesc {
+            size: draw_count * std::mem::size_of::<GpuDrawIndexedIndirectCommand>(),
+            usage: vk::BufferUsageFlags::INDIRECT_BUFFER,
+            memory_location: MemoryLocation::GpuOnly,
+        }, bytemuck::cast_slice(&draw_commands));
+
+        let per_frame_buffer = context.create_buffer("global_buffer", &render::BufferDesc {
+            size: std::mem::size_of::<PerFrameData>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
 
+        unsafe {
+            per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().render_mode = 0;
+        }
+
         Self {
+            gpu_assets,
+            scene,
+
+            draw_command_buffer,
+            draw_count,
+
             basic_pipeline: mesh_pipeline,
-            mesh_buffer,
-            mesh_index,
-            
-            global_buffer,
+            per_frame_buffer,
             
             camera: Camera {
                 transform: Transform {
@@ -289,6 +297,32 @@ impl App {
         }
         if input.key_pressed(KeyCode::F3) {
             self.profiler_open = !self.profiler_open;
+        }
+
+        const RENDER_MODES: &[KeyCode] = &[
+            KeyCode::Key0,
+            KeyCode::Key1,
+            KeyCode::Key2,
+            KeyCode::Key3,
+            KeyCode::Key4,
+            KeyCode::Key5,
+            KeyCode::Key6,
+            KeyCode::Key7,
+            KeyCode::Key8,
+            KeyCode::Key9,
+        ];
+        
+        let mut new_render_mode = None;
+        for (render_mode, key) in RENDER_MODES.iter().enumerate() {
+            if input.key_pressed(*key) {
+                new_render_mode = Some(render_mode as u32);
+            }
+        }
+
+        if let Some(new_render_mode) = new_render_mode {   
+            unsafe {
+                self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().render_mode = new_render_mode;
+            }
         }
 
         if self.graph_debugger_open {
@@ -352,10 +386,11 @@ impl App {
         puffin::profile_function!();
         let screen_extent = frame_ctx.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
-        let globals = GlobalData {
-            viewproj: self.camera.compute_matrix(aspect_ratio),
-        };
-        frame_ctx.immediate_write_buffer(&self.global_buffer, bytemuck::bytes_of(&globals), 0);
+
+        unsafe {
+            self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().viewproj = 
+                self.camera.compute_matrix(aspect_ratio);
+        }
 
         let swapchain_image = frame_ctx.get_swapchain_image();
         let depth_image = frame_ctx.create_transient_image("depth_image", render::ImageDesc {
@@ -367,14 +402,18 @@ impl App {
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             aspect: vk::ImageAspectFlags::DEPTH,
         });
+        
+        let globals_buffer = frame_ctx.import_buffer("globals_buffer", &self.per_frame_buffer, &Default::default());
+        
+        let vertex_buffer = frame_ctx.import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
+        let index_buffer = frame_ctx.import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
 
-        let vertex_buffer = frame_ctx.import_buffer("mesh_vertex_buffer", &self.mesh_buffer.vertex_buffer, &Default::default());
-        let index_buffer = frame_ctx.import_buffer("mesh_index_buffer", &self.mesh_buffer.index_buffer, &Default::default());
-        let globals_buffer = frame_ctx.import_buffer("globals_buffer", &self.global_buffer, &Default::default());
+        let instance_buffer = frame_ctx.import_buffer("entity_instance_buffer", &self.scene.instance_buffer, &Default::default());
+        let draw_commands_buffer = frame_ctx.import_buffer("mesh_draw_commands_buffer", &self.draw_command_buffer, &Default::default());
+
+        let draw_count = self.draw_count as u32;
 
         let pipeline = self.basic_pipeline;
-
-        let mesh_index = self.mesh_index;
 
         frame_ctx.add_pass(
             "mesh_pass",
@@ -386,9 +425,13 @@ impl App {
                 let swapchain_image = graph.get_image(swapchain_image).unwrap();
                 let depth_image = graph.get_image(depth_image).unwrap();
 
+                let globals_buffer = graph.get_buffer(globals_buffer).unwrap();
+                
                 let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
                 let index_buffer = graph.get_buffer(index_buffer).unwrap();
-                let globals_buffer = graph.get_buffer(globals_buffer).unwrap();
+
+                let instance_buffer = graph.get_buffer(instance_buffer).unwrap();
+                let draw_commands_buffer = graph.get_buffer(draw_commands_buffer).unwrap();
 
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(swapchain_image.view)
@@ -425,10 +468,16 @@ impl App {
                 cmd.bind_index_buffer(&index_buffer);
 
                 cmd.push_bindings(&[
-                    vertex_buffer.descriptor_index.unwrap().to_raw(),
                     globals_buffer.descriptor_index.unwrap().to_raw(),
+                    vertex_buffer.descriptor_index.unwrap().to_raw(),
+                    instance_buffer.descriptor_index.unwrap().to_raw(),
                 ]);
-                cmd.draw_indexed(mesh_index.index_range(), 0..1, mesh_index.vertex_offset as i32);
+                cmd.draw_indexed_indirect(
+                    draw_commands_buffer,
+                    0,
+                    draw_count,
+                    std::mem::size_of::<GpuDrawIndexedIndirectCommand>() as u32
+                );
 
                 cmd.end_rendering();
             },
@@ -436,13 +485,16 @@ impl App {
     }
 
     fn destroy(&self, context: &render::Context) {
+        self.gpu_assets.destroy(context);
+        self.scene.destroy(context);
         context.destroy_raster_pipeline(&self.basic_pipeline);
-        self.mesh_buffer.destroy(context);
-        context.destroy_buffer(&self.global_buffer);
+        context.destroy_buffer(&self.per_frame_buffer);
+        context.destroy_buffer(&self.draw_command_buffer);
     }
 }
 
 fn main() {
+    puffin::GlobalProfiler::lock().new_frame();
     utils::init_logger();
     puffin::set_scopes_on(true);
 

@@ -31,3 +31,13 @@ layout(set = 1, binding = 1) uniform texture2D _uTextures[];
 
 #define GetTexture(Name) \
     _uTextures[nonuniformEXT(bindingIndexArray.indices[GetBindingIndexName(Name)])]
+
+
+#define GetBufferByIndex(Index) \
+    GetBufferRegistryName(Name)[nonuniformEXT(Index)]
+
+#define GetSamplerByIndex(Index) \
+    _uSamplers[nonuniformEXT(Index)]
+
+#define GetTextureByIndex(Index) \
+    _uTextures[nonuniformEXT(Index)]

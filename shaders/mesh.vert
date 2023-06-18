@@ -2,6 +2,11 @@
 
 #include "common.glsl"
 
+RegisterBuffer(PerFrameData, std430, readonly, {
+    mat4 view_proj;
+    uint render_mode;
+});
+
 struct MeshVertex {
     vec3 pos;
     uint _padding0;
@@ -17,20 +22,34 @@ RegisterBuffer(VertexBuffer, std430, readonly, {
     MeshVertex vertices[];
 });
 
-RegisterBuffer(Globals, std430, readonly, {
-    mat4 viewProj;
+struct EntityInstance {
+    mat4 model_matrix;
+};
+
+
+RegisterBuffer(InstanceBuffer, std430, readonly, {
+    EntityInstance instances[];
 });
 
-BindSlot(VertexBuffer, 0);
-BindSlot(Globals, 1);
+BindSlot(PerFrameData, 0);
+BindSlot(VertexBuffer, 1);
+BindSlot(InstanceBuffer, 2);
 
-layout(location = 0) out vec4 outColor;
+layout(location = 0) out vec2 out_uv;
+layout(location = 1) out vec3 out_normal;
+layout(location = 2) out vec4 out_tangent;
 
 void main() {
-    vec3 world_pos = GetBuffer(VertexBuffer).vertices[gl_VertexIndex].pos;
-    vec3 norm = GetBuffer(VertexBuffer).vertices[gl_VertexIndex].norm;
+    MeshVertex vertex = GetBuffer(VertexBuffer).vertices[gl_VertexIndex];
 
-    gl_Position = GetBuffer(Globals).viewProj * vec4(world_pos, 1.0);
+    gl_Position =
+        GetBuffer(PerFrameData).view_proj *
+        GetBuffer(InstanceBuffer).instances[gl_InstanceIndex].model_matrix *
+        vec4(vertex.pos, 1.0);
     // outColor = vec4((normalize(world_pos) + vec3(1.0, 1.0, 1.0)) * 0.5, 1.0);
-    outColor = vec4((norm + vec3(1.0, 1.0, 1.0)) * 0.5, 1.0);
+    
+
+    out_uv = vertex.uv;
+    out_normal = vertex.norm;
+    out_tangent = vertex.tang;
 }

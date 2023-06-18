@@ -18,6 +18,8 @@ use gpu_allocator::{
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::window::Window;
 
+use crate::collections::arena;
+
 const VALIDATION_LAYER: &CStr = cstr::cstr!("VK_LAYER_KHRONOS_validation");
 
 pub struct InstanceMetadata {
@@ -293,11 +295,11 @@ impl std::fmt::Display for DeviceCreateError {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct AllocIndex(thunderdome::Index);
+pub struct AllocIndex(arena::Index);
 
 struct AllocatorStuff {
     allocator: ManuallyDrop<Allocator>,
-    allocations: thunderdome::Arena<Allocation>,
+    allocations: arena::Arena<Allocation>,
 }
 
 pub struct Device {
@@ -479,6 +481,7 @@ impl Device {
             .queue_priorities(&[1.0]);
 
         let vulkan10_features = vk::PhysicalDeviceFeatures::builder()
+        .multi_draw_indirect(true)
             .build();
 
         let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()
@@ -532,7 +535,7 @@ impl Device {
                 buffer_device_address: true,
             }).expect("failed to create vulkan allocator");
 
-            let allocations = thunderdome::Arena::new();
+            let allocations = arena::Arena::new();
 
             Mutex::new(AllocatorStuff {
                 allocator: ManuallyDrop::new(allocator),

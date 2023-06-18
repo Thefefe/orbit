@@ -5,6 +5,9 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.dev.package.gltf]
+opt-level = 3
+
 [dependencies]
 # logging
 log = "0.4.18"
@@ -17,7 +20,6 @@ ash-window = "0.12.0"
 raw-window-handle = "0.5.2"
 gpu-allocator = "0.22.0"
 cstr = "0.2.11"
-thunderdome = "0.6.0"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 glam = { version = "0.24.0", features = ["bytemuck"] }
 egui = "0.22.0"
@@ -25,4 +27,5 @@ egui-winit = "0.22.0"
 puffin = "0.16.0"
 puffin_egui = "0.22.0"
 tobj = "4.0.0"
+gltf = "1.2.0"
 

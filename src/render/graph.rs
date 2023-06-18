@@ -2,10 +2,10 @@ use std::{collections::HashSet, ops::Range};
 
 use ash::vk;
 
-use crate::render;
+use crate::{render, collections::arena};
 
 pub type ResourceHandle = usize;
-pub type PassHandle = thunderdome::Index;
+pub type PassHandle = arena::Index;
 pub type DependencyHandle = usize;
 
 type PassFn = Box<dyn Fn(&render::CommandRecorder, &render::CompiledRenderGraph)>;
@@ -190,7 +190,7 @@ pub struct GraphResourceImportDesc {
 #[derive(Debug)]
 pub struct RenderGraph {
     resources: Vec<ResourceData>,
-    passes: thunderdome::Arena<PassData>,
+    passes: arena::Arena<PassData>,
     dependencies: Vec<DependencyData>,
 }
 
@@ -198,7 +198,7 @@ impl RenderGraph {
     pub fn new() -> Self {
         Self {
             resources: Vec::new(),
-            passes: thunderdome::Arena::new(),
+            passes: arena::Arena::new(),
             dependencies: Vec::new(),
         }
     }
@@ -559,7 +559,7 @@ impl RenderGraph {
             passes: Vec::with_capacity(self.passes.len()),
         };
 
-        let mut remainging_passes: HashSet<thunderdome::Index> = self.passes.iter().map(|(index, _)| index).collect();
+        let mut remainging_passes: HashSet<arena::Index> = self.passes.iter().map(|(index, _)| index).collect();
 
         while !remainging_passes.is_empty() {
             let start = sorted_passes.passes.len();

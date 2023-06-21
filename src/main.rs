@@ -5,8 +5,8 @@ use std::f32::consts::PI;
 use ash::vk;
 use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
-use assets::{GpuAssetStore, MeshData};
-use scene::{Transform, SceneBuffer, GpuDrawIndexedIndirectCommand, write_draw_commands_from_scene, EntityData};
+use assets::{GpuAssetStore};
+use scene::{Transform, SceneBuffer, GpuDrawData, write_draw_commands_from_scene};
 use time::Time;
 use winit::{
     event::{Event,  VirtualKeyCode as KeyCode, MouseButton},
@@ -84,7 +84,7 @@ impl CameraController {
         };
 
         transform.orientation = glam::Quat::from_euler(glam::EulerRot::YXZ, self.pitch, self.yaw, 0.0);
-        transform.translate(move_dir.normalize_or_zero() * movement_speed * delta_time);
+        transform.translate_relative(move_dir.normalize_or_zero() * movement_speed * delta_time);
     }
 }
 
@@ -159,7 +159,9 @@ struct App {
     per_frame_buffer: render::Buffer,
 
     draw_command_buffer: render::Buffer,
-    draw_count: usize,
+    draw_command_count: usize,
+    entity_index_buffer: render::Buffer,
+    entity_index_count: usize,
 
     camera: Camera,
     camera_controller: CameraController,
@@ -171,7 +173,7 @@ struct App {
 impl App {
     const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-    fn new(context: &render::Context) -> Self {
+    fn new(context: &render::Context, gltf_path: &str) -> Self {
         let mesh_pipeline = {
             let vertex_shader = utils::load_spv("shaders/mesh.vert.spv").unwrap();
             let fragment_shader = utils::load_spv("shaders/mesh.frag.spv").unwrap();
@@ -181,8 +183,7 @@ impl App {
 
             let entry = cstr::cstr!("main");
 
-            let pipeline = context.create_raster_pipeline(&render::RasterPipelineDesc {
-                name: "basic_pipeline",
+            let pipeline = context.create_raster_pipeline("basic_pipeline", &render::RasterPipelineDesc {
                 vertex_stage: render::ShaderStage {
                     module: vertex_module,
                     entry,
@@ -220,31 +221,25 @@ impl App {
         let mut gpu_assets = GpuAssetStore::new(context);
         let mut scene = SceneBuffer::new(context);
         
-        load_gltf("D:/dev/models/gltf/sponza-old/Sponza.gltf", context, &mut gpu_assets, &mut scene).unwrap();
-
-        let teapot_data = MeshData::load_obj("D:/dev/models/obj/teapot.obj").unwrap();
-        let teapot_mesh = gpu_assets.add_mesh(context, &teapot_data);
-        let teapot_model = gpu_assets.add_model(&[teapot_mesh]);
-        scene.add_entity(EntityData {
-            transform: Transform {
-                scale: Vec3::ONE * 0.6,
-                ..Default::default()
-            },
-            model: Some(teapot_model),
-        });
+        load_gltf(gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
 
         scene.update_instances(context);
 
         let mut draw_commands = Vec::new();
-        draw_commands.resize(1000, Default::default());
-
-        let draw_count = write_draw_commands_from_scene(&scene, &gpu_assets, draw_commands.as_mut_slice());
+        let mut entity_indices = Vec::new(); 
+        write_draw_commands_from_scene(&scene, &gpu_assets, &mut draw_commands, &mut entity_indices);
 
         let draw_command_buffer = context.create_buffer_init("indirect_draw_commands", &render::BufferDesc {
-            size: draw_count * std::mem::size_of::<GpuDrawIndexedIndirectCommand>(),
-            usage: vk::BufferUsageFlags::INDIRECT_BUFFER,
+            size: draw_commands.len() * std::mem::size_of::<GpuDrawData>(),
+            usage: vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER,
             memory_location: MemoryLocation::GpuOnly,
         }, bytemuck::cast_slice(&draw_commands));
+
+        let entity_index_buffer = context.create_buffer_init("indirect_draw_commands", &render::BufferDesc {
+            size: entity_indices.len() * std::mem::size_of::<u32>(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            memory_location: MemoryLocation::GpuOnly,
+        }, bytemuck::cast_slice(&entity_indices));
 
         let per_frame_buffer = context.create_buffer("global_buffer", &render::BufferDesc {
             size: std::mem::size_of::<PerFrameData>(),
@@ -261,7 +256,10 @@ impl App {
             scene,
 
             draw_command_buffer,
-            draw_count,
+            draw_command_count: draw_commands.len(),
+            entity_index_buffer,
+            entity_index_count: entity_indices.len(),
+            
 
             basic_pipeline: mesh_pipeline,
             per_frame_buffer,
@@ -271,7 +269,7 @@ impl App {
                     position: vec3(0.0, 2.0, -5.0),
                     ..Default::default()
                 },
-                projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.1 },
+                projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.001 },
             },
             camera_controller: CameraController::new(1.0, 0.003),
 
@@ -407,11 +405,13 @@ impl App {
         
         let vertex_buffer = frame_ctx.import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
         let index_buffer = frame_ctx.import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
+        let material_buffer = frame_ctx.import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
 
         let instance_buffer = frame_ctx.import_buffer("entity_instance_buffer", &self.scene.instance_buffer, &Default::default());
         let draw_commands_buffer = frame_ctx.import_buffer("mesh_draw_commands_buffer", &self.draw_command_buffer, &Default::default());
+        let entity_indices_buffer = frame_ctx.import_buffer("mesh_entity_index_buffer", &self.entity_index_buffer, &Default::default());
 
-        let draw_count = self.draw_count as u32;
+        let draw_count = self.draw_command_count as u32;
 
         let pipeline = self.basic_pipeline;
 
@@ -429,9 +429,11 @@ impl App {
                 
                 let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
                 let index_buffer = graph.get_buffer(index_buffer).unwrap();
+                let material_buffer = graph.get_buffer(material_buffer).unwrap();
 
                 let instance_buffer = graph.get_buffer(instance_buffer).unwrap();
                 let draw_commands_buffer = graph.get_buffer(draw_commands_buffer).unwrap();
+                let entity_indices_buffer = graph.get_buffer(entity_indices_buffer).unwrap();
 
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(swapchain_image.view)
@@ -471,12 +473,15 @@ impl App {
                     globals_buffer.descriptor_index.unwrap().to_raw(),
                     vertex_buffer.descriptor_index.unwrap().to_raw(),
                     instance_buffer.descriptor_index.unwrap().to_raw(),
+                    entity_indices_buffer.descriptor_index.unwrap().to_raw(),
+                    draw_commands_buffer.descriptor_index.unwrap().to_raw(),
+                    material_buffer.descriptor_index.unwrap().to_raw(),
                 ]);
                 cmd.draw_indexed_indirect(
                     draw_commands_buffer,
                     0,
                     draw_count,
-                    std::mem::size_of::<GpuDrawIndexedIndirectCommand>() as u32
+                    std::mem::size_of::<GpuDrawData>() as u32
                 );
 
                 cmd.end_rendering();
@@ -490,6 +495,7 @@ impl App {
         context.destroy_raster_pipeline(&self.basic_pipeline);
         context.destroy_buffer(&self.per_frame_buffer);
         context.destroy_buffer(&self.draw_command_buffer);
+        context.destroy_buffer(&self.entity_index_buffer);
     }
 }
 
@@ -497,6 +503,11 @@ fn main() {
     puffin::GlobalProfiler::lock().new_frame();
     utils::init_logger();
     puffin::set_scopes_on(true);
+
+    let Some(gltf_path) = std::env::args().nth(1) else {
+        println!("provide a path to a gltf file");
+        return;
+    };
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -519,7 +530,7 @@ fn main() {
     let mut input = Input::new();
     let mut time = Time::new();
 
-    let mut app = App::new(&context);
+    let mut app = App::new(&context, &gltf_path);
 
     event_loop.run(move |event, _target, control_flow| {
         if let Event::WindowEvent { event, .. } = &event {

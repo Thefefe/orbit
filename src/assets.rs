@@ -1,3 +1,4 @@
+use crate::render::DescriptorHandle;
 use crate::{render, collections::arena};
 use crate::collections::freelist_alloc::*;
 
@@ -67,30 +68,57 @@ pub struct MeshBlock {
     pub index_alloc_index: arena::Index,
 }
 
-impl MeshBlock {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Submesh {
+    pub mesh_handle: MeshHandle,
+    pub material_index: MaterialHandle,
 }
 
-struct ModelData {
-    submesh_indices: Vec<arena::Index>,
+pub struct ModelData {
+    pub submeshes: Vec<Submesh>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MaterialData {
+    pub base_color: Vec4,
+    pub base_texture: Option<TextureHandle>,
+    pub normal_texture: Option<TextureHandle>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuMaterialData {
+    base_color: Vec4,
+    base_texture_index: u32,
+    normal_texture_index: u32,
+    _padding: [u32; 2],
 }
 
 pub type MeshHandle = arena::Index;
 pub type ModelHandle = arena::Index;
+pub type TextureHandle = arena::Index;
+pub type MaterialHandle = arena::Index;
+
+const MAX_VERTEX_COUNT: usize = 1_000_000;
+const MAX_INDEX_COUNT: usize = 1_000_000;
+const MAX_MATERIAL_COUNT: usize = 1_000;
 
 pub struct GpuAssetStore {
     pub vertex_buffer: render::Buffer,
     pub index_buffer: render::Buffer,
 
-    // COUNTS!!! not bytes
+    // INDICES!!! not bytes
     vertex_allocator: FreeListAllocator,
     index_allocator: FreeListAllocator,
 
-    mesh_blocks: arena::Arena<MeshBlock>,
-    models: arena::Arena<ModelData>,
-}
+    pub mesh_blocks: arena::Arena<MeshBlock>,
+    pub models: arena::Arena<ModelData>,
 
-const MAX_VERTEX_COUNT: usize = 1_000_000;
-const MAX_INDEX_COUNT: usize = 1_000_000;
+    pub textures: arena::Arena<render::Image>,
+
+    pub material_buffer: render::Buffer,
+    pub material_indices: arena::Arena<MaterialData>,
+}
 
 impl GpuAssetStore {
     pub fn new(context: &render::Context) -> Self {
@@ -106,6 +134,12 @@ impl GpuAssetStore {
             memory_location: MemoryLocation::GpuOnly,
         });
 
+        let material_buffer = context.create_buffer("material_buffer", &render::BufferDesc {
+            size: MAX_MATERIAL_COUNT * std::mem::size_of::<GpuMaterialData>(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            memory_location: MemoryLocation::GpuOnly,
+        });
+
         Self {
             vertex_buffer,
             index_buffer,
@@ -115,6 +149,11 @@ impl GpuAssetStore {
 
             mesh_blocks: arena::Arena::new(),
             models: arena::Arena::new(),
+
+            textures: arena::Arena::new(),
+
+            material_buffer,
+            material_indices: arena::Arena::new(),
         }
     }
 
@@ -138,19 +177,56 @@ impl GpuAssetStore {
         mesh_index
     }
 
-    pub fn add_model(&mut self, submeshes: &[arena::Index]) -> ModelHandle {
+    pub fn add_model(&mut self, submeshes: &[Submesh]) -> ModelHandle {
         self.models.insert(ModelData {
-            submesh_indices: submeshes.to_vec(),
+            submeshes: submeshes.to_vec(),
         })
     }
 
-    pub fn submeshes(&self, model: ModelHandle) -> impl Iterator<Item = &MeshBlock> {
-        self.models[model].submesh_indices.iter().map(|submesh| &self.mesh_blocks[*submesh])
+    pub fn import_texture(&mut self, image: render::Image)-> TextureHandle {
+        self.textures.insert(image)
+    }
+
+    fn get_texture_desc_index(&self, handle: TextureHandle) -> u32 {
+        self.textures[handle].descriptor_index.unwrap().to_raw()
+    }
+
+    pub fn add_material(&mut self, context: &render::Context, material_data: MaterialData) -> MaterialHandle {
+        let index = self.material_indices.insert(material_data);
+        let base_texture_index = material_data.base_texture
+            .map(|handle| self.get_texture_desc_index(handle))
+            .unwrap_or(u32::MAX);
+        let normal_texture_index = material_data.normal_texture
+            .map(|handle| self.get_texture_desc_index(handle))
+            .unwrap_or(u32::MAX);
+
+        let gpu_data = GpuMaterialData {
+            base_color: material_data.base_color,
+            base_texture_index,
+            normal_texture_index,
+            _padding: [0; 2],
+        };
+
+        context.immediate_write_buffer(
+            &self.material_buffer,
+            bytemuck::bytes_of(&gpu_data),
+            index.slot_index() * std::mem::size_of::<GpuMaterialData>()
+        );
+
+        index
+    }
+
+    pub fn submesh_blocks(&self, model: ModelHandle) -> impl Iterator<Item = &MeshBlock> {
+        self.models[model].submeshes.iter().map(|submesh| &self.mesh_blocks[submesh.mesh_handle])
     }
 
     pub fn destroy(&self, context: &render::Context) {
         context.destroy_buffer(&self.vertex_buffer);
         context.destroy_buffer(&self.index_buffer);
+        context.destroy_buffer(&self.material_buffer);
+        for (_, image) in self.textures.iter() {
+            context.destroy_image(&image);
+        }
     }
 }
 

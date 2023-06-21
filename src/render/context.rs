@@ -53,9 +53,9 @@ impl Context {
 
         {
             let create_info = vk::SamplerCreateInfo::builder()
-                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
                 .anisotropy_enable(false)
                 .min_filter(vk::Filter::LINEAR)
                 .mag_filter(vk::Filter::LINEAR)

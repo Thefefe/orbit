@@ -1,7 +1,42 @@
-use glam::{Vec3, Quat};
+use std::path::Path;
 
-use crate::{render, scene::{SceneBuffer, Transform, EntityData}, assets::{GpuAssetStore, MeshData, sep_vertex_merge, ModelHandle}};
+use ash::vk;
+use glam::{Vec3, Quat, Vec4};
 
+use crate::{render, scene::{SceneBuffer, Transform, EntityData}, assets::{GpuAssetStore, MeshData, sep_vertex_merge, ModelHandle, Submesh, MaterialData}};
+
+fn load_image_data(
+    base_path: &Path,
+    source: gltf::image::Source,
+    buffers: &[Vec<u8>],
+) -> Result<image::RgbaImage, image::ImageError> {
+    match source {
+        gltf::image::Source::View { view, mime_type } => {
+            let buffer = &buffers[view.index()];
+            let data = &buffer[view.offset()..view.offset() + view.length()];
+
+            let format = match mime_type {
+                "image/png" => image::ImageFormat::Png,
+                "image/jpeg" => image::ImageFormat::Jpeg,
+                _ => image::guess_format(data)?,
+            };
+
+            let image = image::load_from_memory_with_format(data, format)?;
+
+            Ok(image.to_rgba8())
+        },
+        gltf::image::Source::Uri { uri, .. } => {
+            let source_path = Path::new(uri);
+            let source_path = if source_path.is_relative() {
+                base_path.join(source_path)
+            } else {
+                source_path.to_path_buf()
+            };
+            let image = image::open(source_path)?;
+            Ok(image.to_rgba8())
+        },
+    }
+}
 
 pub fn load_gltf(
     path: &str,
@@ -9,15 +44,79 @@ pub fn load_gltf(
     asset_store: &mut GpuAssetStore,
     scene: &mut SceneBuffer
 ) -> gltf::Result<()> {
-    let (document, buffers, _) = gltf::import(path)?;
+    let path = Path::new(path);
+    let base_path = path.parent().unwrap_or(Path::new(""));
+
+    let mut document = gltf::Gltf::open(path)?;
+
+    let mut blob = document.blob.take();
+    let mut buffers = Vec::new();
+    for buffer in document.buffers() {
+        let data = match buffer.source() {
+            gltf::buffer::Source::Bin => blob.take().unwrap(),
+            gltf::buffer::Source::Uri(source_path) => {
+                let source_path = Path::new(source_path);
+                let source_path = if source_path.is_relative() {
+                    base_path.join(source_path)
+                } else {
+                    source_path.to_path_buf()
+                };
+               std::fs::read(source_path).unwrap()
+            },
+        };
+        buffers.push(data);
+    }
+
+    let mut image_lookup_table = Vec::new();
+    for (image_index, image) in document.images().enumerate() {
+        let image_data = load_image_data(base_path, image.source(), &buffers).unwrap();
+
+        let image = context.create_image(&format!("gltf_image_{image_index}"), &render::ImageDesc {
+            format: vk::Format::R8G8B8A8_UNORM,
+            width: image_data.width(),
+            height: image_data.height(),
+            mip_levels: 1,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            aspect: vk::ImageAspectFlags::COLOR,
+        });
+
+        context.immediate_write_image(
+            &image,
+            0,
+            0..1,
+            render::AccessKind::None,
+            Some(render::AccessKind::FragmentShaderRead),
+            &image_data,
+            None
+        );
+
+        let handle = asset_store.import_texture(image);
+        image_lookup_table.push(handle);
+    }
+
+    let mut material_lookup_table = Vec::new();
+    for material in document.materials() {
+        let pbr = material.pbr_metallic_roughness();
+        let color = pbr.base_color_factor();
+        let base_texture = pbr.base_color_texture().map(|tex| image_lookup_table[tex.texture().source().index()]);
+        let handle = asset_store.add_material(context, MaterialData {
+            base_color: Vec4::from_array(color),
+            base_texture,
+            normal_texture: None,
+        });
+        material_lookup_table.push(handle);
+    }
 
     let mut model_lookup_table = Vec::new();
     let mut mesh_data = MeshData::new();
-    let mut submeshes = Vec::new();
+    let mut submeshes: Vec<Submesh> = Vec::new();
     for mesh in document.meshes() {
         submeshes.clear();
         for (prim_index, primitive) in mesh.primitives().enumerate() {
             mesh_data.clear();
+
+            let material_index = material_lookup_table[primitive.material().index().unwrap()];
 
             assert_eq!(primitive.mode(), gltf::mesh::Mode::Triangles);
             let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -45,8 +144,8 @@ pub fn load_gltf(
             mesh_data.vertices.extend(vertices);
             mesh_data.indices.extend(indices);
 
-            let mesh = asset_store.add_mesh(context, &mesh_data);
-            submeshes.push(mesh);
+            let mesh_handle = asset_store.add_mesh(context, &mesh_data);
+            submeshes.push(Submesh { mesh_handle, material_index });
         }
         let model_handle = asset_store.add_model(submeshes.as_slice());
         model_lookup_table.push(model_handle);

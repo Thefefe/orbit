@@ -37,8 +37,7 @@ impl EguiRenderer {
 
             let entry = cstr::cstr!("main");
 
-            let pipeline = context.create_raster_pipeline(&render::RasterPipelineDesc {
-                name: "egui_pipeline",
+            let pipeline = context.create_raster_pipeline("egui_pipeline", &render::RasterPipelineDesc {
                 vertex_stage: render::ShaderStage {
                     module: vertex_shader,
                     entry,

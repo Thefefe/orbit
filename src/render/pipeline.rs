@@ -112,7 +112,6 @@ impl MultisampleCount {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RasterPipelineDesc<'a> {
-    pub name: &'a str,
     pub vertex_stage: ShaderStage<'a>,
     pub fragment_stage: ShaderStage<'a>,
     pub vertex_input: VertexInput<'a>,
@@ -126,6 +125,7 @@ impl RasterPipeline {
     pub fn create_impl(
         device: &render::Device,
         bindless_layout: vk::PipelineLayout,
+        name: &str,
         desc: &RasterPipelineDesc,
     ) -> RasterPipeline {
         let stages = [
@@ -204,7 +204,7 @@ impl RasterPipeline {
                 .unwrap()[0]
         };
 
-        device.set_debug_name(handle, desc.name);
+        device.set_debug_name(handle, name);
 
         RasterPipeline { handle }
     }
@@ -228,8 +228,8 @@ pub fn destroy_shader_module(device: &render::Device, module: vk::ShaderModule) 
 }
 
 impl render::Context {
-    pub fn create_raster_pipeline(&self, desc: &RasterPipelineDesc) -> RasterPipeline {
-        RasterPipeline::create_impl(&self.device, self.descriptors.layout(), desc)
+    pub fn create_raster_pipeline(&self, name: &str, desc: &RasterPipelineDesc) -> RasterPipeline {
+        RasterPipeline::create_impl(&self.device, self.descriptors.layout(), name, desc)
     }
 
     pub fn destroy_raster_pipeline(&self, pipeline: &RasterPipeline) {

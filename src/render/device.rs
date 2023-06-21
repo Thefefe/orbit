@@ -481,10 +481,11 @@ impl Device {
             .queue_priorities(&[1.0]);
 
         let vulkan10_features = vk::PhysicalDeviceFeatures::builder()
-        .multi_draw_indirect(true)
+            .multi_draw_indirect(true)
             .build();
 
         let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()
+            .shader_draw_parameters(true)
             .build();
 
         let mut vulkan12_features = vk::PhysicalDeviceVulkan12Features::builder()

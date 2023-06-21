@@ -74,6 +74,23 @@ pub struct Index {
     slot: NonZeroSlot,
 }
 
+impl Index {
+    #[inline(always)]
+    pub fn slot(self) -> u32 {
+        self.slot.get_slot()
+    }
+
+    #[inline(always)]
+    pub fn slot_index(self) -> usize {
+        self.slot.get_index()
+    }
+
+    #[inline(always)]
+    pub fn generation(self) -> u32 {
+        self.generation.0.get()
+    }
+}
+
 #[derive(Debug)]
 pub struct Arena<T> {
     entries: Vec<Entry<T>>,

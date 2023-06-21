@@ -23,7 +23,7 @@ mod buffer;
 pub use buffer::*;
 
 mod image;
-pub use image::*;
+pub use self::image::*;
 
 mod pipeline;
 pub use pipeline::*;

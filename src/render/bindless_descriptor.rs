@@ -15,7 +15,7 @@ pub struct GpuBindingContants {
 impl GpuBindingContants {
     pub fn new() -> Self {
         Self {
-            indices: [RawDescriptorIndex(0); 32],
+            indices: [0; 32],
         }
     }
 
@@ -108,9 +108,7 @@ impl IndexAllocator {
     }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct RawDescriptorIndex(u32);
+pub type RawDescriptorIndex = u32;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Zeroable, bytemuck::Pod)]
@@ -122,7 +120,7 @@ pub trait DescriptorHandle {
 
 impl DescriptorHandle for BufferDescriptorIndex {
     fn to_raw(self) -> RawDescriptorIndex {
-        RawDescriptorIndex(self.0)
+        self.0
     }
 }
 
@@ -132,7 +130,7 @@ pub struct ImageDescriptorIndex(u32);
 
 impl DescriptorHandle for ImageDescriptorIndex {
     fn to_raw(self) -> RawDescriptorIndex {
-        RawDescriptorIndex(self.0)
+        self.0
     }
 }
 
@@ -299,7 +297,7 @@ impl BindlessDescriptors {
     }
 
     pub fn free_descriptor_index(&self, handle: impl DescriptorHandle) {
-        self.global_index_allocator.free(handle.to_raw().0);
+        self.global_index_allocator.free(handle.to_raw());
     }
 
     pub fn alloc_image_resource(&self, device: &render::Device, view_handle: vk::ImageView) -> ImageDescriptorIndex {

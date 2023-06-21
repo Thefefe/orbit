@@ -41,3 +41,5 @@ layout(set = 1, binding = 1) uniform texture2D _uTextures[];
 
 #define GetTextureByIndex(Index) \
     _uTextures[nonuniformEXT(Index)]
+
+#define TEXTURE_NONE 0xFFFFFFFF

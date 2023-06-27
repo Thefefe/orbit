@@ -33,28 +33,39 @@ uint hash(uint a)
    return a;
 }
 
+vec3 srgb_to_linear(vec3 srgb) {
+    bvec3 cutoff = lessThan(srgb, vec3(0.04045));
+    vec3 lower = srgb / vec3(12.92);
+    vec3 higher = pow((srgb + vec3(0.055)) / vec3(1.055), vec3(2.4));
+    return mix(higher, lower, cutoff);
+}
+
 void main() {
-    uint render_mode = GetBuffer(PerFrameData).render_mode;
+    MaterialData material = GetBuffer(Materials).materials[in_material_index];
+    uint render_mode = GetBuffer(PerFrameData).render_mode;    
+
     if (render_mode == 1) {
         out_color = vec4(mod(in_uv, 1.0), 0.0, 1.0);
     } else if (render_mode == 2) {
         out_color = vec4((in_normal + vec3(1.0, 1.0, 1.0)) * 0.5, 1.0);
     } else if (render_mode == 3) {
-        out_color = vec4((in_tangent.xyz + vec3(1.0, 1.0, 1.0)) * 0.5, 1.0);
+        vec4 default_normal = vec4(0.5, 0.5, 1.0, 0.0);
+        vec4 normal = sample_texture_index_default(material.normal_texture_index, in_uv, default_normal);
+        out_color = vec4(normal.rgb, 1.0);
     } else if (render_mode == 4) {
-        uint ihash = hash(in_material_index);
-        vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;
-        // out_color = vec4(icolor, 1.0);
-        // out_color = vec4(colors[in_material_index % 8], 1.0);
+        // uint ihash = hash(in_material_index);
+        // vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;
         out_color = vec4(vec3(float(in_material_index) / 255.0), 1.0);
     } else {
-        MaterialData material = GetBuffer(Materials).materials[in_material_index];
-        vec4 base_tex_color = texture(GetSampledTextureByIndex(material.base_texture_index), in_uv);
+        vec4 base_tex_color = sample_texture_index_default(material.base_texture_index, in_uv, vec4(1.0));
         out_color = base_tex_color * material.base_color;
-        // out_color = material.base_color;
         
         if (out_color.a < 0.5) {
             discard;
         }
+    }
+
+    if (render_mode != 0) {
+        out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
     }
 }

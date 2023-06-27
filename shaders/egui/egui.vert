@@ -27,6 +27,6 @@ void main() {
 
     gl_Position = vec4(ndc_pos.x, -ndc_pos.y, 0.0, 1.0);
 
-    outColor = vColor;
+    outColor = vec4(srgb_to_linear(vColor.rgb), vColor.a);
     outUV = vUv;
 }

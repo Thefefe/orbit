@@ -46,9 +46,13 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2D _uTextures[
 #define TEXTURE_INDEX_TEXTURE_MASK 0x3FFFFFFF
 #define TEXTURE_INDEX_SAMPLER_MASK 0xC0000000
 
-uint get_sampler_index(uint image_index) {
-    return (image_index & TEXTURE_INDEX_SAMPLER_MASK) >> 30;
-}
+#define GET_SAMPLER_INDEX(Index) \
+    ((Index & TEXTURE_INDEX_SAMPLER_MASK) >> 30)
 
 #define GetSampledTextureByIndex(Index) \
-    sampler2D(GetTextureByIndex(Index), _uSamplers[nonuniformEXT(get_sampler_index(Index))])
+    sampler2D(GetTextureByIndex(Index), _uSamplers[nonuniformEXT(GET_SAMPLER_INDEX(Index))])
+
+vec4 sample_texture_index_default(uint texture_index, vec2 tex_coord, vec4 _default) {
+    if (texture_index == TEXTURE_NONE) return _default;
+    return texture(GetSampledTextureByIndex(texture_index), tex_coord);
+}

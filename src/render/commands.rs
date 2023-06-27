@@ -212,6 +212,29 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
+    pub fn blit_image(
+        &self,
+        src_image: &render::ImageView,
+        src_layout: vk::ImageLayout,
+        dst_image: &render::ImageView,
+        dst_layout: vk::ImageLayout,
+        regions: &[vk::ImageBlit],
+        filter: vk::Filter,
+    ) {
+        unsafe {
+            self.device.raw.cmd_blit_image(
+                self.buffer(),
+                src_image.handle,
+                src_layout,
+                dst_image.handle,
+                dst_layout,
+                regions,
+                filter
+            );
+        }
+    }
+
+    #[inline(always)]
     pub fn barrier(
         &self,
         buffer_barriers: &[vk::BufferMemoryBarrier2],
@@ -225,13 +248,6 @@ impl<'a> CommandRecorder<'a> {
 
         unsafe {
             self.device.raw.cmd_pipeline_barrier2(self.buffer(), &dependency_info);
-        }
-    }
-
-    #[inline(always)]
-    pub fn blit_image(&self, blit_info: &vk::BlitImageInfo2) {
-        unsafe {
-            self.device.raw.cmd_blit_image2(self.buffer(), blit_info);
         }
     }
 

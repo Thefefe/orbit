@@ -91,7 +91,7 @@ impl SwapchainInner {
 impl render::SurfaceInfo {
     pub fn choose_surface_format(&self) -> vk::SurfaceFormatKHR {
         for surface_format in self.formats.iter().copied() {
-            if surface_format.format == vk::Format::B8G8R8A8_UNORM
+            if surface_format.format == vk::Format::B8G8R8A8_SRGB
                 && surface_format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
             {
                 return surface_format;

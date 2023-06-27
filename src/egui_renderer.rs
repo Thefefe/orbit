@@ -21,7 +21,7 @@ pub struct EguiRenderer {
 impl EguiRenderer {
     const MAX_VERTEX_COUNT: usize = 200_000;
     const MAX_INDEX_COUNT: usize = 200_000;
-    const IMAGE_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
+    const IMAGE_FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
 
     pub fn new(context: &render::Context) -> Self {
         let pipeline = {

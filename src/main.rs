@@ -475,6 +475,7 @@ impl App {
     fn destroy(&self, context: &render::Context) {
         self.gpu_assets.destroy(context);
         self.scene.destroy(context);
+        self.scene_draw_gen.destroy(context);
         context.destroy_pipeline(&self.basic_pipeline);
         context.destroy_buffer(&self.per_frame_buffer);
     }
@@ -543,11 +544,15 @@ impl SceneDrawGen {
         
         draw_commands
     }
+
+    pub fn destroy(&self, context: &render::Context) {
+        context.destroy_pipeline(&self.pipeline);
+    }
 }
 
 fn main() {
     puffin::GlobalProfiler::lock().new_frame();
-    utils::init_logger();
+    utils::init_logger(false);
     puffin::set_scopes_on(true);
 
     let gltf_path = std::env::args().nth(1);

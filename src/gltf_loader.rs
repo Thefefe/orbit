@@ -1,9 +1,14 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use ash::vk;
-use glam::{Vec3, Quat, Vec4};
+use glam::{Quat, Vec3, Vec4};
+use gpu_allocator::MemoryLocation;
 
-use crate::{render, scene::{SceneBuffer, Transform, EntityData}, assets::{GpuAssetStore, MeshData, sep_vertex_merge, ModelHandle, Submesh, MaterialData}};
+use crate::{
+    assets::{sep_vertex_merge, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle},
+    render,
+    scene::{EntityData, SceneBuffer, Transform},
+};
 
 fn load_image_data(
     base_path: &Path,
@@ -24,7 +29,7 @@ fn load_image_data(
             let image = image::load_from_memory_with_format(data, format)?;
 
             Ok(image.to_rgba8())
-        },
+        }
         gltf::image::Source::Uri { uri, .. } => {
             let source_path = Path::new(uri);
             let source_path = if source_path.is_relative() {
@@ -34,15 +39,173 @@ fn load_image_data(
             };
             let image = image::open(source_path)?;
             Ok(image.to_rgba8())
-        },
+        }
     }
+}
+
+fn load_texture(
+    texture: gltf::Texture,
+    base_path: &Path,
+    buffers: &[Vec<u8>],
+    context: &render::Context,
+    srgb: bool,
+) -> render::Image {
+    let image = texture.source();
+    let image_index = image.index();
+    let image_data = load_image_data(base_path, image.source(), &buffers).unwrap();
+
+    let (width, height) = image_data.dimensions();
+    let max_size = u32::max(width, height);
+    let mip_levels = f32::floor(f32::log2(max_size as f32)) as u32 + 1;
+
+    let mut image = context.create_image(
+        &format!("gltf_image_{image_index}"),
+        &render::ImageDesc {
+            format: if srgb {
+                vk::Format::R8G8B8A8_SRGB
+            } else {
+                vk::Format::R8G8B8A8_UNORM
+            },
+            width,
+            height,
+            mip_levels,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
+            aspect: vk::ImageAspectFlags::COLOR,
+        },
+    );
+
+    let sampler_flags = {
+        let mut flags = render::SamplerFlags::empty();
+
+        if texture.sampler().min_filter() == Some(gltf::texture::MinFilter::Nearest) {
+            flags |= render::SamplerFlags::NEAREST;
+        }
+
+        if texture.sampler().wrap_s() == gltf::texture::WrappingMode::Repeat
+            || texture.sampler().wrap_t() == gltf::texture::WrappingMode::Repeat
+        {
+            flags |= render::SamplerFlags::REPEAT;
+        }
+
+        flags
+    };
+    image.set_sampler_flags(sampler_flags);
+
+    let scratch_buffer = context.create_buffer_init(
+        "scratch_buffer",
+        &render::BufferDesc {
+            size: image_data.len(),
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            memory_location: MemoryLocation::CpuToGpu,
+        },
+        &image_data,
+    );
+
+    context.record_and_submit(|cmd| {
+        use render::AccessKind;
+
+        cmd.barrier(&[], &[render::image_barrier(&image, AccessKind::None, AccessKind::TransferWrite)], &[]);
+        cmd.copy_buffer_to_image(
+            &scratch_buffer,
+            &image,
+            &[vk::BufferImageCopy {
+                buffer_offset: 0,
+                buffer_row_length: 0,
+                buffer_image_height: 0,
+                image_subresource: image.subresource_layers(0, 0..1),
+                image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                image_extent: vk::Extent3D {
+                    width: image.width(),
+                    height: image.height(),
+                    depth: 1,
+                },
+            }],
+        );
+
+        let mut mip_width = width;
+        let mut mip_height = height;
+
+        for (last_level, current_level) in (1..mip_levels).enumerate() {
+            let last_level = last_level as u32;
+            let current_level = current_level as u32;
+
+            let new_mip_width = if mip_width > 1 { mip_width / 2 } else { 1 };
+            let new_mip_height = if mip_height > 1 { mip_height / 2 } else { 1 };
+
+            cmd.barrier(&[], &[render::image_subresource_barrier(
+                &image,
+                last_level..last_level + 1, 
+                ..,
+                AccessKind::TransferWrite,
+                AccessKind::TransferRead
+            )], &[]);
+
+            let blit_region = vk::ImageBlit {
+                src_subresource: image.subresource_layers(last_level, ..),
+                src_offsets: [
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: mip_width as i32,
+                        y: mip_height as i32,
+                        z: 1,
+                    },
+                ],
+                dst_subresource: image.subresource_layers(current_level, ..),
+                dst_offsets: [
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: new_mip_width as i32,
+                        y: new_mip_height as i32,
+                        z: 1,
+                    },
+                ],
+            };
+
+            cmd.blit_image(
+                &image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                &image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                std::slice::from_ref(&blit_region),
+                vk::Filter::LINEAR,
+            );
+
+            if mip_width > 1 {
+                mip_width /= 2
+            };
+            if mip_height > 1 {
+                mip_height /= 2
+            };
+        }
+        
+        cmd.barrier(&[], &[render::image_subresource_barrier(
+            &image,
+            mip_levels - 1..mip_levels, 
+            ..,
+            AccessKind::TransferWrite,
+            AccessKind::AllGraphicsRead,
+        )], &[]);
+
+        cmd.barrier(&[], &[render::image_subresource_barrier(
+            &image,
+            ..mip_levels - 1, 
+            ..,
+            AccessKind::TransferRead,
+            AccessKind::AllGraphicsRead,
+        )], &[]);
+    });
+
+    context.destroy_buffer(&scratch_buffer);
+
+    image
 }
 
 pub fn load_gltf(
     path: &str,
     context: &render::Context,
     asset_store: &mut GpuAssetStore,
-    scene: &mut SceneBuffer
+    scene: &mut SceneBuffer,
 ) -> gltf::Result<()> {
     let path = Path::new(path);
     let base_path = path.parent().unwrap_or(Path::new(""));
@@ -61,69 +224,40 @@ pub fn load_gltf(
                 } else {
                     source_path.to_path_buf()
                 };
-               std::fs::read(source_path).unwrap()
-            },
+                std::fs::read(source_path).unwrap()
+            }
         };
         buffers.push(data);
     }
 
-    let mut texture_lookup_table = Vec::new();
-    for texture in document.textures() {
-        let image = texture.source();
-        let image_index = image.index();
-        let image_data = load_image_data(base_path, image.source(), &buffers).unwrap();
+    let mut texture_lookup_table: HashMap<usize, TextureHandle> = HashMap::new();
+    let mut get_texture = |assets: &mut GpuAssetStore, texture: gltf::Texture, srgb: bool| -> TextureHandle {
+        let index = texture.index();
+        if let Some(texture_id) = texture_lookup_table.get(&index) {
+            return *texture_id;
+        }
 
-        let mut image = context.create_image(&format!("gltf_image_{image_index}"), &render::ImageDesc {
-            format: vk::Format::R8G8B8A8_UNORM,
-            width: image_data.width(),
-            height: image_data.height(),
-            mip_levels: 1,
-            samples: render::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-            aspect: vk::ImageAspectFlags::COLOR,
-        });
-
-        let sampler_flags = {
-            let mut flags = render::SamplerFlags::empty();
-            
-            if texture.sampler().min_filter() == Some(gltf::texture::MinFilter::Nearest) {
-                flags |= render::SamplerFlags::NEAREST;
-            }
-
-            if texture.sampler().wrap_s() == gltf::texture::WrappingMode::Repeat || 
-               texture.sampler().wrap_t() == gltf::texture::WrappingMode::Repeat {
-                flags |= render::SamplerFlags::REPEAT;
-            }
-
-            flags
-        };
-        image.set_sampler_flags(sampler_flags);
-
-        context.immediate_write_image(
-            &image,
-            0,
-            0..1,
-            render::AccessKind::None,
-            Some(render::AccessKind::FragmentShaderRead),
-            &image_data,
-            None
-        );
-
-        let handle = asset_store.import_texture(image);
-        texture_lookup_table.push(handle);
-    }
+        let texture = load_texture(texture, base_path, &buffers, context, srgb);
+        let handle = assets.import_texture(texture);
+        texture_lookup_table.insert(index, handle);
+        handle
+    };
 
     let mut material_lookup_table = Vec::new();
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
         let color = pbr.base_color_factor();
-        let base_texture = pbr.base_color_texture().map(|tex| texture_lookup_table[tex.texture().index()]);
-        
-        let handle = asset_store.add_material(context, MaterialData {
-            base_color: Vec4::from_array(color),
-            base_texture,
-            normal_texture: None,
-        });
+        let base_texture = pbr.base_color_texture().map(|tex| get_texture(asset_store, tex.texture(), true));
+        let normal_texture = material.normal_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
+
+        let handle = asset_store.add_material(
+            context,
+            MaterialData {
+                base_color: Vec4::from_array(color),
+                base_texture,
+                normal_texture,
+            },
+        );
         material_lookup_table.push(handle);
     }
 
@@ -156,15 +290,18 @@ pub fn load_gltf(
                 reader.read_positions().unwrap(),
                 reader.read_tex_coords(0).unwrap().into_f32(),
                 reader.read_normals().unwrap(),
-                reader.read_tangents().into_iter().flatten()
+                reader.read_tangents().into_iter().flatten(),
             );
             let indices = reader.read_indices().unwrap().into_u32();
-            
+
             mesh_data.vertices.extend(vertices);
             mesh_data.indices.extend(indices);
 
             let mesh_handle = asset_store.add_mesh(context, &mesh_data);
-            submeshes.push(Submesh { mesh_handle, material_index });
+            submeshes.push(Submesh {
+                mesh_handle,
+                material_index,
+            });
         }
         let model_handle = asset_store.add_model(submeshes.as_slice());
         model_lookup_table.push(model_handle);
@@ -174,7 +311,7 @@ pub fn load_gltf(
         scene: &mut SceneBuffer,
         model_lookup_table: &[ModelHandle],
         node: gltf::Node,
-        parent: Option<Transform>
+        parent: Option<Transform>,
     ) {
         let (position, orientation, scale) = node.transform().decomposed();
         let mut transform = Transform {
@@ -188,10 +325,7 @@ pub fn load_gltf(
         }
 
         let model = node.mesh().map(|gltf_mesh| model_lookup_table[gltf_mesh.index()]);
-        scene.add_entity(EntityData {
-            transform,
-            model,
-        });
+        scene.add_entity(EntityData { transform, model });
 
         for child in node.children() {
             add_gltf_node(scene, model_lookup_table, child, Some(transform));
@@ -199,7 +333,7 @@ pub fn load_gltf(
     }
 
     for node in document.nodes() {
-        add_gltf_node(scene, &model_lookup_table, node, None);       
+        add_gltf_node(scene, &model_lookup_table, node, None);
     }
 
     Ok(())

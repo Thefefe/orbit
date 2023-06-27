@@ -482,6 +482,7 @@ impl Device {
 
         let vulkan10_features = vk::PhysicalDeviceFeatures::builder()
             .multi_draw_indirect(true)
+            .sampler_anisotropy(true)
             .build();
 
         let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()
@@ -499,7 +500,7 @@ impl Device {
             .buffer_device_address(true)
             .shader_int8(true)
             .uniform_and_storage_buffer8_bit_access(true)
-            // .draw_indirect_count(true)
+            .draw_indirect_count(true)
             .build();
 
         let mut vulkan13_features =

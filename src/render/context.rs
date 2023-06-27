@@ -203,18 +203,22 @@ impl Context {
         let frame = &mut self.frames[self.frame_index];
 
         unsafe {
+            puffin::profile_scope!("fence_wait");
             self.device.raw.wait_for_fences(&[frame.in_flight_fence], false, u64::MAX).unwrap();
             self.device.raw.reset_fences(&[frame.in_flight_fence]).unwrap();
         }
 
         frame.command_pool.reset(&self.device);
 
-        for buffer in frame.buffers_to_free.drain(..) {
-            render::Buffer::destroy_impl(&self.device, &self.descriptors, &buffer);
-        }
-
-        for image in frame.images_to_free.drain(..) {
-            render::Image::destroy_impl(&self.device, &self.descriptors, &image);
+        {
+            puffin::profile_scope!("last_frame_releases");
+            for buffer in frame.buffers_to_free.drain(..) {
+                render::Buffer::destroy_impl(&self.device, &self.descriptors, &buffer);
+            }
+    
+            for image in frame.images_to_free.drain(..) {
+                render::Image::destroy_impl(&self.device, &self.descriptors, &image);
+            }
         }
 
         self.swapchain.resize(self.window.inner_size().into());

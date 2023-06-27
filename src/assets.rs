@@ -191,7 +191,6 @@ impl GpuAssetStore {
             vertex_alloc_index,
             index_alloc_index,
         };
-        log::debug!("{mesh_block:#?}");
         let mesh_index = self.mesh_blocks.insert(mesh_block);
 
 
@@ -257,6 +256,7 @@ impl GpuAssetStore {
     pub fn destroy(&self, context: &render::Context) {
         context.destroy_buffer(&self.vertex_buffer);
         context.destroy_buffer(&self.index_buffer);
+        context.destroy_buffer(&self.mesh_info_buffer);
         context.destroy_buffer(&self.material_buffer);
         for (_, image) in self.textures.iter() {
             context.destroy_image(&image);

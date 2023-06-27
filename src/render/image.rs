@@ -74,9 +74,9 @@ impl Image {
         let subresource_range = vk::ImageSubresourceRange {
             aspect_mask: desc.aspect,
             base_mip_level: 0,
-            level_count: vk::REMAINING_MIP_LEVELS,
+            level_count: desc.mip_levels,
             base_array_layer: 0,
-            layer_count: vk::REMAINING_ARRAY_LAYERS,
+            layer_count: 1,
         };
 
         let image_view_create_info = vk::ImageViewCreateInfo::builder()
@@ -96,7 +96,6 @@ impl Image {
         } else {
             None
         };
-
 
         Image {
             image_view: render::ImageView {

@@ -172,6 +172,7 @@ impl<'a> CommandRecorder<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn end_debug_label(&self) {
         if let Some(ref debug_utils) = self.device.debug_utils_fns {
             unsafe {
@@ -293,12 +294,14 @@ impl<'a> CommandRecorder<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn bind_vertex_buffer(&self, binding: u32, buffer: &render::BufferView, offset: u64) {
         unsafe {
             self.device.raw.cmd_bind_vertex_buffers(self.buffer(), binding, &[buffer.handle], &[offset])
         }
     }
 
+    #[inline(always)]
     pub fn push_bindings(&self, bindings: &[render::RawDescriptorIndex]) {
         unsafe {
             self.device.raw.cmd_push_constants(
@@ -338,6 +341,7 @@ impl<'a> CommandRecorder<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn draw_indexed_indirect(
         &self,
         indirect_buffer: &render::BufferView,
@@ -353,6 +357,43 @@ impl<'a> CommandRecorder<'a> {
                 draw_count,
                 stride
             );
+        }
+    }
+
+    #[inline(always)]
+    pub fn draw_indexed_indirect_count(
+        &self,
+        indirect_buffer: &render::BufferView,
+        indirect_buffer_offset: vk::DeviceSize,
+        count_buffer: &render::BufferView,
+        count_buffer_offset: vk::DeviceSize,
+        max_draw_count: u32,
+        stride: u32,
+    ) {
+        unsafe {
+            self.device.raw.cmd_draw_indexed_indirect_count(
+                self.buffer(),
+                indirect_buffer.handle,
+                indirect_buffer_offset,
+                count_buffer.handle,
+                count_buffer_offset,
+                max_draw_count,
+                stride,
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub fn bind_compute_pipeline(&self, pipeline: render::ComputePipeline) {
+        unsafe {
+            self.device.raw.cmd_bind_pipeline(self.buffer(), vk::PipelineBindPoint::COMPUTE, pipeline.handle);
+        }
+    }
+
+    #[inline(always)]
+    pub fn dispatch(&self, group_counts: [u32; 3]) {
+        unsafe {
+            self.device.raw.cmd_dispatch(self.buffer(), group_counts[0], group_counts[1], group_counts[2])
         }
     }
 }

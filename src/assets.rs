@@ -60,6 +60,16 @@ impl GpuMeshVertex {
     }
 }
 
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuMeshInfo {
+    index_offset: u32,
+    index_count: u32,
+    vertex_offset: u32,
+    _padding: u32,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct MeshBlock {
     pub vertex_range: BlockRange,
@@ -111,6 +121,7 @@ pub struct GpuAssetStore {
     vertex_allocator: FreeListAllocator,
     index_allocator: FreeListAllocator,
 
+    pub mesh_info_buffer: render::Buffer,
     pub mesh_blocks: arena::Arena<MeshBlock>,
     pub models: arena::Arena<ModelData>,
 
@@ -134,6 +145,12 @@ impl GpuAssetStore {
             memory_location: MemoryLocation::GpuOnly,
         });
 
+        let mesh_info_buffer = context.create_buffer("mesh_info_buffer", &render::BufferDesc {
+            size: MAX_INDEX_COUNT * std::mem::size_of::<GpuMeshInfo>(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            memory_location: MemoryLocation::GpuOnly,
+        });
+
         let material_buffer = context.create_buffer("material_buffer", &render::BufferDesc {
             size: MAX_MATERIAL_COUNT * std::mem::size_of::<GpuMaterialData>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
@@ -147,6 +164,7 @@ impl GpuAssetStore {
             vertex_allocator: FreeListAllocator::new(MAX_VERTEX_COUNT),
             index_allocator: FreeListAllocator::new(MAX_INDEX_COUNT),
 
+            mesh_info_buffer,
             mesh_blocks: arena::Arena::new(),
             models: arena::Arena::new(),
 
@@ -167,12 +185,27 @@ impl GpuAssetStore {
         context.immediate_write_buffer(&self.vertex_buffer, vertex_bytes, vertex_range.start * std::mem::size_of::<GpuMeshVertex>());
         context.immediate_write_buffer(&self.index_buffer, index_bytes, index_range.start * std::mem::size_of::<u32>());
 
-        let mesh_index = self.mesh_blocks.insert(MeshBlock {
+        let mesh_block = MeshBlock {
             vertex_range,
             index_range,
             vertex_alloc_index,
             index_alloc_index,
-        });
+        };
+        log::debug!("{mesh_block:#?}");
+        let mesh_index = self.mesh_blocks.insert(mesh_block);
+
+
+        let mesh_info = GpuMeshInfo {
+            index_offset: index_range.start as u32,
+            index_count: index_range.size() as u32,
+            vertex_offset: vertex_range.start as u32,
+            _padding: 0,
+        };
+        context.immediate_write_buffer(
+            &self.mesh_info_buffer,
+            bytemuck::bytes_of(&mesh_info), 
+            std::mem::size_of::<GpuMeshInfo>() * mesh_index.slot() as usize
+        );
 
         mesh_index
     }
@@ -199,6 +232,7 @@ impl GpuAssetStore {
         let normal_texture_index = material_data.normal_texture
             .map(|handle| self.get_texture_desc_index(handle))
             .unwrap_or(u32::MAX);
+
 
         let gpu_data = GpuMaterialData {
             base_color: material_data.base_color,

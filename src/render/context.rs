@@ -29,7 +29,6 @@ pub struct Context {
 
     pub device: render::Device,
     pub descriptors: render::BindlessDescriptors,
-    samplers: Vec<vk::Sampler>,
     pub swapchain: render::Swapchain,
 
     pub graph: RenderGraph,
@@ -48,29 +47,7 @@ pub struct ContextDesc {
 impl Context {
     pub fn new(window: Window, desc: &ContextDesc) -> Self {
         let device = render::Device::new(&window).expect("failed to create device");
-
-        let mut samplers = Vec::new();
-
-        {
-            let create_info = vk::SamplerCreateInfo::builder()
-                .address_mode_u(vk::SamplerAddressMode::REPEAT)
-                .address_mode_v(vk::SamplerAddressMode::REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::REPEAT)
-                .anisotropy_enable(false)
-                .min_filter(vk::Filter::LINEAR)
-                .mag_filter(vk::Filter::LINEAR)
-                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-                .min_lod(0.0)
-                .max_lod(vk::LOD_CLAMP_NONE);
-
-            let handle = unsafe {
-                device.raw.create_sampler(&create_info, None).unwrap()
-            };
-
-            samplers.push(handle);
-        };
-
-        let descriptors = render::BindlessDescriptors::new(&device, samplers.as_slice());
+        let descriptors = render::BindlessDescriptors::new(&device);
 
         let swapchain = {
             let surface_info = &device.gpu.surface_info;
@@ -135,7 +112,6 @@ impl Context {
 
             device,
             descriptors,
-            samplers,
             swapchain,
             
             graph: RenderGraph::new(),
@@ -169,6 +145,10 @@ impl Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        
         unsafe {
             self.device.raw.device_wait_idle().unwrap();
         }
@@ -194,12 +174,6 @@ impl Drop for Context {
     
             for image in frame.images_to_free.iter() {
                 render::Image::destroy_impl(&self.device, &self.descriptors, image);
-            }
-        }
-
-        for sampler in self.samplers.iter() {
-            unsafe {
-                self.device.raw.destroy_sampler(*sampler, None);
             }
         }
 
@@ -360,6 +334,7 @@ impl FrameContext<'_> {
             let recorder = cmd_buffer.record(&self.context.device, &self.context.descriptors);
                 
             self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
+            self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
 
             if batch.memory_barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE
             || batch.memory_barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE

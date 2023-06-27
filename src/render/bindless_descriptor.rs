@@ -143,11 +143,15 @@ pub struct BindlessDescriptors {
 
     global_index_allocator: IndexAllocator,
 
-    immutable_sampler_count: usize,
+    immutable_samplers: Vec<vk::Sampler>,
 }
 
 impl BindlessDescriptors {
-    pub fn new(device: &render::Device, immutable_samplers: &[vk::Sampler]) -> Self {
+    pub fn new(device: &render::Device) -> Self {
+        let immutable_samplers: Vec<vk::Sampler> = SamplerFlags::iter_all()
+            .map(|sampler_flags| create_sampler(device, sampler_flags))
+            .collect();
+
         let descriptor_layouts: Vec<_> = DescriptorTableType::all_types()
             .map(|desc_type| {
                 let mut descriptor_binding_flags = vec![
@@ -185,7 +189,6 @@ impl BindlessDescriptors {
                     .bindings(&set)
                     .flags(
                         vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
-                        // vk::DescriptorSetLayoutCreateFlags::DESCRIPTOR_BUFFER_EXT,
                     )
                     .push_next(&mut ext_flags);
 
@@ -251,7 +254,7 @@ impl BindlessDescriptors {
 
             global_index_allocator: IndexAllocator::new(0),
 
-            immutable_sampler_count: immutable_samplers.len(),
+            immutable_samplers,
         }
     }
 
@@ -311,7 +314,7 @@ impl BindlessDescriptors {
 
             let write_info = vk::WriteDescriptorSet::builder()
                 .dst_set(self.descriptor_sets[DescriptorTableType::Image.set_index() as usize])
-                .dst_binding(self.immutable_sampler_count as u32)
+                .dst_binding(self.immutable_samplers.len() as u32)
                 .dst_array_element(index)
                 .descriptor_type(DescriptorTableType::Image.to_vk())
                 .image_info(std::slice::from_ref(&image_info));
@@ -324,13 +327,74 @@ impl BindlessDescriptors {
 
     pub fn destroy(&self, device: &render::Device) {
         unsafe {
-            device.raw.destroy_descriptor_pool(self.pool, None);
+            for sampler in self.immutable_samplers.iter() {
+                device.raw.destroy_sampler(*sampler, None);
+            }
 
+            device.raw.destroy_descriptor_pool(self.pool, None);
             device.raw.destroy_pipeline_layout(self.pipeline_layout, None);
 
             for descriptor_layout in &self.descriptor_layouts {
                 device.raw.destroy_descriptor_set_layout(*descriptor_layout, None);
             }
         }
+    }
+}
+
+fn create_sampler(device: &render::Device, sampler_flags: SamplerFlags) -> vk::Sampler {
+    let address_mode = if sampler_flags.contains(SamplerFlags::REPEAT) {
+        vk::SamplerAddressMode::REPEAT
+    } else {
+        vk::SamplerAddressMode::CLAMP_TO_EDGE
+    };
+
+    let filter_mode = if sampler_flags.contains(SamplerFlags::NEAREST) {
+        vk::Filter::NEAREST
+    } else {
+        vk::Filter::LINEAR
+    };
+
+    let mipmap_mode = if sampler_flags.contains(SamplerFlags::NEAREST) {
+        vk::SamplerMipmapMode::NEAREST
+    } else {
+        vk::SamplerMipmapMode::LINEAR
+    };
+
+    let create_info = vk::SamplerCreateInfo::builder()
+        .address_mode_u(address_mode)
+        .address_mode_v(address_mode)
+        .address_mode_w(address_mode)
+        .anisotropy_enable(false)
+        .min_filter(filter_mode)
+        .mag_filter(filter_mode)
+        .mipmap_mode(mipmap_mode)
+        .min_lod(0.0)
+        .max_lod(vk::LOD_CLAMP_NONE)
+        .build();
+    
+    unsafe {
+        device.raw.create_sampler(&create_info, None).unwrap()
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SamplerFlags(u32);
+ash::vk_bitflags_wrapped!(SamplerFlags, u32);
+
+const SAMPELER_BIT_COUNT: u32 = 2;
+
+impl SamplerFlags {
+    pub const NEAREST: Self = Self(0b10);
+    pub const REPEAT: Self = Self(0b01);
+
+    fn iter_all() -> impl Iterator<Item = Self> {
+        (0..2u32.pow(SAMPELER_BIT_COUNT)).map(Self)
+    }
+}
+
+impl ImageDescriptorIndex {
+    pub fn with_sampler(self, sampler: SamplerFlags) -> Self {
+        Self(self.0 | (sampler.0 << 30))
     }
 }

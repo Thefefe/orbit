@@ -208,12 +208,6 @@ impl RasterPipeline {
 
         RasterPipeline { handle }
     }
-
-    pub fn destroy_impl(device: &render::Device, pipeline: &RasterPipeline) {
-        unsafe {
-            device.raw.destroy_pipeline(pipeline.handle, None);
-        }
-    }
 }
 
 pub fn create_shader_module(device: &render::Device, spv: &[u32], name: &str) -> vk::ShaderModule {
@@ -223,8 +217,48 @@ pub fn create_shader_module(device: &render::Device, spv: &[u32], name: &str) ->
     handle
 }
 
-pub fn destroy_shader_module(device: &render::Device, module: vk::ShaderModule) {
-    unsafe { device.raw.destroy_shader_module(module, None) };
+#[derive(Debug, Clone, Copy)]
+pub struct ComputePipeline {
+    pub handle: vk::Pipeline,
+}
+
+impl ComputePipeline {
+    pub fn create_impl(
+        device: &render::Device,
+        bindless_layout: vk::PipelineLayout,
+        name: &str,
+        shader: &ShaderStage,
+    ) -> ComputePipeline {
+        let stage = shader.to_vk().stage(vk::ShaderStageFlags::COMPUTE).build();
+        let create_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(stage)
+            .layout(bindless_layout);
+
+        let handle = unsafe {
+            device.raw.create_compute_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&create_info), None)
+                .unwrap()[0]
+        };
+
+        device.set_debug_name(handle, name);
+
+        Self { handle }
+    }
+}
+
+pub trait Pipeline {
+    fn handle(&self) -> vk::Pipeline;
+}
+
+impl Pipeline for RasterPipeline {
+    fn handle(&self) -> vk::Pipeline {
+        self.handle
+    }
+}
+
+impl Pipeline for ComputePipeline {
+    fn handle(&self) -> vk::Pipeline {
+        self.handle
+    }
 }
 
 impl render::Context {
@@ -232,8 +266,14 @@ impl render::Context {
         RasterPipeline::create_impl(&self.device, self.descriptors.layout(), name, desc)
     }
 
-    pub fn destroy_raster_pipeline(&self, pipeline: &RasterPipeline) {
-        RasterPipeline::destroy_impl(&self.device, pipeline);
+    pub fn create_compute_pipeline(&self, name: &str, shader: &ShaderStage) -> ComputePipeline {
+        ComputePipeline::create_impl(&self.device, self.descriptors.layout(), name, shader)
+    }
+
+    pub fn destroy_pipeline(&self, pipeline: &impl Pipeline) {
+        unsafe {
+            self.device.raw.destroy_pipeline(pipeline.handle(), None)
+        }
     }
 
     pub fn create_shader_module(&self, spv: &[u32], name: &str) -> vk::ShaderModule {
@@ -241,6 +281,6 @@ impl render::Context {
     }
 
     pub fn destroy_shader_module(&self, module: vk::ShaderModule) {
-        destroy_shader_module(&self.device, module)
+        unsafe { self.device.raw.destroy_shader_module(module, None) };
     }
 }

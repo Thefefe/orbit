@@ -499,6 +499,7 @@ impl Device {
             .buffer_device_address(true)
             .shader_int8(true)
             .uniform_and_storage_buffer8_bit_access(true)
+            // .draw_indirect_count(true)
             .build();
 
         let mut vulkan13_features =
@@ -603,7 +604,7 @@ impl Device {
     pub fn set_debug_name<T: vk::Handle>(&self, handle: T, name: &str) {
         if let Some(debug_utils) = &self.debug_utils_fns {
             unsafe {
-                let cname = CString::new(name).unwrap();
+                let cname = CString::new(name).unwrap(); // TODO: cache allocation?
                 let name_info = vk::DebugUtilsObjectNameInfoEXT::builder()
                     .object_type(T::TYPE)
                     .object_handle(handle.as_raw())

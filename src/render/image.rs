@@ -91,10 +91,12 @@ impl Image {
         device.set_debug_name(view, &format!("{}_view", name));
 
         let descriptor_index = if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
-            Some(descriptors.alloc_image_resource(device, view))
+            let index = descriptors.alloc_image_resource(device, view);
+            Some(index)
         } else {
             None
         };
+
 
         Image {
             image_view: render::ImageView {
@@ -118,6 +120,12 @@ impl Image {
             descriptors.free_descriptor_index(descriptor_index);
         }
         device.deallocate(image.alloc_index);
+    }
+
+    pub fn set_sampler_flags(&mut self, sampler_flags: render::SamplerFlags) {
+        if let Some(index) = self.image_view.descriptor_index.as_mut() {
+            *index = index.with_sampler(sampler_flags);
+        }
     }
 }
 

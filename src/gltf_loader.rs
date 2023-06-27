@@ -12,7 +12,7 @@ fn load_image_data(
 ) -> Result<image::RgbaImage, image::ImageError> {
     match source {
         gltf::image::Source::View { view, mime_type } => {
-            let buffer = &buffers[view.index()];
+            let buffer = &buffers[view.buffer().index()];
             let data = &buffer[view.offset()..view.offset() + view.length()];
 
             let format = match mime_type {
@@ -67,11 +67,13 @@ pub fn load_gltf(
         buffers.push(data);
     }
 
-    let mut image_lookup_table = Vec::new();
-    for (image_index, image) in document.images().enumerate() {
+    let mut texture_lookup_table = Vec::new();
+    for texture in document.textures() {
+        let image = texture.source();
+        let image_index = image.index();
         let image_data = load_image_data(base_path, image.source(), &buffers).unwrap();
 
-        let image = context.create_image(&format!("gltf_image_{image_index}"), &render::ImageDesc {
+        let mut image = context.create_image(&format!("gltf_image_{image_index}"), &render::ImageDesc {
             format: vk::Format::R8G8B8A8_UNORM,
             width: image_data.width(),
             height: image_data.height(),
@@ -80,6 +82,22 @@ pub fn load_gltf(
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
         });
+
+        let sampler_flags = {
+            let mut flags = render::SamplerFlags::empty();
+            
+            if texture.sampler().min_filter() == Some(gltf::texture::MinFilter::Nearest) {
+                flags |= render::SamplerFlags::NEAREST;
+            }
+
+            if texture.sampler().wrap_s() == gltf::texture::WrappingMode::Repeat || 
+               texture.sampler().wrap_t() == gltf::texture::WrappingMode::Repeat {
+                flags |= render::SamplerFlags::REPEAT;
+            }
+
+            flags
+        };
+        image.set_sampler_flags(sampler_flags);
 
         context.immediate_write_image(
             &image,
@@ -92,14 +110,15 @@ pub fn load_gltf(
         );
 
         let handle = asset_store.import_texture(image);
-        image_lookup_table.push(handle);
+        texture_lookup_table.push(handle);
     }
 
     let mut material_lookup_table = Vec::new();
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
         let color = pbr.base_color_factor();
-        let base_texture = pbr.base_color_texture().map(|tex| image_lookup_table[tex.texture().source().index()]);
+        let base_texture = pbr.base_color_texture().map(|tex| texture_lookup_table[tex.texture().index()]);
+        
         let handle = asset_store.add_material(context, MaterialData {
             base_color: Vec4::from_array(color),
             base_texture,

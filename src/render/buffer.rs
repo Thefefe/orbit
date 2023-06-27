@@ -99,40 +99,16 @@ impl render::Context {
         }
 
         let buffer = Buffer::create_impl(&self.device, &self.descriptors, name, &desc);
-
-        let init_size = usize::min(buffer.size as usize, init.len());
-        if let Some(mapped_ptr) = buffer.mapped_ptr {
-            unsafe {
-                std::ptr::copy_nonoverlapping(init.as_ptr(), mapped_ptr.as_ptr(), init_size);
-            }
-        } else {
-            let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, "scratch_buffer", &BufferDesc {
-                size: init_size,
-                usage: vk::BufferUsageFlags::TRANSFER_SRC,
-                memory_location: MemoryLocation::CpuToGpu,
-            });
-
-            unsafe {
-                std::ptr::copy_nonoverlapping(init.as_ptr(), scratch_buffer.mapped_ptr.unwrap().as_ptr(), init_size);
-            }
-
-            self.record_and_submit(|cmd| {
-                cmd.copy_buffer(&scratch_buffer, &buffer, &[
-                    vk::BufferCopy {
-                        src_offset: 0,
-                        dst_offset: 0,
-                        size: init_size as u64,
-                    }
-                ]);
-            });
-
-            Buffer::destroy_impl(&self.device, &self.descriptors, &scratch_buffer);
-        }
+        self.immediate_write_buffer(&buffer, init, 0);
 
         buffer
     }
 
     pub fn immediate_write_buffer(&self, buffer: &render::Buffer, data: &[u8], offset: usize) {
+        if data.is_empty() {
+            return;
+        }
+
         let copy_size = usize::min(buffer.size as usize - offset, data.len());
         if let Some(mapped_ptr) = buffer.mapped_ptr {
             unsafe {

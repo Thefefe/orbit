@@ -6,7 +6,7 @@ use ash::vk;
 use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
 use assets::{GpuAssetStore};
-use scene::{Transform, SceneBuffer, GpuDrawData, write_draw_commands_from_scene};
+use scene::{Transform, SceneBuffer, GpuDrawCommand};
 use time::Time;
 use winit::{
     event::{Event,  VirtualKeyCode as KeyCode, MouseButton},
@@ -154,14 +154,10 @@ struct PerFrameData {
 struct App {
     gpu_assets: GpuAssetStore,
     scene: SceneBuffer,
+    scene_draw_gen: SceneDrawGen,
 
     basic_pipeline: render::RasterPipeline,
     per_frame_buffer: render::Buffer,
-
-    draw_command_buffer: render::Buffer,
-    draw_command_count: usize,
-    entity_index_buffer: render::Buffer,
-    entity_index_count: usize,
 
     camera: Camera,
     camera_controller: CameraController,
@@ -173,7 +169,7 @@ struct App {
 impl App {
     const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-    fn new(context: &render::Context, gltf_path: &str) -> Self {
+    fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
         let mesh_pipeline = {
             let vertex_shader = utils::load_spv("shaders/mesh.vert.spv").unwrap();
             let fragment_shader = utils::load_spv("shaders/mesh.frag.spv").unwrap();
@@ -201,7 +197,8 @@ impl App {
                 },
                 color_attachments: &[render::PipelineColorAttachment {
                     format: context.swapchain.format(),
-                    ..Default::default()
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
                 }],
                 depth_state: Some(render::DepthState {
                     format: Self::DEPTH_FORMAT,
@@ -221,25 +218,12 @@ impl App {
         let mut gpu_assets = GpuAssetStore::new(context);
         let mut scene = SceneBuffer::new(context);
         
-        load_gltf(gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
+        if let Some(gltf_path) = gltf_path {
+            load_gltf(gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
+        }
 
         scene.update_instances(context);
-
-        let mut draw_commands = Vec::new();
-        let mut entity_indices = Vec::new(); 
-        write_draw_commands_from_scene(&scene, &gpu_assets, &mut draw_commands, &mut entity_indices);
-
-        let draw_command_buffer = context.create_buffer_init("indirect_draw_commands", &render::BufferDesc {
-            size: draw_commands.len() * std::mem::size_of::<GpuDrawData>(),
-            usage: vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER,
-            memory_location: MemoryLocation::GpuOnly,
-        }, bytemuck::cast_slice(&draw_commands));
-
-        let entity_index_buffer = context.create_buffer_init("indirect_draw_commands", &render::BufferDesc {
-            size: entity_indices.len() * std::mem::size_of::<u32>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            memory_location: MemoryLocation::GpuOnly,
-        }, bytemuck::cast_slice(&entity_indices));
+        scene.update_submeshes(context, &gpu_assets);
 
         let per_frame_buffer = context.create_buffer("global_buffer", &render::BufferDesc {
             size: std::mem::size_of::<PerFrameData>(),
@@ -250,16 +234,10 @@ impl App {
         unsafe {
             per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().render_mode = 0;
         }
-
         Self {
             gpu_assets,
             scene,
-
-            draw_command_buffer,
-            draw_command_count: draw_commands.len(),
-            entity_index_buffer,
-            entity_index_count: entity_indices.len(),
-            
+            scene_draw_gen: SceneDrawGen::new(context),
 
             basic_pipeline: mesh_pipeline,
             per_frame_buffer,
@@ -327,15 +305,15 @@ impl App {
             // temporary
             egui::Window::new("rendergraph debugger").open(&mut self.graph_debugger_open).show(egui_ctx, |ui| {
                 for (i, batch) in context.compiled_graph.iter_batches().enumerate() {
-                    ui.collapsing(format!("batch_{i}"), |ui| {
-                        ui.collapsing("memory_barrier", |ui| {
+                    ui.collapsing(format!("batch {i}"), |ui| {
+                        ui.collapsing("memory barrier", |ui| {
                             ui.label(format!("src_stage: {:?}", batch.memory_barrier.src_stage_mask));
                             ui.label(format!("src_access: {:?}", batch.memory_barrier.src_access_mask));
                             ui.label(format!("dst_stage: {:?}", batch.memory_barrier.dst_stage_mask));
                             ui.label(format!("dst_access: {:?}", batch.memory_barrier.dst_access_mask));
                         });
 
-                        ui.collapsing("begin_image_barriers", |ui| {
+                        ui.collapsing("begin image barriers", |ui| {
                             for (i, image_barrier) in batch.begin_image_barriers.iter().enumerate() {
                                 ui.collapsing(&format!("image {i}"), |ui| {
                                     ui.label(format!("src_stage: {:?}", image_barrier.src_stage_mask));
@@ -348,9 +326,9 @@ impl App {
                             }
                         });
 
-                        ui.collapsing("finish_image_barriers", |ui| {
+                        ui.collapsing("finish image barriers", |ui| {
                             for (i, image_barrier) in batch.finish_image_barriers.iter().enumerate() {
-                                ui.collapsing(&format!("image #{i}"), |ui| {
+                                ui.collapsing(&format!("image {i}"), |ui| {
                                     ui.label(format!("src_stage: {:?}", image_barrier.src_stage_mask));
                                     ui.label(format!("src_access: {:?}", image_barrier.src_access_mask));
                                     ui.label(format!("dst_stage: {:?}", image_barrier.dst_stage_mask));
@@ -382,6 +360,7 @@ impl App {
 
     fn render(&mut self, frame_ctx: &mut render::FrameContext) {
         puffin::profile_function!();
+
         let screen_extent = frame_ctx.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
@@ -406,12 +385,14 @@ impl App {
         let vertex_buffer = frame_ctx.import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
         let index_buffer = frame_ctx.import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
         let material_buffer = frame_ctx.import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
+        let instance_buffer = frame_ctx.import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
 
-        let instance_buffer = frame_ctx.import_buffer("entity_instance_buffer", &self.scene.instance_buffer, &Default::default());
-        let draw_commands_buffer = frame_ctx.import_buffer("mesh_draw_commands_buffer", &self.draw_command_buffer, &Default::default());
-        let entity_indices_buffer = frame_ctx.import_buffer("mesh_entity_index_buffer", &self.entity_index_buffer, &Default::default());
+        let submesh_buffer = frame_ctx.import_buffer("scene_submeshe_buffer", &self.scene.submesh_buffer, &Default::default());
+        let mesh_info_buffer = frame_ctx.import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
+        let submesh_count = self.scene.submesh_data.len() as u32;
 
-        let draw_count = self.draw_command_count as u32;
+        let draw_commands_buffer = self.scene_draw_gen
+            .create_draw_commands(frame_ctx, submesh_count, submesh_buffer, mesh_info_buffer, "main_draw_commands");
 
         let pipeline = self.basic_pipeline;
 
@@ -420,6 +401,7 @@ impl App {
             &[
                 (swapchain_image, render::AccessKind::ColorAttachmentWrite),
                 (depth_image, render::AccessKind::DepthAttachmentWrite),
+                (draw_commands_buffer, render::AccessKind::IndirectBuffer),
             ],
             move |cmd, graph| {
                 let swapchain_image = graph.get_image(swapchain_image).unwrap();
@@ -433,7 +415,6 @@ impl App {
 
                 let instance_buffer = graph.get_buffer(instance_buffer).unwrap();
                 let draw_commands_buffer = graph.get_buffer(draw_commands_buffer).unwrap();
-                let entity_indices_buffer = graph.get_buffer(entity_indices_buffer).unwrap();
 
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(swapchain_image.view)
@@ -441,7 +422,7 @@ impl App {
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
                         color: vk::ClearColorValue {
-                            float32: [0.0, 0.0, 0.0, 1.0],
+                            float32: [0.1, 0.5, 0.9, 1.0],
                         },
                     })
                     .store_op(vk::AttachmentStoreOp::STORE);
@@ -473,15 +454,17 @@ impl App {
                     globals_buffer.descriptor_index.unwrap().to_raw(),
                     vertex_buffer.descriptor_index.unwrap().to_raw(),
                     instance_buffer.descriptor_index.unwrap().to_raw(),
-                    entity_indices_buffer.descriptor_index.unwrap().to_raw(),
                     draw_commands_buffer.descriptor_index.unwrap().to_raw(),
                     material_buffer.descriptor_index.unwrap().to_raw(),
                 ]);
-                cmd.draw_indexed_indirect(
+                
+                cmd.draw_indexed_indirect_count(
+                    draw_commands_buffer,
+                    4,
                     draw_commands_buffer,
                     0,
-                    draw_count,
-                    std::mem::size_of::<GpuDrawData>() as u32
+                    MAX_DRAW_COUNT as u32,
+                    std::mem::size_of::<GpuDrawCommand>() as u32,
                 );
 
                 cmd.end_rendering();
@@ -492,10 +475,73 @@ impl App {
     fn destroy(&self, context: &render::Context) {
         self.gpu_assets.destroy(context);
         self.scene.destroy(context);
-        context.destroy_raster_pipeline(&self.basic_pipeline);
+        context.destroy_pipeline(&self.basic_pipeline);
         context.destroy_buffer(&self.per_frame_buffer);
-        context.destroy_buffer(&self.draw_command_buffer);
-        context.destroy_buffer(&self.entity_index_buffer);
+    }
+}
+const MAX_DRAW_COUNT: usize = 1_000_000;
+
+pub struct SceneDrawGen {
+    pipeline: render::ComputePipeline,
+}
+
+impl SceneDrawGen {
+    pub fn new(context: &render::Context) -> Self {
+        let spv = utils::load_spv("shaders/scene_draw_gen.comp.spv").unwrap();
+        let module = context.create_shader_module(&spv, "scene_draw_gen_module"); 
+
+        let pipeline = context.create_compute_pipeline("scene_draw_gen_pipeline", &render::ShaderStage {
+            module,
+            entry: cstr::cstr!("main"),
+        });
+
+        context.destroy_shader_module(module);
+
+        Self { pipeline }
+
+    }
+
+    pub fn create_draw_commands(
+        &self,
+        frame_ctx: &mut render::FrameContext,
+        scene_submesh_count: u32,
+        scene_submeshes: render::ResourceHandle,
+        mesh_infos: render::ResourceHandle,
+        draw_commands_name: &str,
+    ) -> render::ResourceHandle {
+        let draw_commands = frame_ctx.create_transient_buffer(draw_commands_name, render::BufferDesc {
+            size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+            memory_location: MemoryLocation::GpuOnly,
+        });
+        let pipeline = self.pipeline;
+
+        use render::AccessKind;
+
+        frame_ctx.add_pass(
+            format!("{draw_commands_name}_generation"),
+            &[
+                (scene_submeshes, AccessKind::ComputeShaderRead),
+                (mesh_infos, AccessKind::ComputeShaderRead),
+                (draw_commands, AccessKind::ComputeShaderWrite),
+            ],
+            move |cmd, graph| {
+                let scene_submeshes = graph.get_buffer(scene_submeshes).unwrap();
+                let mesh_infos = graph.get_buffer(mesh_infos).unwrap();
+                let draw_commands = graph.get_buffer(draw_commands).unwrap();
+
+                cmd.bind_compute_pipeline(pipeline);
+
+                cmd.push_bindings(&[
+                    scene_submeshes.descriptor_index.unwrap().to_raw(),
+                    mesh_infos.descriptor_index.unwrap().to_raw(),
+                    draw_commands.descriptor_index.unwrap().to_raw(),
+                ]);
+                cmd.dispatch([scene_submesh_count / 256 + 1, 1, 1]);
+            }
+        );
+        
+        draw_commands
     }
 }
 
@@ -504,10 +550,7 @@ fn main() {
     utils::init_logger();
     puffin::set_scopes_on(true);
 
-    let Some(gltf_path) = std::env::args().nth(1) else {
-        println!("provide a path to a gltf file");
-        return;
-    };
+    let gltf_path = std::env::args().nth(1);
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -530,7 +573,7 @@ fn main() {
     let mut input = Input::new();
     let mut time = Time::new();
 
-    let mut app = App::new(&context, &gltf_path);
+    let mut app = App::new(&context, gltf_path.as_ref().map(|s| s.as_str()));
 
     event_loop.run(move |event, _target, control_flow| {
         if let Event::WindowEvent { event, .. } = &event {

@@ -1,0 +1,49 @@
+#version 460
+
+#include "common.glsl"
+#include "types.glsl"
+
+RegisterBuffer(SceneDraw, std430, readonly, {
+	uint submesh_count;
+    Submesh submeshes[];
+});
+
+RegisterBuffer(MeshInfos, std430, readonly, {
+    MeshInfo mesh_infos[];
+});
+
+RegisterBuffer(DrawCommands, std430, writeonly, {
+	uint draw_command_count;
+    DrawCommand draw_commands[];
+});
+
+BindSlot(SceneDraw, 0);
+BindSlot(MeshInfos, 1);
+BindSlot(DrawCommands, 2);
+
+layout (local_size_x = 256) in;
+
+void main() {
+    GetBuffer(DrawCommands).draw_command_count = 0;
+    uint gID = gl_GlobalInvocationID.x;
+	if (gID < GetBuffer(SceneDraw).submesh_count) {
+		Submesh submesh = GetBuffer(SceneDraw).submeshes[gID];
+		MeshInfo mesh_info = GetBuffer(MeshInfos).mesh_infos[submesh.mesh_index];
+
+		uint draw_index = atomicAdd(GetBuffer(DrawCommands).draw_command_count, 1);
+	
+		// GetBuffer(DrawCommands).draw_commands[draw_index].index_count 	 = 1;
+    	// GetBuffer(DrawCommands).draw_commands[draw_index].instance_count = 2;
+    	// GetBuffer(DrawCommands).draw_commands[draw_index].first_index    = 3;
+    	// GetBuffer(DrawCommands).draw_commands[draw_index].vertex_offset  = 4;
+    	// GetBuffer(DrawCommands).draw_commands[draw_index].first_instance = 5;
+    	// GetBuffer(DrawCommands).draw_commands[draw_index].material_index = 6;
+
+		GetBuffer(DrawCommands).draw_commands[draw_index].index_count 	 = mesh_info.index_count;
+    	GetBuffer(DrawCommands).draw_commands[draw_index].instance_count = 1;
+    	GetBuffer(DrawCommands).draw_commands[draw_index].first_index    = mesh_info.index_offset;
+    	GetBuffer(DrawCommands).draw_commands[draw_index].vertex_offset  = mesh_info.vertex_offset;
+    	GetBuffer(DrawCommands).draw_commands[draw_index].first_instance = submesh.entity_index;
+    	GetBuffer(DrawCommands).draw_commands[draw_index].material_index = submesh.material_index;
+	}
+}

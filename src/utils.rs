@@ -25,15 +25,21 @@ pub type Unsync = Cell<()>;
 pub type Unsend = MutexGuard<'static, ()>;
 
 pub fn init_logger() {
+    let file = Box::new(std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open("log.txt").unwrap());
+
     env_logger::builder()
         .parse_filters("panic,orbit,vulkan=warn")
-        .target(env_logger::Target::Stdout)
+        .target(env_logger::Target::Pipe(file))
         .init();
     log_panics::init();
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

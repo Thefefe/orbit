@@ -86,7 +86,11 @@ impl EguiRenderer {
                     color_blend: Some(render::ColorBlendState {
                         src_color_blend_factor: vk::BlendFactor::ONE,
                         dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-                        ..Default::default()
+                        color_blend_op: vk::BlendOp::ADD,
+                        src_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_DST_ALPHA,
+                        dst_alpha_blend_factor: vk::BlendFactor::ONE,
+                        alpha_blend_op: vk::BlendOp::ADD,
+                        
                     }),
                     ..Default::default()
                 }],
@@ -351,7 +355,7 @@ impl EguiRenderer {
     }
 
     pub fn destroy(&self, context: &render::Context) {
-        context.destroy_raster_pipeline(&self.pipeline);
+        context.destroy_pipeline(&self.pipeline);
         context.destroy_buffer(&self.index_buffer);
         context.destroy_buffer(&self.vertex_buffer);
         for image in self.textures.values() {

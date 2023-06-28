@@ -3,13 +3,6 @@
 #include "common.glsl"
 #include "types.glsl"
 
-layout(location = 0) in vec2 in_uv;
-layout(location = 1) in vec3 in_normal;
-layout(location = 2) in vec4 in_tangent;
-layout(location = 3) flat in uint in_material_index;
-
-layout(location = 0) out vec4 out_color;
-
 RegisterBuffer(PerFrameData, std430, readonly, {
     mat4 view_proj;
     uint render_mode;
@@ -40,24 +33,37 @@ vec3 srgb_to_linear(vec3 srgb) {
     return mix(higher, lower, cutoff);
 }
 
+layout(location = 0) in VertexOutput {
+    vec2 uv;
+    mat3 TBN;
+    flat uint material_index;
+} vout;
+
+layout(location = 0) out vec4 out_color;
+
 void main() {
-    MaterialData material = GetBuffer(Materials).materials[in_material_index];
+    MaterialData material = GetBuffer(Materials).materials[vout.material_index];
     uint render_mode = GetBuffer(PerFrameData).render_mode;    
 
+    vec4 default_normal = vec4(0.5, 0.5, 1.0, 0.0);
+    vec4 normal_tex = sample_texture_index_default(material.normal_texture_index, vout.uv, default_normal);
+    vec3 tang_normal = normalize(normal_tex.xyz * 2.0 - 1.0);
+    vec3 normal = vout.TBN * tang_normal;
+
     if (render_mode == 1) {
-        out_color = vec4(mod(in_uv, 1.0), 0.0, 1.0);
+        out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
     } else if (render_mode == 2) {
-        out_color = vec4((in_normal + vec3(1.0, 1.0, 1.0)) * 0.5, 1.0);
+        out_color = vec4(vout.TBN[2] * 0.5 + 0.5, 1.0);
     } else if (render_mode == 3) {
-        vec4 default_normal = vec4(0.5, 0.5, 1.0, 0.0);
-        vec4 normal = sample_texture_index_default(material.normal_texture_index, in_uv, default_normal);
-        out_color = vec4(normal.rgb, 1.0);
+        out_color = vec4(normal_tex.xyz, 1.0);
     } else if (render_mode == 4) {
+        out_color = vec4(normal.rgb * 0.5 + 0.5, 1.0);
+    } else if (render_mode == 5) {
         // uint ihash = hash(in_material_index);
         // vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;
-        out_color = vec4(vec3(float(in_material_index) / 255.0), 1.0);
+        out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);
     } else {
-        vec4 base_tex_color = sample_texture_index_default(material.base_texture_index, in_uv, vec4(1.0));
+        vec4 base_tex_color = sample_texture_index_default(material.base_texture_index, vout.uv, vec4(1.0));
         out_color = base_tex_color * material.base_color;
         
         if (out_color.a < 0.5) {

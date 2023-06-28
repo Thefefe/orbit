@@ -27,34 +27,39 @@ impl Transform {
         }
     }
 
-    pub fn transform(&self, transform: &mut Transform) {
-        transform.position += self.position;
-        transform.orientation *= self.orientation;
-        transform.scale *= self.scale;
-    }
+    pub fn from_mat4(mat: Mat4) -> Self {
+        let (scale, orientation, position) = mat.to_scale_rotation_translation();
+        Self { position, orientation, scale }
+    } 
 
     pub fn translate_relative(&mut self, translation: Vec3) {
         self.position += self.orientation * translation;
     }
 
-    pub fn compute_affine(&self) -> glam::Mat4 {
+    pub fn compute_matrix(&self) -> glam::Mat4 {
         Mat4::from_scale_rotation_translation(self.scale, self.orientation, self.position)
-    }
-
-    pub fn compute_linear(&self) -> Mat3 {
-        Mat3::from_mat4(self.compute_affine())
     }
 }
 
 pub struct EntityData {
+    pub name: Option<String>,
     pub transform: Transform,
     pub model: Option<ModelHandle>,
+}
+
+impl EntityData {
+    fn compute_gpu_data(&self) -> GpuEntityData {
+        let model_matrix = self.transform.compute_matrix();
+        let normal_matrix = Mat4::from_mat3(Mat3::from_mat4(model_matrix.inverse().transpose()));
+        GpuEntityData { model_matrix, normal_matrix }
+    }
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuEntityData {
     model_matrix: Mat4,
+    normal_matrix: Mat4,
 }
 
 #[repr(C)]
@@ -82,7 +87,7 @@ pub struct GpuDrawCommand {
 }
 
 pub struct SceneBuffer {
-    entities: Vec<EntityData>,
+    pub entities: Vec<EntityData>,
     pub entity_data_buffer: render::Buffer, 
     
     pub submesh_data: Vec<GpuSubmeshData>,
@@ -123,12 +128,10 @@ impl SceneBuffer {
 
     pub fn update_instances(&self, context: &render::Context) {
         for (index, entity) in self.entities.iter().enumerate() {
-            let instance = GpuEntityData {
-                model_matrix: entity.transform.compute_affine(),
-            };
+            let entity_data = entity.compute_gpu_data();
             context.immediate_write_buffer(
                 &self.entity_data_buffer,
-                bytemuck::bytes_of(&instance),
+                bytemuck::bytes_of(&entity_data),
                 index * std::mem::size_of::<GpuEntityData>()
             );
         }

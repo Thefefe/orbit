@@ -9,8 +9,9 @@ struct MeshVertex {
     vec4 tang;
 };
 
-struct EntityInstance {
+struct EntityData {
     mat4 model_matrix;
+    mat4 normal_matrix;
 };
 
 struct DrawCommand {

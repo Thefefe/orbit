@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use ash::vk;
-use glam::{Quat, Vec3, Vec4};
+use glam::{Vec4, Mat4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
@@ -311,28 +311,25 @@ pub fn load_gltf(
         scene: &mut SceneBuffer,
         model_lookup_table: &[ModelHandle],
         node: gltf::Node,
-        parent: Option<Transform>,
+        parent: Option<&Mat4>,
     ) {
-        let (position, orientation, scale) = node.transform().decomposed();
-        let mut transform = Transform {
-            position: Vec3::from_array(position),
-            orientation: Quat::from_array(orientation),
-            scale: Vec3::from_array(scale),
-        };
-
+        let mut transform_matrix = Mat4::from_cols_array_2d(&node.transform().matrix());
         if let Some(parent) = parent {
-            parent.transform(&mut transform);
+            transform_matrix = parent.mul_mat4(&transform_matrix);
         }
+        let transform = Transform::from_mat4(transform_matrix);
 
         let model = node.mesh().map(|gltf_mesh| model_lookup_table[gltf_mesh.index()]);
-        scene.add_entity(EntityData { transform, model });
+        let name = node.name().map(|str| str.to_owned());
+
+        scene.add_entity(EntityData { name, transform, model });
 
         for child in node.children() {
-            add_gltf_node(scene, model_lookup_table, child, Some(transform));
+            add_gltf_node(scene, model_lookup_table, child, Some(&transform_matrix));
         }
     }
 
-    for node in document.nodes() {
+    for node in document.scenes().next().unwrap().nodes() {
         add_gltf_node(scene, &model_lookup_table, node, None);
     }
 

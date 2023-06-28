@@ -43,8 +43,8 @@ struct CameraController {
 impl CameraController {
     #[rustfmt::skip]
     const CONTROL_KEYS: &[(KeyCode, glam::Vec3)] = &[
-        (KeyCode::W, glam::vec3(  0.0,  0.0,  1.0)),
-        (KeyCode::S, glam::vec3(  0.0,  0.0, -1.0)),
+        (KeyCode::W, glam::vec3(  0.0,  0.0, -1.0)),
+        (KeyCode::S, glam::vec3(  0.0,  0.0,  1.0)),
         (KeyCode::D, glam::vec3(  1.0,  0.0,  0.0)),
         (KeyCode::A, glam::vec3( -1.0,  0.0,  0.0)),
         (KeyCode::E, glam::vec3(  0.0,  1.0,  0.0)),
@@ -63,8 +63,8 @@ impl CameraController {
     pub fn update(&mut self, input: &Input, delta_time: f32, transform: &mut Transform) {
         if input.mouse_held(MouseButton::Right) {
             let mouse_delta = input.mouse_delta();
-            self.pitch += mouse_delta.x * self.mouse_sensitivity;
-            self.yaw = f32::clamp(self.yaw + -mouse_delta.y * self.mouse_sensitivity, -PI / 2.0, PI / 2.0);
+            self.pitch -= mouse_delta.x * self.mouse_sensitivity;
+            self.yaw = f32::clamp(self.yaw + mouse_delta.y * self.mouse_sensitivity, -PI / 2.0, PI / 2.0);
         }
 
         let mut move_dir = glam::Vec3::ZERO;
@@ -109,7 +109,7 @@ impl Projection {
         Projection::Perspective {
                 fov,
                 near_clip,
-            } => glam::Mat4::perspective_infinite_reverse_lh(fov, aspect_ratio, near_clip),
+            } => glam::Mat4::perspective_infinite_reverse_rh(fov, aspect_ratio, near_clip),
             Projection::Orthographic {
                 half_width,
                 near_clip,
@@ -137,7 +137,7 @@ impl Camera {
     #[inline]
     pub fn compute_matrix(&self, aspect_ratio: f32) -> glam::Mat4 {
         let proj = self.projection.compute_matrix(aspect_ratio);
-        let view = self.transform.compute_affine().inverse();
+        let view = self.transform.compute_matrix().inverse();
 
         proj * view
     }
@@ -162,6 +162,7 @@ struct App {
     camera: Camera,
     camera_controller: CameraController,
 
+    scene_editor_open: bool,
     graph_debugger_open: bool,
     profiler_open: bool,
 }
@@ -192,7 +193,7 @@ impl App {
                 rasterizer: render::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
-                    front_face: vk::FrontFace::CLOCKWISE,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                     cull_mode: vk::CullModeFlags::BACK,
                 },
                 color_attachments: &[render::PipelineColorAttachment {
@@ -251,6 +252,7 @@ impl App {
             },
             camera_controller: CameraController::new(1.0, 0.003),
 
+            scene_editor_open: false,
             profiler_open: false,
             graph_debugger_open: false,
         }
@@ -265,14 +267,49 @@ impl App {
         control_flow: &mut ControlFlow
     ) {
         puffin::profile_function!();
-        
-        self.camera_controller.update(input, time.delta().as_secs_f32(), &mut self.camera.transform);
 
+        let delta_time = time.delta().as_secs_f32();
+        
+        self.camera_controller.update(input, delta_time, &mut self.camera.transform);
+
+        if input.key_pressed(KeyCode::F1) {
+            self.scene_editor_open = !self.scene_editor_open;
+        }
         if input.key_pressed(KeyCode::F2) {
             self.graph_debugger_open = !self.graph_debugger_open;
         }
         if input.key_pressed(KeyCode::F3) {
             self.profiler_open = !self.profiler_open;
+        }
+
+        fn drag_vec3(ui: &mut egui::Ui, label: &str, vec: &mut Vec3, speed: f32) {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(egui::DragValue::new(&mut vec.x).speed(speed));
+                ui.add(egui::DragValue::new(&mut vec.y).speed(speed));
+                ui.add(egui::DragValue::new(&mut vec.z).speed(speed));
+            });
+        }
+
+        if self.scene_editor_open {
+            egui::Window::new("scene").open(&mut self.scene_editor_open).show(egui_ctx, |ui| {
+                for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
+                    let header = entity.name.as_ref().map_or(
+                        format!("entity_{entity_index}"),
+                        |name| format!("entity_{entity_index} ({name})")
+                    );
+                    ui.collapsing(header, |ui| {
+                        drag_vec3(ui, "position", &mut entity.transform.position, 0.001);
+    
+                        let (euler_x, euler_y, euler_z) = entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
+                        let mut euler = vec3(euler_x, euler_y, euler_z);
+                        drag_vec3(ui, "orientation", &mut euler, 0.05);
+                        entity.transform.orientation = Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
+    
+                        drag_vec3(ui, "scale", &mut entity.transform.scale, 0.001);
+                    });
+                }
+            });
         }
 
         const RENDER_MODES: &[KeyCode] = &[
@@ -360,6 +397,7 @@ impl App {
 
     fn render(&mut self, frame_ctx: &mut render::FrameContext) {
         puffin::profile_function!();
+        self.scene.update_instances(frame_ctx);
 
         let screen_extent = frame_ctx.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
@@ -422,7 +460,7 @@ impl App {
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
                         color: vk::ClearColorValue {
-                            float32: [0.1, 0.5, 0.9, 1.0],
+                            float32: [0.0, 0.0, 0.0, 1.0],
                         },
                     })
                     .store_op(vk::AttachmentStoreOp::STORE);

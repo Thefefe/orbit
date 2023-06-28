@@ -91,7 +91,7 @@ pub struct DepthState {
     pub compare: vk::CompareOp,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MultisampleCount {
     #[default] None,
     X2,

@@ -45,20 +45,18 @@ void main() {
     MaterialData material = GetBuffer(Materials).materials[vout.material_index];
     uint render_mode = GetBuffer(PerFrameData).render_mode;    
 
-    vec4 default_normal = vec4(0.5, 0.5, 1.0, 0.0);
-    vec4 normal_tex = sample_texture_index_default(material.normal_texture_index, vout.uv, default_normal);
-    vec3 tang_normal = normalize(normal_tex.xyz * 2.0 - 1.0);
-    vec3 normal = vout.TBN * tang_normal;
+    vec3 normal = vout.TBN[2];
+    if (material.normal_texture_index != TEXTURE_NONE) {
+        vec4 normal_tex = texture(GetSampledTextureByIndex(material.normal_texture_index), vout.uv);
+        vec3 tang_normal = normalize(normal_tex.xyz * 2.0 - 1.0);
+        normal = vout.TBN * tang_normal;
+    }
 
-    if (render_mode == 1) {
+    if (render_mode == 1) { // uv
         out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
-    } else if (render_mode == 2) {
-        out_color = vec4(vout.TBN[2] * 0.5 + 0.5, 1.0);
+    } else if (render_mode == 2) { // normal
+        out_color = vec4(normal * 0.5 + 0.5, 1.0);
     } else if (render_mode == 3) {
-        out_color = vec4(normal_tex.xyz, 1.0);
-    } else if (render_mode == 4) {
-        out_color = vec4(normal.rgb * 0.5 + 0.5, 1.0);
-    } else if (render_mode == 5) {
         // uint ihash = hash(in_material_index);
         // vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;
         out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);

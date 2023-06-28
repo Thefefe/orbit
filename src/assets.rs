@@ -109,8 +109,8 @@ pub type ModelHandle = arena::Index;
 pub type TextureHandle = arena::Index;
 pub type MaterialHandle = arena::Index;
 
-const MAX_VERTEX_COUNT: usize = 1_000_000;
-const MAX_INDEX_COUNT: usize = 1_000_000;
+const MAX_VERTEX_COUNT: usize = 4_000_000;
+const MAX_INDEX_COUNT: usize = 12_000_000;
 const MAX_MATERIAL_COUNT: usize = 1_000;
 
 pub struct GpuAssetStore {

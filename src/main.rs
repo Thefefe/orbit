@@ -169,6 +169,7 @@ struct App {
 
 impl App {
     const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
+    const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X8;
 
     fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
         let mesh_pipeline = {
@@ -207,7 +208,7 @@ impl App {
                     write: true,
                     compare: vk::CompareOp::GREATER,
                 }),
-                multisample: render::MultisampleCount::None,
+                multisample: Self::MULTISAMPLING,
             });
 
             context.destroy_shader_module(vertex_module);
@@ -245,7 +246,8 @@ impl App {
             
             camera: Camera {
                 transform: Transform {
-                    position: vec3(0.0, 2.0, -5.0),
+                    position: vec3(0.0, 2.0, 8.0),
+                    orientation: Quat::from_rotation_y(180.0f32.to_radians()),
                     ..Default::default()
                 },
                 projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.001 },
@@ -407,13 +409,28 @@ impl App {
                 self.camera.compute_matrix(aspect_ratio);
         }
 
+        
         let swapchain_image = frame_ctx.get_swapchain_image();
+        let (target_image, resolve_image) = if Self::MULTISAMPLING == render::MultisampleCount::None {
+            (swapchain_image, None)
+        } else {
+            let msaa_image = frame_ctx.create_transient_image("depth_image", render::ImageDesc {
+                format: frame_ctx.swapchain_format(),
+                width: screen_extent.width,
+                height: screen_extent.height,
+                mip_levels: 1,
+                samples: Self::MULTISAMPLING,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                aspect: vk::ImageAspectFlags::COLOR,
+            });
+            (msaa_image, Some(swapchain_image))
+        };
         let depth_image = frame_ctx.create_transient_image("depth_image", render::ImageDesc {
             format: Self::DEPTH_FORMAT,
             width: screen_extent.width,
             height: screen_extent.height,
             mip_levels: 1,
-            samples: render::MultisampleCount::None,
+            samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             aspect: vk::ImageAspectFlags::DEPTH,
         });
@@ -434,15 +451,22 @@ impl App {
 
         let pipeline = self.basic_pipeline;
 
+        let mut dependencies = vec![
+            (target_image, render::AccessKind::ColorAttachmentWrite),
+            (depth_image, render::AccessKind::DepthAttachmentWrite),
+            (draw_commands_buffer, render::AccessKind::IndirectBuffer),
+        ];
+
+        if let Some(resolve_image) = resolve_image {
+            dependencies.push((resolve_image, render::AccessKind::ColorAttachmentWrite));
+        }
+
         frame_ctx.add_pass(
             "mesh_pass",
-            &[
-                (swapchain_image, render::AccessKind::ColorAttachmentWrite),
-                (depth_image, render::AccessKind::DepthAttachmentWrite),
-                (draw_commands_buffer, render::AccessKind::IndirectBuffer),
-            ],
+            &dependencies,
             move |cmd, graph| {
-                let swapchain_image = graph.get_image(swapchain_image).unwrap();
+                let target_image = graph.get_image(target_image).unwrap();
+                let resolve_image = resolve_image.map(|handle| graph.get_image(handle).unwrap());
                 let depth_image = graph.get_image(depth_image).unwrap();
 
                 let globals_buffer = graph.get_buffer(globals_buffer).unwrap();
@@ -454,8 +478,8 @@ impl App {
                 let instance_buffer = graph.get_buffer(instance_buffer).unwrap();
                 let draw_commands_buffer = graph.get_buffer(draw_commands_buffer).unwrap();
 
-                let color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(swapchain_image.view)
+                let mut color_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(target_image.view)
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
@@ -464,6 +488,13 @@ impl App {
                         },
                     })
                     .store_op(vk::AttachmentStoreOp::STORE);
+
+                if let Some(resolve_image) = resolve_image {
+                    color_attachment = color_attachment
+                        .resolve_image_view(resolve_image.view)
+                        .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+                }
 
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
                     .image_view(depth_image.view)
@@ -478,7 +509,7 @@ impl App {
                     .store_op(vk::AttachmentStoreOp::STORE);
 
                 let rendering_info = vk::RenderingInfo::builder()
-                    .render_area(swapchain_image.full_rect())
+                    .render_area(target_image.full_rect())
                     .layer_count(1)
                     .color_attachments(std::slice::from_ref(&color_attachment))
                     .depth_attachment(&depth_attachemnt);

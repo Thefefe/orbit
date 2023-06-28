@@ -147,8 +147,8 @@ impl Camera {
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct PerFrameData {
     viewproj: Mat4,
+    view_pos: Vec3,
     render_mode: u32,
-    _padding: [u32; 3],
 }
 
 struct App {
@@ -169,7 +169,7 @@ struct App {
 
 impl App {
     const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X8;
+    const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X4;
 
     fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
         let mesh_pipeline = {

@@ -91,17 +91,34 @@ pub struct ModelData {
 #[derive(Debug, Clone, Copy)]
 pub struct MaterialData {
     pub base_color: Vec4,
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub occulusion_factor: f32,
+    pub emissive_factor: Vec3,
     pub base_texture: Option<TextureHandle>,
     pub normal_texture: Option<TextureHandle>,
+    pub metallic_roughness_texture: Option<TextureHandle>,
+    pub occulusion_texture: Option<TextureHandle>,
+    pub emissive_texture: Option<TextureHandle>,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMaterialData {
     base_color: Vec4,
+
+    emissive_factor: Vec3,
+    metallic_factor: f32,
+    roughness_factor: f32,
+    occulusion_factor: f32,
+    
     base_texture_index: u32,
     normal_texture_index: u32,
-    _padding: [u32; 2],
+    metallic_roughness_texture_index: u32,
+    occulusion_texture_index: u32,
+    emissive_texture_index: u32,
+    
+    _padding: u32,
 }
 
 pub type MeshHandle = arena::Index;
@@ -225,19 +242,37 @@ impl GpuAssetStore {
 
     pub fn add_material(&mut self, context: &render::Context, material_data: MaterialData) -> MaterialHandle {
         let index = self.material_indices.insert(material_data);
+        
         let base_texture_index = material_data.base_texture
             .map(|handle| self.get_texture_desc_index(handle))
             .unwrap_or(u32::MAX);
         let normal_texture_index = material_data.normal_texture
             .map(|handle| self.get_texture_desc_index(handle))
             .unwrap_or(u32::MAX);
-
+        let metallic_roughness_texture_index = material_data.metallic_roughness_texture
+            .map(|handle| self.get_texture_desc_index(handle))
+            .unwrap_or(u32::MAX);
+        let occulusion_texture_index = material_data.occulusion_texture
+            .map(|handle| self.get_texture_desc_index(handle))
+            .unwrap_or(u32::MAX);
+        let emissive_texture_index = material_data.emissive_texture
+            .map(|handle| self.get_texture_desc_index(handle))
+            .unwrap_or(u32::MAX);
 
         let gpu_data = GpuMaterialData {
             base_color: material_data.base_color,
+            emissive_factor: material_data.emissive_factor,
+            metallic_factor: material_data.metallic_factor,
+            roughness_factor: material_data.roughness_factor,
+            occulusion_factor: material_data.occulusion_factor,
+            
             base_texture_index,
             normal_texture_index,
-            _padding: [0; 2],
+            metallic_roughness_texture_index,
+            occulusion_texture_index,
+            emissive_texture_index,
+            
+            _padding: 0,
         };
 
         context.immediate_write_buffer(

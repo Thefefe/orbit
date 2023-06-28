@@ -3,9 +3,8 @@
 #include "common.glsl"
 #include "types.glsl"
 
-RegisterBuffer(PerFrameData, std430, readonly, {
-    mat4 view_proj;
-    uint render_mode;
+RegisterBuffer(PerFrameBuffer, std430, readonly, {
+    PerFrameData data;
 });
 
 RegisterBuffer(VertexBuffer, std430, readonly, {
@@ -21,23 +20,29 @@ RegisterBuffer(DrawCommands, std430, readonly, {
     DrawCommand draw_commands[];
 });
 
-BindSlot(PerFrameData, 0);
+BindSlot(PerFrameBuffer, 0);
 BindSlot(VertexBuffer, 1);
 BindSlot(EntityBuffer, 2);
 BindSlot(DrawCommands, 3);
 
 layout(location = 0) out VertexOutput {
+    vec3 world_pos;
     vec2 uv;
     mat3 TBN;
     flat uint material_index;
 } vout;
 
+vec4 pbr() {
+    return vec4(1.0);
+}
+
 void main() {
     MeshVertex vertex = GetBuffer(VertexBuffer).vertices[gl_VertexIndex];
     mat4 model_matrix = GetBuffer(EntityBuffer).entities[gl_InstanceIndex].model_matrix;
+    vout.world_pos = vec3(model_matrix * vec4(vertex.pos, 1.0));
 
     gl_Position =
-        GetBuffer(PerFrameData).view_proj *
+        GetBuffer(PerFrameBuffer).data.view_proj *
         model_matrix *
         vec4(vertex.pos, 1.0);
 

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use ash::vk;
-use glam::{Vec4, Mat4};
+use glam::{Vec4, Mat4, Vec3};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
@@ -59,7 +59,7 @@ fn load_texture(
     let mip_levels = f32::floor(f32::log2(max_size as f32)) as u32 + 1;
 
     let mut image = context.create_image(
-        &format!("gltf_image_{image_index}"),
+        format!("gltf_image_{image_index}"),
         &render::ImageDesc {
             format: if srgb {
                 vk::Format::R8G8B8A8_SRGB
@@ -246,16 +246,38 @@ pub fn load_gltf(
     let mut material_lookup_table = Vec::new();
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
-        let color = pbr.base_color_factor();
+        
         let base_texture = pbr.base_color_texture().map(|tex| get_texture(asset_store, tex.texture(), true));
         let normal_texture = material.normal_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
+        let metallic_roughness_texture = pbr
+            .metallic_roughness_texture()
+            .map(|tex| get_texture(asset_store, tex.texture(), false));
+        let occulusion_texture = material
+            .occlusion_texture()
+            .map(|tex| get_texture(asset_store, tex.texture(), false));
+        let emissive_texture = material.emissive_texture().map(|tex| get_texture(asset_store, tex.texture(), true));
+
+        let base_color = Vec4::from_array(pbr.base_color_factor());
+        let metallic_factor = pbr.metallic_factor();
+        let roughness_factor = pbr.roughness_factor();
+        let occulusion_factor = material.occlusion_texture().map_or(0.0, |tex| tex.strength());
+        let emissive_factor = Vec3::from_array(material.emissive_factor());
 
         let handle = asset_store.add_material(
             context,
             MaterialData {
-                base_color: Vec4::from_array(color),
+                base_color,
+                emissive_factor,
+                metallic_factor,
+                roughness_factor,
+                occulusion_factor,
+                
                 base_texture,
                 normal_texture,
+                metallic_roughness_texture,
+                occulusion_texture,
+                emissive_texture,
+                
             },
         );
         material_lookup_table.push(handle);

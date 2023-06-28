@@ -621,6 +621,7 @@ impl Device {
         &self,
         alloc_desc: &AllocationCreateDesc,
     ) -> (AllocIndex, vk::DeviceMemory, u64, Option<NonNull<u8>>) {
+        puffin::profile_function!(alloc_desc.name);
         let mut allocator_stuff = self.allocator_stuff.lock().unwrap();
         let allocation = allocator_stuff.allocator.allocate(alloc_desc)
             .expect("failed to allocate memory");
@@ -635,6 +636,7 @@ impl Device {
     }
 
     pub fn deallocate(&self, AllocIndex(index): AllocIndex) {
+        puffin::profile_function!();
         let mut allocator_stuff = self.allocator_stuff.lock().unwrap();
         if let Some(allocation) = allocator_stuff.allocations.remove(index) {
             allocator_stuff.allocator.free(allocation).expect("failed to deallocate memory");

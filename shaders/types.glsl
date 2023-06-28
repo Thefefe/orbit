@@ -1,3 +1,9 @@
+struct PerFrameData {
+    mat4 view_proj;
+    vec3 view_pos;
+    uint render_mode;
+};
+
 struct MeshVertex {
     vec3 pos;
     uint _padding0;
@@ -29,10 +35,20 @@ struct DrawCommand {
 };
 
 struct MaterialData {
-    vec4 base_color;
+    vec4  base_color;
+
+    vec3  emissive_factor;
+    float metallic_factor;
+    float roughness_factor;
+    float occulusion_factor;
+    
     uint base_texture_index;
     uint normal_texture_index;
-    vec2 _padding;
+    uint metallic_roughness_texture_index;
+    uint occulusion_texture_index;
+    uint emissive_texture_index;
+    
+    uint _padding;
 };
 
 struct Submesh {

@@ -1,12 +1,13 @@
-use std::ops::Range;
+use std::{ops::Range, borrow::Cow};
 
 use crate::render;
 use ash::vk;
 use gpu_allocator::{MemoryLocation, vulkan::{AllocationCreateDesc, AllocationScheme}};
 use render::AccessKind;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Image {
+    pub name: Cow<'static, str>,
     pub image_view: render::ImageView,
     alloc_index: render::AllocIndex,
 }
@@ -34,9 +35,10 @@ impl Image {
     pub(super) fn create_impl(
         device: &render::Device,
         descriptors: &render::BindlessDescriptors,
-        name: &str,
+        name: Cow<'static, str>,
         desc: &ImageDesc
     ) -> Image {
+        puffin::profile_function!(&name);
         let create_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::TYPE_2D)
             .extent(vk::Extent3D {
@@ -55,12 +57,12 @@ impl Image {
 
         let handle = unsafe { device.raw.create_image(&create_info, None).unwrap() };
 
-        device.set_debug_name(handle, name);
+        device.set_debug_name(handle, &name);
 
         let requirements = unsafe { device.raw.get_image_memory_requirements(handle) };
 
         let (memory, vk_memory, offset, _) = device.allocate(&AllocationCreateDesc {
-            name,
+            name: &name,
             requirements,
             location: MemoryLocation::GpuOnly,
             linear: false,
@@ -98,6 +100,7 @@ impl Image {
         };
 
         Image {
+            name,
             image_view: render::ImageView {
                 handle,
                 descriptor_index,
@@ -111,12 +114,14 @@ impl Image {
     }
 
     pub(super) fn destroy_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, image: &render::Image) {
-        unsafe {
-            device.raw.destroy_image_view(image.view, None);
-            device.raw.destroy_image(image.handle, None);
-        }
+        puffin::profile_function!(&image.name);
         if let Some(descriptor_index) = image.descriptor_index {
             descriptors.free_descriptor_index(descriptor_index);
+        }
+        unsafe {
+            puffin::profile_scope!("free_vulkan_resources");
+            device.raw.destroy_image_view(image.view, None);
+            device.raw.destroy_image(image.handle, None);
         }
         device.deallocate(image.alloc_index);
     }
@@ -129,13 +134,13 @@ impl Image {
 }
 
 impl render::Context {
-    pub fn create_image(&self, name: &str, desc: &ImageDesc) -> Image {
-        Image::create_impl(&self.device, &self.descriptors, name, desc)
+    pub fn create_image(&self, name: impl Into<Cow<'static, str>>, desc: &ImageDesc) -> Image {
+        Image::create_impl(&self.device, &self.descriptors, name.into(), desc)
     }
 
     pub fn immediate_write_image(
         &self,
-        image: &render::Image,
+        image: &render::ImageView,
         mip_level: u32,
         layers: Range<u32>,
         prev_access: AccessKind,

@@ -228,14 +228,14 @@ impl EguiRenderer {
         };
 
         let (image, is_new) = if let Some(image) = self.textures.get(&id) {
-            (*image, false)
+            (image.image_view, false)
         } else {
             let (source, number) = match id {
                 egui::TextureId::Managed(number) => ("managed", number),
                 egui::TextureId::User(number) => ("user", number),
             };
 
-            let image = context.create_image(&format!("egui_image_{source}_{number}"), &render::ImageDesc {
+            let image = context.create_image(format!("egui_image_{source}_{number}"), &render::ImageDesc {
                 format: Self::IMAGE_FORMAT,
                 width: width as u32,
                 height: height as u32,
@@ -244,9 +244,9 @@ impl EguiRenderer {
                 usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
             });
-
+            let image_view = image.image_view;
             self.textures.insert(id, image);
-            (image, true)
+            (image_view, true)
         };
 
         let offset = delta

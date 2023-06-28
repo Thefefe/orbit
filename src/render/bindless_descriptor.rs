@@ -280,6 +280,7 @@ impl BindlessDescriptors {
     }
 
     pub fn alloc_buffer_resource(&self, device: &render::Device, handle: vk::Buffer) -> BufferDescriptorIndex {
+        puffin::profile_function!();
         let index = self.global_index_allocator.alloc();
 
         unsafe {

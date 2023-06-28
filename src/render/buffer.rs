@@ -1,11 +1,12 @@
-use std::ptr::NonNull;
+use std::{ptr::NonNull, borrow::Cow};
 
 use ash::vk;
 use gpu_allocator::{vulkan::{AllocationScheme, AllocationCreateDesc}, MemoryLocation};
 use crate::render;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Buffer {
+    pub name: Cow<'static, str>,
     pub(super) buffer_view: render::BufferView,
     pub alloc_index: render::AllocIndex,
     pub usage: vk::BufferUsageFlags,
@@ -31,9 +32,10 @@ impl Buffer {
     pub(super) fn create_impl(
         device: &render::Device,
         descriptors: &render::BindlessDescriptors,
-        name: &str,
+        name: Cow<'static, str>,
         desc: &BufferDesc
     ) -> Buffer {
+        puffin::profile_function!(&name);
         let create_info = vk::BufferCreateInfo::builder()
             .size(desc.size as u64)
             .usage(desc.usage)
@@ -44,7 +46,7 @@ impl Buffer {
         let requirements = unsafe { device.raw.get_buffer_memory_requirements(handle) };
 
         let (alloc_index, memory, offset, mapped_ptr) = device.allocate(&AllocationCreateDesc {
-            name,
+            name: &name,
             requirements,
             location: desc.memory_location,
             linear: true,
@@ -61,9 +63,10 @@ impl Buffer {
             None
         };
 
-        device.set_debug_name(handle, name);
+        device.set_debug_name(handle, &name);
 
         Buffer {
+            name,
             buffer_view: render::BufferView {
                 handle,
                 descriptor_index,
@@ -76,10 +79,12 @@ impl Buffer {
     }
 
     pub(super) fn destroy_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, buffer: &Buffer) {
+        puffin::profile_function!(&buffer.name);
         if let Some(index) = buffer.descriptor_index {
             descriptors.free_descriptor_index(index);
         }
         unsafe {
+            puffin::profile_scope!("free_vulkan_resources");
             device.raw.destroy_buffer(buffer.handle, None);
         }
         device.deallocate(buffer.alloc_index);
@@ -87,18 +92,18 @@ impl Buffer {
 }
 
 impl render::Context {
-    pub fn create_buffer(&self, name: &str, desc: &BufferDesc) -> Buffer {
-        Buffer::create_impl(&self.device, &self.descriptors, name, desc)
+    pub fn create_buffer(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc) -> Buffer {
+        Buffer::create_impl(&self.device, &self.descriptors, name.into(), desc)
     }
 
-    pub fn create_buffer_init(&self, name: &str, desc: &BufferDesc, init: &[u8]) -> Buffer {
+    pub fn create_buffer_init(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc, init: &[u8]) -> Buffer {
         let mut desc = *desc;
         
         if desc.memory_location != MemoryLocation::CpuToGpu {
             desc.usage |= vk::BufferUsageFlags::TRANSFER_DST;
         }
 
-        let buffer = Buffer::create_impl(&self.device, &self.descriptors, name, &desc);
+        let buffer = Buffer::create_impl(&self.device, &self.descriptors, name.into(), &desc);
         self.immediate_write_buffer(&buffer, init, 0);
 
         buffer
@@ -115,11 +120,16 @@ impl render::Context {
                 std::ptr::copy_nonoverlapping(data.as_ptr(), mapped_ptr.as_ptr().add(offset), copy_size);
             }
         } else {
-            let scratch_buffer = Buffer::create_impl(&self.device, &self.descriptors, "scratch_bubbfer", &BufferDesc {
-                size: copy_size,
-                usage: vk::BufferUsageFlags::TRANSFER_SRC,
-                memory_location: MemoryLocation::CpuToGpu,
-            });
+            let scratch_buffer = Buffer::create_impl(
+                &self.device,
+                &self.descriptors,
+                "scratch_bubbfer".into(),
+                &BufferDesc {
+                    size: copy_size,
+                    usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                    memory_location: MemoryLocation::CpuToGpu,
+                }
+            );
 
             unsafe {
                 std::ptr::copy_nonoverlapping(data.as_ptr(), scratch_buffer.mapped_ptr.unwrap().as_ptr(), copy_size);

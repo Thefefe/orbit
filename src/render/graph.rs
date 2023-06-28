@@ -46,7 +46,7 @@ impl RenderResource for render::Image {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum AnyResource {
     Buffer(render::Buffer),
     Image(render::Image),
@@ -390,6 +390,7 @@ impl RenderGraph {
         let sorted_passes = self.topology_sort();
 
         for resource_data in self.resources.iter_mut() {
+            // TODO: allocations can be reduces here by not having the names in both the resource and the GraphResource
             let mut name = String::new();
             std::mem::swap(&mut name, &mut resource_data.name);
             match &resource_data.source {
@@ -405,7 +406,7 @@ impl RenderGraph {
                             let buffer = render::Buffer::create_impl(
                                 device,
                                 descriptors,
-                                &resource_data.name,
+                                resource_data.name.clone().into(),
                                 desc
                             );
                             
@@ -419,7 +420,7 @@ impl RenderGraph {
                             let image = render::Image::create_impl(
                                 device,
                                 descriptors,
-                                &resource_data.name,
+                                resource_data.name.clone().into(),
                                 desc
                             );
                             

@@ -149,6 +149,8 @@ struct PerFrameData {
     viewproj: Mat4,
     view_pos: Vec3,
     render_mode: u32,
+    light_direction: Vec3,
+    _padding: u32,
 }
 
 struct App {
@@ -161,6 +163,7 @@ struct App {
 
     camera: Camera,
     camera_controller: CameraController,
+    light_direction: Vec3,
 
     scene_editor_open: bool,
     graph_debugger_open: bool,
@@ -253,6 +256,7 @@ impl App {
                 projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.001 },
             },
             camera_controller: CameraController::new(1.0, 0.003),
+            light_direction: vec3(1.0, 1.0, 1.0),
 
             scene_editor_open: false,
             profiler_open: false,
@@ -295,6 +299,7 @@ impl App {
 
         if self.scene_editor_open {
             egui::Window::new("scene").open(&mut self.scene_editor_open).show(egui_ctx, |ui| {
+                drag_vec3(ui, "light_direction", &mut self.light_direction, 0.001);
                 for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
                     let header = entity.name.as_ref().map_or(
                         format!("entity_{entity_index}"),
@@ -405,8 +410,10 @@ impl App {
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
         unsafe {
-            self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().viewproj = 
-                self.camera.compute_matrix(aspect_ratio);
+            let per_frame_data = self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut();
+            per_frame_data.viewproj = self.camera.compute_matrix(aspect_ratio);
+            per_frame_data.view_pos = self.camera.transform.position;
+            per_frame_data.light_direction = self.light_direction;
         }
         
         let swapchain_image = frame_ctx.get_swapchain_image();

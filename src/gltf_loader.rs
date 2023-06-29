@@ -329,11 +329,13 @@ pub fn load_gltf(
                 have_normals = true;
             }
 
-            if !have_tangents && have_normals && have_uvs {
-                log::info!("generating tangents for model '{name}' primitive {prim_index}...");
-                mesh_data.compute_tangents();
-            } else {
-                log::warn!("can't generate tangents for '{name}' primitive {prim_index}, becouse it hase no uv coordinates");
+            if !have_tangents {
+                if have_normals && have_uvs {
+                    log::info!("generating tangents for model '{name}' primitive {prim_index}...");
+                    mesh_data.compute_tangents();
+                } else {
+                    log::warn!("can't generate tangents for '{name}' primitive {prim_index}, becouse it hase no uv coordinates");
+                }
             }
 
             let mesh_handle = asset_store.add_mesh(context, &mesh_data);

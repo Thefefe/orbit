@@ -32,10 +32,6 @@ layout(location = 0) out VertexOutput {
     flat uint material_index;
 } vout;
 
-vec4 pbr() {
-    return vec4(1.0);
-}
-
 void main() {
     MeshVertex vertex = GetBuffer(VertexBuffer).vertices[gl_VertexIndex];
     mat4 model_matrix = GetBuffer(EntityBuffer).entities[gl_InstanceIndex].model_matrix;

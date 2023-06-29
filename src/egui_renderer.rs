@@ -152,7 +152,7 @@ impl EguiRenderer {
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_primitive.primitive {
                 if vertex_cursor as usize + mesh.vertices.len() > Self::MAX_VERTEX_COUNT ||
                    index_cursor as usize + mesh.indices.len() > Self::MAX_INDEX_COUNT {
-                    log::error!("egui buffers are full, but there are to draw");
+                    log::error!("egui buffers are full, but there are more to draw");
                     break;
                 }
 

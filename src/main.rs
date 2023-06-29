@@ -246,7 +246,7 @@ impl App {
             
             camera: Camera {
                 transform: Transform {
-                    position: vec3(0.0, 2.0, 8.0),
+                    position: vec3(0.0, 2.0, 0.0),
                     orientation: Quat::from_rotation_y(180.0f32.to_radians()),
                     ..Default::default()
                 },
@@ -408,13 +408,12 @@ impl App {
             self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().viewproj = 
                 self.camera.compute_matrix(aspect_ratio);
         }
-
         
         let swapchain_image = frame_ctx.get_swapchain_image();
         let (target_image, resolve_image) = if Self::MULTISAMPLING == render::MultisampleCount::None {
             (swapchain_image, None)
         } else {
-            let msaa_image = frame_ctx.create_transient_image("depth_image", render::ImageDesc {
+            let msaa_image = frame_ctx.create_transient_image("msaa_image", render::ImageDesc {
                 format: frame_ctx.swapchain_format(),
                 width: screen_extent.width,
                 height: screen_extent.height,

@@ -298,13 +298,17 @@ pub fn load_gltf(
 
             let name = mesh.name().unwrap_or("unnamed");
 
-            if reader.read_tex_coords(0).is_none() {
+            let have_uvs = reader.read_tex_coords(0).is_some();
+            let mut have_normals = reader.read_normals().is_some();
+            let have_tangents = reader.read_tangents().is_some();
+
+            if !have_uvs {
                 log::warn!("model '{name}' primitive {prim_index} has no uv coordinates");
             }
-            if reader.read_normals().is_none() {
+            if !have_normals {
                 log::warn!("model '{name}' primitive {prim_index} has no normals");
             }
-            if reader.read_tangents().is_none() {
+            if !have_tangents {
                 log::warn!("model '{name}' primitive {prim_index} has no tangents");
             }
 
@@ -318,6 +322,19 @@ pub fn load_gltf(
 
             mesh_data.vertices.extend(vertices);
             mesh_data.indices.extend(indices);
+
+            if !have_normals {
+                log::info!("generating normals for model '{name}' primitive {prim_index}...");
+                mesh_data.compute_normals();
+                have_normals = true;
+            }
+
+            if !have_tangents && have_normals && have_uvs {
+                log::info!("generating tangents for model '{name}' primitive {prim_index}...");
+                mesh_data.compute_tangents();
+            } else {
+                log::warn!("can't generate tangents for '{name}' primitive {prim_index}, becouse it hase no uv coordinates");
+            }
 
             let mesh_handle = asset_store.add_mesh(context, &mesh_data);
             submeshes.push(Submesh {

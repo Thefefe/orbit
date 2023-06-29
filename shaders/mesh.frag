@@ -74,7 +74,7 @@ void main() {
     }
 
     if (material.occulusion_texture_index != TEXTURE_NONE) {
-        ao = texture(GetSampledTextureByIndex(material.occulusion_texture_index), vout.uv).r;
+        ao = 1.0 - texture(GetSampledTextureByIndex(material.occulusion_texture_index), vout.uv).r;
     }
 
     if (render_mode == 1) { // uv

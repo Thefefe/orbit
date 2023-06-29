@@ -123,7 +123,7 @@ impl render::Context {
             let scratch_buffer = Buffer::create_impl(
                 &self.device,
                 &self.descriptors,
-                "scratch_bubbfer".into(),
+                "scratch_buffer".into(),
                 &BufferDesc {
                     size: copy_size,
                     usage: vk::BufferUsageFlags::TRANSFER_SRC,

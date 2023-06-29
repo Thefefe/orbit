@@ -127,17 +127,17 @@ impl SceneBuffer {
     }
 
     pub fn update_instances(&self, context: &render::Context) {
-        for (index, entity) in self.entities.iter().enumerate() {
-            let entity_data = entity.compute_gpu_data();
-            context.immediate_write_buffer(
-                &self.entity_data_buffer,
-                bytemuck::bytes_of(&entity_data),
-                index * std::mem::size_of::<GpuEntityData>()
-            );
-        }
+        puffin::profile_function!();
+        let entity_datas: Vec<_> = self.entities.iter().map(EntityData::compute_gpu_data).collect();
+        context.immediate_write_buffer(
+            &self.entity_data_buffer,
+            bytemuck::cast_slice(&entity_datas),
+            0
+        );
     }
 
     pub fn update_submeshes(&mut self, context: &render::Context, assets: &GpuAssetStore) {
+        puffin::profile_function!();
         self.submesh_data.clear();
         for (entity_index, entity) in self.entities.iter().enumerate() {
             if let Some(model) = entity.model {

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, borrow::Cow};
 
 use ash::vk;
 use glam::{Vec4, Mat4, Vec3};
@@ -10,25 +10,181 @@ use crate::{
     scene::{EntityData, SceneBuffer, Transform},
 };
 
-fn load_image_data(
+fn dxgi_format_to_vk(format : ddsfile::DxgiFormat) -> Option<vk::Format> {
+    let vk_format = match format {
+        ddsfile::DxgiFormat::R32G32B32A32_Typeless      => vk::Format::R32G32B32A32_SINT,
+        ddsfile::DxgiFormat::R32G32B32A32_Float         => vk::Format::R32G32B32A32_SFLOAT,
+        ddsfile::DxgiFormat::R32G32B32A32_UInt          => vk::Format::R32G32B32A32_UINT,
+        ddsfile::DxgiFormat::R32G32B32A32_SInt          => vk::Format::R32G32B32A32_UINT,
+        ddsfile::DxgiFormat::R32G32B32_Typeless         => vk::Format::R32G32B32_SINT,
+        ddsfile::DxgiFormat::R32G32B32_Float            => vk::Format::R32G32B32_SFLOAT,
+        ddsfile::DxgiFormat::R32G32B32_UInt             => vk::Format::R32G32B32_UINT,
+        ddsfile::DxgiFormat::R32G32B32_SInt             => vk::Format::R32G32B32_SINT,
+        ddsfile::DxgiFormat::R16G16B16A16_Typeless      => vk::Format::R16G16B16A16_SINT,
+        ddsfile::DxgiFormat::R16G16B16A16_Float         => vk::Format::R16G16B16A16_SFLOAT,
+        ddsfile::DxgiFormat::R16G16B16A16_UNorm         => vk::Format::R16G16B16A16_UNORM,
+        ddsfile::DxgiFormat::R16G16B16A16_UInt          => vk::Format::R16G16B16A16_UINT,
+        ddsfile::DxgiFormat::R16G16B16A16_SNorm         => vk::Format::R16G16B16A16_SNORM,
+        ddsfile::DxgiFormat::R16G16B16A16_SInt          => vk::Format::R16G16B16A16_SINT,
+        ddsfile::DxgiFormat::R32G32_Typeless            => vk::Format::R32G32_SINT,
+        ddsfile::DxgiFormat::R32G32_Float               => vk::Format::R32G32_SFLOAT,
+        ddsfile::DxgiFormat::R32G32_UInt                => vk::Format::R32G32_UINT,
+        ddsfile::DxgiFormat::R32G32_SInt                => vk::Format::R32G32_SINT,
+        ddsfile::DxgiFormat::R10G10B10A2_Typeless       => vk::Format::A2R10G10B10_SINT_PACK32,
+        ddsfile::DxgiFormat::R10G10B10A2_UNorm          => vk::Format::A2R10G10B10_UNORM_PACK32,
+        ddsfile::DxgiFormat::R10G10B10A2_UInt           => vk::Format::A2R10G10B10_UINT_PACK32,
+        ddsfile::DxgiFormat::R8G8B8A8_Typeless          => vk::Format::R8G8B8A8_SINT,
+        ddsfile::DxgiFormat::R8G8B8A8_UNorm             => vk::Format::R8G8B8A8_UNORM,
+        ddsfile::DxgiFormat::R8G8B8A8_UNorm_sRGB        => vk::Format::R8G8B8A8_SRGB,
+        ddsfile::DxgiFormat::R8G8B8A8_UInt              => vk::Format::R8G8B8A8_UINT,
+        ddsfile::DxgiFormat::R8G8B8A8_SNorm             => vk::Format::R8G8B8A8_SNORM,
+        ddsfile::DxgiFormat::R8G8B8A8_SInt              => vk::Format::R8G8B8A8_SINT,
+        ddsfile::DxgiFormat::R16G16_Typeless            => vk::Format::R16G16_SINT,
+        ddsfile::DxgiFormat::R16G16_Float               => vk::Format::R16G16_SFLOAT,
+        ddsfile::DxgiFormat::R16G16_UNorm               => vk::Format::R16G16_UNORM,
+        ddsfile::DxgiFormat::R16G16_UInt                => vk::Format::R16G16_UINT,
+        ddsfile::DxgiFormat::R16G16_SNorm               => vk::Format::R16G16_SNORM,
+        ddsfile::DxgiFormat::R16G16_SInt                => vk::Format::R16G16_SINT,
+        ddsfile::DxgiFormat::R32_Typeless               => vk::Format::R32_SINT,
+        ddsfile::DxgiFormat::D32_Float                  => vk::Format::D32_SFLOAT,
+        ddsfile::DxgiFormat::R32_Float                  => vk::Format::R32_SFLOAT,
+        ddsfile::DxgiFormat::R32_UInt                   => vk::Format::R32_UINT,
+        ddsfile::DxgiFormat::R32_SInt                   => vk::Format::R32_SINT,
+        ddsfile::DxgiFormat::D24_UNorm_S8_UInt          => vk::Format::D24_UNORM_S8_UINT,
+        ddsfile::DxgiFormat::R8G8_Typeless              => vk::Format::R8G8_SINT,
+        ddsfile::DxgiFormat::R8G8_UNorm                 => vk::Format::R8G8_UNORM,
+        ddsfile::DxgiFormat::R8G8_UInt                  => vk::Format::R8G8_UINT,
+        ddsfile::DxgiFormat::R8G8_SNorm                 => vk::Format::R8G8_SNORM,
+        ddsfile::DxgiFormat::R8G8_SInt                  => vk::Format::R8G8_SINT,
+        ddsfile::DxgiFormat::R16_Typeless               => vk::Format::R16_SINT,
+        ddsfile::DxgiFormat::R16_Float                  => vk::Format::R16_SFLOAT,
+        ddsfile::DxgiFormat::D16_UNorm                  => vk::Format::D16_UNORM,
+        ddsfile::DxgiFormat::R16_UNorm                  => vk::Format::R16_UNORM,
+        ddsfile::DxgiFormat::R16_UInt                   => vk::Format::R16_UINT,
+        ddsfile::DxgiFormat::R16_SNorm                  => vk::Format::R16_SNORM,
+        ddsfile::DxgiFormat::R16_SInt                   => vk::Format::R16_SINT,
+        ddsfile::DxgiFormat::R8_Typeless                => vk::Format::R8_SINT,
+        ddsfile::DxgiFormat::R8_UNorm                   => vk::Format::R8_UNORM,
+        ddsfile::DxgiFormat::R8_UInt                    => vk::Format::R8_UINT,
+        ddsfile::DxgiFormat::R8_SNorm                   => vk::Format::R8_SNORM,
+        ddsfile::DxgiFormat::R8_SInt                    => vk::Format::R8_SINT,
+        ddsfile::DxgiFormat::R9G9B9E5_SharedExp         => vk::Format::E5B9G9R9_UFLOAT_PACK32,
+        ddsfile::DxgiFormat::BC1_Typeless               => vk::Format::BC1_RGBA_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC1_UNorm                  => vk::Format::BC1_RGBA_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC1_UNorm_sRGB             => vk::Format::BC1_RGBA_SRGB_BLOCK,
+        ddsfile::DxgiFormat::BC2_Typeless               => vk::Format::BC2_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC2_UNorm                  => vk::Format::BC2_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC2_UNorm_sRGB             => vk::Format::BC2_SRGB_BLOCK,
+        ddsfile::DxgiFormat::BC3_Typeless               => vk::Format::BC3_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC3_UNorm                  => vk::Format::BC3_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC3_UNorm_sRGB             => vk::Format::BC3_SRGB_BLOCK,
+        ddsfile::DxgiFormat::BC4_Typeless               => vk::Format::BC4_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC4_UNorm                  => vk::Format::BC4_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC4_SNorm                  => vk::Format::BC4_SNORM_BLOCK,
+        ddsfile::DxgiFormat::BC5_Typeless               => vk::Format::BC5_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC5_UNorm                  => vk::Format::BC5_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC5_SNorm                  => vk::Format::BC5_SNORM_BLOCK,
+        ddsfile::DxgiFormat::B5G6R5_UNorm               => vk::Format::B5G6R5_UNORM_PACK16,
+        ddsfile::DxgiFormat::B5G5R5A1_UNorm             => vk::Format::B5G5R5A1_UNORM_PACK16,
+        ddsfile::DxgiFormat::B8G8R8A8_UNorm             => vk::Format::B8G8R8A8_UNORM,
+        ddsfile::DxgiFormat::B8G8R8A8_Typeless          => vk::Format::B8G8R8A8_SINT,
+        ddsfile::DxgiFormat::B8G8R8A8_UNorm_sRGB        => vk::Format::B8G8R8A8_SRGB,
+        ddsfile::DxgiFormat::BC6H_Typeless              => vk::Format::BC6H_SFLOAT_BLOCK,
+        ddsfile::DxgiFormat::BC6H_UF16                  => vk::Format::BC6H_UFLOAT_BLOCK,
+        ddsfile::DxgiFormat::BC6H_SF16                  => vk::Format::BC6H_SFLOAT_BLOCK,
+        ddsfile::DxgiFormat::BC7_Typeless               => vk::Format::BC7_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC7_UNorm                  => vk::Format::BC7_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC7_UNorm_sRGB             => vk::Format::BC7_SRGB_BLOCK,
+        _ => return None,
+    };
+    Some(vk_format)
+}
+
+fn next_mip_size(prev: u32) -> u32 {
+    if prev > 1 { prev / 2 } else { 1 }
+}
+
+// taken from https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-file-layout-for-textures
+fn tex_level_size(width: usize, height: usize, min_mip_size: usize) -> usize {
+    usize::max(1, (width + 3) / 4 ) * usize::max(1, (height + 3) / 4 ) * min_mip_size
+}
+
+fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin: &[u8]) -> render::Image {
+    let dds = ddsfile::Dds::read(bin).unwrap();
+
+    let dxgi_format = dds.get_dxgi_format().unwrap();
+    let format = dxgi_format_to_vk(dxgi_format).unwrap();
+    let width = dds.get_width();
+    let height = dds.get_height();
+    let mip_levels = dds.get_num_mipmap_levels().max(1);
+    assert!(mip_levels >= 1);
+
+    let image = context.create_image(name, &render::ImageDesc {
+        format,
+        width,
+        height,
+        mip_levels,
+        samples: render::MultisampleCount::None,
+        usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+        aspect: vk::ImageAspectFlags::COLOR,
+    });
+
+    let data = dds.get_data(0).unwrap();
+
+    let scratch_buffer = context.create_buffer_init("scratch_buffer", &render::BufferDesc {
+        size: data.len(),
+        usage: vk::BufferUsageFlags::TRANSFER_SRC,
+        memory_location: MemoryLocation::CpuToGpu,
+    }, data);
+
+    let min_mip_size = dds.get_min_mipmap_size_in_bytes();
+
+    context.record_and_submit(|cmd| {
+        use render::AccessKind;
+        cmd.barrier(&[], &[render::image_barrier(&image, AccessKind::None, AccessKind::TransferWrite)], &[]);
+
+        let mut buffer_offset = 0;
+        let mut dimensions = [width, height];
+
+        for mip_level in 0..mip_levels {
+            let [width, height] = dimensions;
+
+            cmd.copy_buffer_to_image(&scratch_buffer, &image, &[vk::BufferImageCopy {
+                buffer_offset,
+                buffer_row_length: 0,
+                buffer_image_height: 0,
+                image_subresource: image.subresource_layers(mip_level, 0..1),
+                image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                image_extent: vk::Extent3D { width, height, depth: 1 },
+            }]);
+
+            buffer_offset += tex_level_size(width as usize, height as usize, min_mip_size as usize) as u64;
+            dimensions = dimensions.map(next_mip_size);
+        }
+
+
+        cmd.barrier(&[], &[render::image_barrier(&image, AccessKind::TransferWrite, AccessKind::AllGraphicsRead)], &[]);
+    });
+
+    context.destroy_buffer(&scratch_buffer);
+
+    image
+}
+
+fn load_image_data<'a>(
     base_path: &Path,
     source: gltf::image::Source,
-    buffers: &[Vec<u8>],
-) -> Result<image::RgbaImage, image::ImageError> {
+    buffers: &'a [Vec<u8>],
+) -> Result<(Cow<'a, [u8]>, image::ImageFormat), image::ImageError> {
     match source {
         gltf::image::Source::View { view, mime_type } => {
             let buffer = &buffers[view.buffer().index()];
             let data = &buffer[view.offset()..view.offset() + view.length()];
 
-            let format = match mime_type {
-                "image/png" => image::ImageFormat::Png,
-                "image/jpeg" => image::ImageFormat::Jpeg,
-                _ => image::guess_format(data)?,
-            };
+            let format = image::ImageFormat::from_mime_type(mime_type)
+                .unwrap_or_else(|| image::guess_format(data).unwrap());
 
-            let image = image::load_from_memory_with_format(data, format)?;
-
-            Ok(image.to_rgba8())
+            Ok((data.into(), format))
         }
         gltf::image::Source::Uri { uri, .. } => {
             let source_path = Path::new(uri);
@@ -37,60 +193,37 @@ fn load_image_data(
             } else {
                 source_path.to_path_buf()
             };
-            let image = image::open(source_path)?;
-            Ok(image.to_rgba8())
+            let data = std::fs::read(&source_path)?;
+            let format = image::ImageFormat::from_path(&source_path)?;
+
+            Ok((data.into(), format))
         }
     }
 }
 
-fn load_texture(
-    texture: gltf::Texture,
-    base_path: &Path,
-    buffers: &[Vec<u8>],
+fn upload_rgba_image_and_generate_mipmaps(
     context: &render::Context,
+    name: Cow<'static, str>,
+    image_data: &image::RgbaImage,
     srgb: bool,
 ) -> render::Image {
-    let image = texture.source();
-    let image_index = image.index();
-    let image_data = load_image_data(base_path, image.source(), &buffers).unwrap();
-
     let (width, height) = image_data.dimensions();
     let max_size = u32::max(width, height);
-    let mip_levels = f32::floor(f32::log2(max_size as f32)) as u32 + 1;
-
-    let mut image = context.create_image(
-        format!("gltf_image_{image_index}"),
-        &render::ImageDesc {
-            format: if srgb {
-                vk::Format::R8G8B8A8_SRGB
-            } else {
-                vk::Format::R8G8B8A8_UNORM
-            },
-            width,
-            height,
-            mip_levels,
-            samples: render::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
-            aspect: vk::ImageAspectFlags::COLOR,
+    let mip_levels = u32::max(1, f32::floor(f32::log2(max_size as f32)) as u32 + 1);
+    
+    let image = context.create_image(name, &render::ImageDesc {
+        format: if srgb {
+            vk::Format::R8G8B8A8_SRGB
+        } else {
+            vk::Format::R8G8B8A8_UNORM
         },
-    );
-
-    let sampler_flags = {
-        let mut flags = render::SamplerFlags::empty();
-
-        if texture.sampler().min_filter() == Some(gltf::texture::MinFilter::Nearest) {
-            flags |= render::SamplerFlags::NEAREST;
-        }
-
-        if texture.sampler().wrap_s() == gltf::texture::WrappingMode::Repeat
-            || texture.sampler().wrap_t() == gltf::texture::WrappingMode::Repeat
-        {
-            flags |= render::SamplerFlags::REPEAT;
-        }
-
-        flags
-    };
-    image.set_sampler_flags(sampler_flags);
+        width,
+        height,
+        mip_levels,
+        samples: render::MultisampleCount::None,
+        usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
+        aspect: vk::ImageAspectFlags::COLOR,
+    });
 
     let scratch_buffer = context.create_buffer_init(
         "scratch_buffer",
@@ -123,80 +256,131 @@ fn load_texture(
             }],
         );
 
-        let mut mip_width = width;
-        let mut mip_height = height;
+        if mip_levels > 1 {
+            let mut mip_width = width;
+            let mut mip_height = height;
 
-        for (last_level, current_level) in (1..mip_levels).enumerate() {
-            let last_level = last_level as u32;
-            let current_level = current_level as u32;
+            for (last_level, current_level) in (1..mip_levels).enumerate() {
+                let last_level = last_level as u32;
+                let current_level = current_level as u32;
 
-            let new_mip_width = if mip_width > 1 { mip_width / 2 } else { 1 };
-            let new_mip_height = if mip_height > 1 { mip_height / 2 } else { 1 };
+                let new_mip_width = if mip_width > 1 { mip_width / 2 } else { 1 };
+                let new_mip_height = if mip_height > 1 { mip_height / 2 } else { 1 };
+
+                cmd.barrier(&[], &[render::image_subresource_barrier(
+                    &image,
+                    last_level..last_level + 1, 
+                    ..,
+                    AccessKind::TransferWrite,
+                    AccessKind::TransferRead
+                )], &[]);
+
+                let blit_region = vk::ImageBlit {
+                    src_subresource: image.subresource_layers(last_level, ..),
+                    src_offsets: [
+                        vk::Offset3D { x: 0, y: 0, z: 0 },
+                        vk::Offset3D {
+                            x: mip_width as i32,
+                            y: mip_height as i32,
+                            z: 1,
+                        },
+                    ],
+                    dst_subresource: image.subresource_layers(current_level, ..),
+                    dst_offsets: [
+                        vk::Offset3D { x: 0, y: 0, z: 0 },
+                        vk::Offset3D {
+                            x: new_mip_width as i32,
+                            y: new_mip_height as i32,
+                            z: 1,
+                        },
+                    ],
+                };
+
+                cmd.blit_image(
+                    &image,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    &image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    std::slice::from_ref(&blit_region),
+                    vk::Filter::LINEAR,
+                );
+
+                if mip_width > 1 {
+                    mip_width /= 2
+                };
+                if mip_height > 1 {
+                    mip_height /= 2
+                };
+            }
+            
+            cmd.barrier(&[], &[render::image_subresource_barrier(
+                &image,
+                mip_levels - 1..mip_levels, 
+                ..,
+                AccessKind::TransferWrite,
+                AccessKind::AllGraphicsRead,
+            )], &[]);
 
             cmd.barrier(&[], &[render::image_subresource_barrier(
                 &image,
-                last_level..last_level + 1, 
+                ..mip_levels - 1, 
                 ..,
-                AccessKind::TransferWrite,
-                AccessKind::TransferRead
+                AccessKind::TransferRead,
+                AccessKind::AllGraphicsRead,
             )], &[]);
-
-            let blit_region = vk::ImageBlit {
-                src_subresource: image.subresource_layers(last_level, ..),
-                src_offsets: [
-                    vk::Offset3D { x: 0, y: 0, z: 0 },
-                    vk::Offset3D {
-                        x: mip_width as i32,
-                        y: mip_height as i32,
-                        z: 1,
-                    },
-                ],
-                dst_subresource: image.subresource_layers(current_level, ..),
-                dst_offsets: [
-                    vk::Offset3D { x: 0, y: 0, z: 0 },
-                    vk::Offset3D {
-                        x: new_mip_width as i32,
-                        y: new_mip_height as i32,
-                        z: 1,
-                    },
-                ],
-            };
-
-            cmd.blit_image(
+        } else {
+            cmd.barrier(&[], &[render::image_barrier(
                 &image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                &image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&blit_region),
-                vk::Filter::LINEAR,
-            );
-
-            if mip_width > 1 {
-                mip_width /= 2
-            };
-            if mip_height > 1 {
-                mip_height /= 2
-            };
+                AccessKind::TransferWrite,
+                AccessKind::AllGraphicsRead,
+            )], &[]);
         }
-        
-        cmd.barrier(&[], &[render::image_subresource_barrier(
-            &image,
-            mip_levels - 1..mip_levels, 
-            ..,
-            AccessKind::TransferWrite,
-            AccessKind::AllGraphicsRead,
-        )], &[]);
-
-        cmd.barrier(&[], &[render::image_subresource_barrier(
-            &image,
-            ..mip_levels - 1, 
-            ..,
-            AccessKind::TransferRead,
-            AccessKind::AllGraphicsRead,
-        )], &[]);
     });
 
     context.destroy_buffer(&scratch_buffer);
+
+    image
+}
+
+fn load_texture(
+    texture: gltf::Texture,
+    base_path: &Path,
+    buffers: &[Vec<u8>],
+    context: &render::Context,
+    srgb: bool,
+) -> render::Image {
+    let gltf_image = texture.source();
+    let image_index = gltf_image.index();
+    let (image_data, image_format) = load_image_data(base_path, gltf_image.source(), &buffers).unwrap();
+
+    let name = Cow::from(format!("gltf_image_{image_index}"));
+
+    let mut image = match image_format {
+        image::ImageFormat::Dds => {
+            upload_dds_image(context, name, &image_data)
+        },
+        format => {
+            let image_data = image::load_from_memory_with_format(&image_data, format).unwrap().to_rgba8();
+            upload_rgba_image_and_generate_mipmaps(context, name, &image_data, srgb)
+        },
+    };
+
+    let sampler_flags = {
+        let mut flags = render::SamplerFlags::empty();
+
+        if texture.sampler().min_filter() == Some(gltf::texture::MinFilter::Nearest) {
+            flags |= render::SamplerFlags::NEAREST;
+        }
+
+        if texture.sampler().wrap_s() == gltf::texture::WrappingMode::Repeat
+            || texture.sampler().wrap_t() == gltf::texture::WrappingMode::Repeat
+        {
+            flags |= render::SamplerFlags::REPEAT;
+        }
+
+        flags
+    };
+    image.set_sampler_flags(sampler_flags);
 
     image
 }

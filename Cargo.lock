@@ -459,6 +459,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddsfile"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "594ecd967c2f40db5dde8da4c356975fc1fe030e951c7c3962f6dc2e80042e87"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "enum_primitive",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -524,6 +535,15 @@ name = "emath"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3857d743a6e0741cdd60b622a74c7a36ea75f5f8f11b793b41d905d2c9721a4b"
+
+[[package]]
+name = "enum_primitive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be4551092f4d519593039259a9ed8daedf0da12e5109c5280338073eaeb81180"
+dependencies = [
+ "num-traits 0.1.43",
+]
 
 [[package]]
 name = "env_logger"
@@ -836,7 +856,7 @@ dependencies = [
  "gif",
  "jpeg-decoder",
  "num-rational",
- "num-traits",
+ "num-traits 0.2.15",
  "png",
  "qoi",
  "tiff",
@@ -1185,7 +1205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "225d3389fb3509a24c93f5c29eb6bde2586b98d9f016636dff58d7c6f7569cd9"
 dependencies = [
  "autocfg",
- "num-traits",
+ "num-traits 0.2.15",
 ]
 
 [[package]]
@@ -1196,7 +1216,16 @@ checksum = "0638a1c9d0a3c0914158145bc76cff373a75a627e6ecbfb71cbe6f453a5a19b0"
 dependencies = [
  "autocfg",
  "num-integer",
- "num-traits",
+ "num-traits 0.2.15",
+]
+
+[[package]]
+name = "num-traits"
+version = "0.1.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e5113e9fd4cc14ded8e499429f396a20f98c772a47cc8622a736e1ec843c31"
+dependencies = [
+ "num-traits 0.2.15",
 ]
 
 [[package]]
@@ -1326,6 +1355,7 @@ dependencies = [
  "ash-window",
  "bytemuck",
  "cstr",
+ "ddsfile",
  "egui",
  "egui-winit",
  "env_logger",

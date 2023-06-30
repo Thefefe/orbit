@@ -29,4 +29,5 @@ puffin_egui = "0.22.0"
 tobj = "4.0.0"
 gltf = "1.2.0"
 image = "0.24.6"
+ddsfile = "0.5.1"
 

@@ -103,7 +103,7 @@ vec3 calculate_light(
     vec3 kD = vec3(1.0) - F;
     kD *= 1.0 - metallic;
 
-    return (kD * albedo / PI + specular) * radiance * n_dot_l;;
+    return (kD * albedo / PI + specular) * radiance * n_dot_l;
 }
 
 void main() {
@@ -124,9 +124,11 @@ void main() {
     }
 
     if (material.normal_texture_index != TEXTURE_NONE) {
-        vec4 normal_tex = texture(GetSampledTextureByIndex(material.normal_texture_index), vout.uv);
-        vec3 tang_normal = normalize(normal_tex.xyz * 2.0 - 1.0);
-        normal = vout.TBN * tang_normal;
+        // support for 2 component normals, for now I do this for all normal maps
+        vec2 normal_tex_xy = texture(GetSampledTextureByIndex(material.normal_texture_index), vout.uv).xy;
+        vec2 normal_tang_xy = normal_tex_xy * 2.0 - 1.0;
+        float normal_tang_z = sqrt(1 - normal_tex_xy.x*normal_tex_xy.x - normal_tex_xy.y * normal_tex_xy.y);
+        normal = vout.TBN * vec3(normal_tang_xy, normal_tang_z);
     }
     
     if (material.metallic_roughness_texture_index != TEXTURE_NONE) {

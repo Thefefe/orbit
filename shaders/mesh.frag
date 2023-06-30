@@ -125,10 +125,10 @@ void main() {
 
     if (material.normal_texture_index != TEXTURE_NONE) {
         // support for 2 component normals, for now I do this for all normal maps
-        vec2 normal_tex_xy = texture(GetSampledTextureByIndex(material.normal_texture_index), vout.uv).xy;
-        vec2 normal_tang_xy = normal_tex_xy * 2.0 - 1.0;
-        float normal_tang_z = sqrt(1 - normal_tex_xy.x*normal_tex_xy.x - normal_tex_xy.y * normal_tex_xy.y);
-        normal = vout.TBN * vec3(normal_tang_xy, normal_tang_z);
+        vec4 normal_tex = texture(GetSampledTextureByIndex(material.normal_texture_index), vout.uv);
+        vec3 normal_tang = normal_tex.xyz * 2.0 - 1.0;
+        normal_tang.z = sqrt(abs(1 - normal_tang.x*normal_tang.x - normal_tang.y * normal_tang.y));
+        normal = vout.TBN * normal_tang;
     }
     
     if (material.metallic_roughness_texture_index != TEXTURE_NONE) {
@@ -161,13 +161,17 @@ void main() {
     } else if (render_mode == 2) { // normal
         out_color = vec4(normal * 0.5 + 0.5, 1.0);
     } else if (render_mode == 3) { // metallic
-        out_color = vec4(vec3(metallic), 1.0);
+        // out_color = vec4(vec3(metallic), 1.0);
+        out_color = vec4(vout.TBN[2] * 0.5 + 0.5, 1.0);
     } else if (render_mode == 4) { // roughness
-        out_color = vec4(vec3(roughness), 1.0);
+        // out_color = vec4(vec3(roughness), 1.0);
+        out_color = vec4(vout.TBN[0] * 0.5 + 0.5, 1.0);
     } else if (render_mode == 5) { // emissive
-        out_color = vec4(emissive, 1.0);
+        // out_color = vec4(emissive, 1.0);
+        out_color = vec4(vout.TBN[1] * 0.5 + 0.5, 1.0);
     } else if (render_mode == 6) { // occulusion
-        out_color = vec4(vec3(ao), 1.0);
+        out_color = vec4(texture(GetSampledTextureByIndex(material.normal_texture_index), vout.uv).xy, 0.0, 1.0);
+        // out_color = vec4(vec3(ao), 1.0);
     } else if (render_mode == 7) { // material index
         // uint ihash = hash(in_material_index);
         // vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;

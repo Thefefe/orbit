@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 
-use winit::event::{DeviceEvent, ElementState, Event, MouseButton, VirtualKeyCode as KeyCode, WindowEvent};
+use winit::{event::{DeviceEvent, ElementState, Event, MouseButton, VirtualKeyCode as KeyCode, WindowEvent}, window::Window};
 
 pub struct Input {
     close_requested: bool,
 
-    resized: Option<[u32; 2]>,
+    screen_size: [u32; 2],
+    resized: bool,
 
     pressed_keys: HashSet<KeyCode>,
     released_keys: HashSet<KeyCode>,
@@ -20,10 +21,11 @@ pub struct Input {
 }
 
 impl Input {
-    pub fn new() -> Self {
+    pub fn new(window: &Window) -> Self {
         Self {
             close_requested: false,
-            resized: None,
+            screen_size: window.inner_size().into(),
+            resized: false,
             pressed_keys: HashSet::new(),
             released_keys: HashSet::new(),
             held_keys: HashSet::new(),
@@ -42,14 +44,11 @@ impl Input {
                     self.close_requested = true;
                 }
                 WindowEvent::Resized(new_size) => {
-                    _ = self.resized.insert((*new_size).into());
+                    self.screen_size = (*new_size).into();
+                    self.resized = true;
                 }
-                WindowEvent::ScaleFactorChanged {
-                    scale_factor,
-                    new_inner_size,
-                } => {
+                WindowEvent::ScaleFactorChanged {scale_factor, .. } => {
                     self.pixels_per_point = *scale_factor as f32;
-                    _ = self.resized.insert((**new_inner_size).into());
                 }
                 WindowEvent::KeyboardInput {
                     device_id: _,
@@ -102,10 +101,14 @@ impl Input {
         self.pressed_mouse.clear();
         self.released_mouse.clear();
         self.mouse_delta = glam::Vec2::ZERO;
-        self.resized = None;
+        self.resized = false;
     }
 
-    pub fn resized(&self) -> Option<[u32; 2]> {
+    pub fn screen_size(&self) -> [u32; 2] {
+        self.screen_size
+    }
+
+    pub fn resized(&self) -> bool {
         self.resized
     }
 

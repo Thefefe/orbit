@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::f32::consts::PI;
+use std::{f32::consts::PI, borrow::Cow};
 
 use ash::vk;
 use gltf_loader::load_gltf;
@@ -60,13 +60,15 @@ impl CameraController {
         }
     }
 
-    pub fn update(&mut self, input: &Input, delta_time: f32, transform: &mut Transform) {
-        if input.mouse_held(MouseButton::Right) {
-            let mouse_delta = input.mouse_delta();
-            self.pitch -= mouse_delta.x * self.mouse_sensitivity;
-            self.yaw = f32::clamp(self.yaw + mouse_delta.y * self.mouse_sensitivity, -PI / 2.0, PI / 2.0);
-        }
+    pub fn update_look(&mut self, input: &Input, transform: &mut Transform) {
+        let mouse_delta = input.mouse_delta();
+        self.pitch -= mouse_delta.x * self.mouse_sensitivity;
+        self.yaw = f32::clamp(self.yaw + mouse_delta.y * self.mouse_sensitivity, -PI / 2.0, PI / 2.0);
 
+        transform.orientation = glam::Quat::from_euler(glam::EulerRot::YXZ, self.pitch, self.yaw, 0.0);
+    }
+
+    pub fn update_movement(&mut self, input: &Input, delta_time: f32, transform: &mut Transform) {
         let mut move_dir = glam::Vec3::ZERO;
 
         for (key_code, dir) in Self::CONTROL_KEYS {
@@ -83,7 +85,6 @@ impl CameraController {
             self.movement_speed
         };
 
-        transform.orientation = glam::Quat::from_euler(glam::EulerRot::YXZ, self.pitch, self.yaw, 0.0);
         transform.translate_relative(move_dir.normalize_or_zero() * movement_speed * delta_time);
     }
 }
@@ -117,10 +118,11 @@ impl Projection {
             } => {
                 let half_height = half_width * aspect_ratio.recip();
 
-                glam::Mat4::orthographic_lh(
+                glam::Mat4::orthographic_rh(
                     -half_width, half_width,
                     -half_height, half_height,
-                    near_clip, far_clip,
+                    far_clip,
+                    near_clip,
                 )
             }
         }
@@ -143,27 +145,51 @@ impl Camera {
     }
 }
 
+fn frustum_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
+    let mut planes = [matrix.row(3); 6];
+    planes[0] += matrix.row(0);
+    planes[1] -= matrix.row(0);
+    planes[2] += matrix.row(1);
+    planes[3] -= matrix.row(1);
+    planes[4] += matrix.row(2);
+    planes[5] -= matrix.row(2);
+    planes
+}
+
+fn bounding_vertices(matrix: &Mat4) -> [Vec4; 8] {
+    [
+        vec4(-1.0,	-1.0,	-1.0,	1.0),
+        vec4(-1.0,	-1.0,	 1.0,	1.0),
+        vec4(-1.0,	 1.0,	-1.0,	1.0),
+        vec4(-1.0,	 1.0,	 1.0,	1.0),
+        vec4( 1.0,	-1.0,	-1.0,	1.0),
+        vec4( 1.0,	-1.0,	 1.0,	1.0),
+        vec4( 1.0,	 1.0,	-1.0,	1.0),
+        vec4( 1.0,	 1.0,	 1.0,	1.0),
+    ].map(|v| matrix.mul_vec4(v))
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct PerFrameData {
     viewproj: Mat4,
     view_pos: Vec3,
     render_mode: u32,
-    light_direction: Vec3,
-    _padding: u32,
 }
 
 struct App {
     gpu_assets: GpuAssetStore,
     scene: SceneBuffer,
     scene_draw_gen: SceneDrawGen,
+    shadow_map_renderer: ShadowMapRenderer,
 
     basic_pipeline: render::RasterPipeline,
     per_frame_buffer: render::Buffer,
 
     camera: Camera,
     camera_controller: CameraController,
-    light_direction: Vec3,
+    sun_light: Camera,
+    light_dir_controller: CameraController,
 
     scene_editor_open: bool,
     graph_debugger_open: bool,
@@ -171,8 +197,8 @@ struct App {
 }
 
 impl App {
-    const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X4;
+    pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
+    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X4;
 
     fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
         let mesh_pipeline = {
@@ -189,16 +215,18 @@ impl App {
                     module: vertex_module,
                     entry,
                 },
-                fragment_stage: render::ShaderStage {
+                fragment_stage: Some(render::ShaderStage {
                     module: fragment_module,
                     entry,
-                },
+                }),
                 vertex_input: render::VertexInput::default(),
                 rasterizer: render::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
                     front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                     cull_mode: vk::CullModeFlags::BACK,
+                    depth_bias: render::PipelineState::Off,
+                    depth_clamp: false,
                 },
                 color_attachments: &[render::PipelineColorAttachment {
                     format: context.swapchain.format(),
@@ -239,6 +267,17 @@ impl App {
         unsafe {
             per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().render_mode = 0;
         }
+
+        let camera = Camera {
+            transform: Transform {
+                position: vec3(0.0, 2.0, 0.0),
+                orientation: Quat::from_rotation_y(180.0f32.to_radians()),
+                ..Default::default()
+            },
+            projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.001 },
+            // projection: Projection::Orthographic { half_width: 32.0, near_clip: 0.0, far_clip: 1000.0 },
+        };
+
         Self {
             gpu_assets,
             scene,
@@ -247,20 +286,18 @@ impl App {
             basic_pipeline: mesh_pipeline,
             per_frame_buffer,
             
-            camera: Camera {
-                transform: Transform {
-                    position: vec3(0.0, 2.0, 0.0),
-                    orientation: Quat::from_rotation_y(180.0f32.to_radians()),
-                    ..Default::default()
-                },
-                projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.001 },
-            },
+            camera,
             camera_controller: CameraController::new(1.0, 0.003),
-            light_direction: vec3(1.0, 1.0, 1.0),
+            sun_light: Camera {
+                transform: Transform::default(),
+                projection: Projection::Orthographic { half_width: 20.0, near_clip: -20.0, far_clip: 20.0 },
+            },
+            light_dir_controller: CameraController::new(1.0, 0.003),
 
             scene_editor_open: false,
             profiler_open: false,
             graph_debugger_open: false,
+            shadow_map_renderer: ShadowMapRenderer::new(&context),
         }
     }
 
@@ -276,7 +313,14 @@ impl App {
 
         let delta_time = time.delta().as_secs_f32();
         
-        self.camera_controller.update(input, delta_time, &mut self.camera.transform);
+        if input.mouse_held(MouseButton::Right) {
+            self.camera_controller.update_look(input, &mut self.camera.transform);
+        }
+        self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
+        
+        if input.mouse_held(MouseButton::Middle) {
+            self.light_dir_controller.update_look(input, &mut self.sun_light.transform);
+        }
 
         if input.key_pressed(KeyCode::F1) {
             self.scene_editor_open = !self.scene_editor_open;
@@ -288,6 +332,26 @@ impl App {
             self.profiler_open = !self.profiler_open;
         }
 
+        fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(egui::DragValue::new(&mut vec.x).speed(speed));
+                ui.add(egui::DragValue::new(&mut vec.y).speed(speed));
+                ui.add(egui::DragValue::new(&mut vec.z).speed(speed));
+                ui.add(egui::DragValue::new(&mut vec.w).speed(speed));
+            });
+        }
+
+        fn drag_quat(ui: &mut egui::Ui, label: &str, vec: &mut Quat, speed: f32) {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(egui::DragValue::new(&mut vec.x).speed(speed));
+                ui.add(egui::DragValue::new(&mut vec.y).speed(speed));
+                ui.add(egui::DragValue::new(&mut vec.z).speed(speed));
+                ui.add(egui::DragValue::new(&mut vec.w).speed(speed));
+            });
+        }
+
         fn drag_vec3(ui: &mut egui::Ui, label: &str, vec: &mut Vec3, speed: f32) {
             ui.horizontal(|ui| {
                 ui.label(label);
@@ -297,9 +361,15 @@ impl App {
             });
         }
 
+        fn drag_float(ui: &mut egui::Ui, label: &str, float: &mut f32, speed: f32) {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(egui::DragValue::new(float).speed(speed));
+            });
+        }
+
         if self.scene_editor_open {
             egui::Window::new("scene").open(&mut self.scene_editor_open).show(egui_ctx, |ui| {
-                drag_vec3(ui, "light_direction", &mut self.light_direction, 0.001);
                 for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
                     let header = entity.name.as_ref().map_or(
                         format!("entity_{entity_index}"),
@@ -385,7 +455,7 @@ impl App {
 
                         ui.collapsing("passes", |ui| {
                             for pass in batch.passes {
-                                ui.label(&pass.name);
+                                ui.label(pass.name.as_ref());
                             }
                         });
                     });
@@ -402,18 +472,19 @@ impl App {
         }
     }
 
-    fn render(&mut self, frame_ctx: &mut render::FrameContext) {
+    fn render(&mut self, frame_ctx: &mut render::FrameContext, egui_ctx: &egui::Context) {
         puffin::profile_function!();
         self.scene.update_instances(frame_ctx);
 
         let screen_extent = frame_ctx.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
+        let view_projection = self.camera.compute_matrix(aspect_ratio);
+
         unsafe {
             let per_frame_data = self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut();
-            per_frame_data.viewproj = self.camera.compute_matrix(aspect_ratio);
+            per_frame_data.viewproj = view_projection;
             per_frame_data.view_pos = self.camera.transform.position;
-            per_frame_data.light_direction = self.light_direction;
         }
         
         let swapchain_image = frame_ctx.get_swapchain_image();
@@ -446,14 +517,68 @@ impl App {
         let vertex_buffer = frame_ctx.import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
         let index_buffer = frame_ctx.import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
         let material_buffer = frame_ctx.import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
-        let instance_buffer = frame_ctx.import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
+        let entity_buffer = frame_ctx.import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
 
-        let submesh_buffer = frame_ctx.import_buffer("scene_submeshe_buffer", &self.scene.submesh_buffer, &Default::default());
-        let mesh_info_buffer = frame_ctx.import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
+        let submeshes = frame_ctx.import_buffer("scene_submeshe_buffer", &self.scene.submesh_buffer, &Default::default());
+        let mesh_infos = frame_ctx.import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
         let submesh_count = self.scene.submesh_data.len() as u32;
 
         let draw_commands_buffer = self.scene_draw_gen
-            .create_draw_commands(frame_ctx, submesh_count, submesh_buffer, mesh_info_buffer, "main_draw_commands");
+            .create_draw_commands(frame_ctx, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
+
+        let shadow_map_draw_commands = self.scene_draw_gen
+            .create_draw_commands(frame_ctx, submesh_count, submeshes, mesh_infos, "shadow_map_draw_commands".into());
+
+        self.sun_light.transform.position = self.camera.transform.position;
+        let light_projection = self.sun_light.compute_matrix(1.0);
+        let light_direction = -self.sun_light.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
+
+        let mut shadow_map = 0;
+
+        egui::Window::new("shadow_debug").show(egui_ctx, |ui| {
+            if let Projection::Orthographic { half_width, near_clip, far_clip } = &mut self.sun_light.projection {
+                ui.horizontal(|ui| {
+                    ui.label("half_width");
+                    ui.add(egui::DragValue::new(half_width).speed(0.01));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("near_clip");
+                    ui.add(egui::DragValue::new(near_clip).speed(0.01));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("far_clip");
+                    ui.add(egui::DragValue::new(far_clip).speed(0.01));
+                });
+
+                let [constant_factor, clamp, slope_factor] = &mut self.shadow_map_renderer.depth_bias;
+
+                ui.horizontal(|ui| {
+                    ui.label("depth_bias_constant_factor");
+                    ui.add(egui::DragValue::new(constant_factor).speed(0.01));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("depth_bias_clamp");
+                    ui.add(egui::DragValue::new(clamp).speed(0.01));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("depth_bias_slope_factor");
+                    ui.add(egui::DragValue::new(slope_factor).speed(0.01));
+                });
+            }
+
+            shadow_map = self.shadow_map_renderer.render_shadow_map(
+                "sun_shadow_map".into(),
+                frame_ctx,
+                [1024 * 4; 2],
+                light_projection,
+                shadow_map_draw_commands,
+                vertex_buffer,
+                index_buffer,
+                entity_buffer
+            );
+
+            ui.image(egui::TextureId::User(shadow_map as u64), egui::Vec2::new(250.0, 250.0));
+        });
 
         let pipeline = self.basic_pipeline;
 
@@ -461,6 +586,7 @@ impl App {
             (target_image, render::AccessKind::ColorAttachmentWrite),
             (depth_image, render::AccessKind::DepthAttachmentWrite),
             (draw_commands_buffer, render::AccessKind::IndirectBuffer),
+            (shadow_map, render::AccessKind::FragmentShaderRead)
         ];
 
         if let Some(resolve_image) = resolve_image {
@@ -481,8 +607,9 @@ impl App {
                 let index_buffer = graph.get_buffer(index_buffer).unwrap();
                 let material_buffer = graph.get_buffer(material_buffer).unwrap();
 
-                let instance_buffer = graph.get_buffer(instance_buffer).unwrap();
-                let draw_commands_buffer = graph.get_buffer(draw_commands_buffer).unwrap();
+                let instance_buffer = graph.get_buffer(entity_buffer).unwrap();
+                let draw_commands_buffer = graph.get_buffer(shadow_map_draw_commands).unwrap();
+                let light_shadow_map = graph.get_image(shadow_map).unwrap();
 
                 let mut color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(target_image.view)
@@ -525,14 +652,34 @@ impl App {
                 cmd.bind_raster_pipeline(pipeline);
                 cmd.bind_index_buffer(&index_buffer);
 
-                cmd.push_bindings(&[
-                    globals_buffer.descriptor_index.unwrap().to_raw(),
-                    vertex_buffer.descriptor_index.unwrap().to_raw(),
-                    instance_buffer.descriptor_index.unwrap().to_raw(),
-                    draw_commands_buffer.descriptor_index.unwrap().to_raw(),
-                    material_buffer.descriptor_index.unwrap().to_raw(),
-                ]);
-                
+                #[repr(C)]
+                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+                struct ShadowMapConstants {
+                    per_frame_buffer: u32,
+                    vertex_buffer: u32,
+                    entity_buffer: u32,
+                    draw_commands: u32,
+                    materials: u32,
+                    _padding: [u32; 3],
+                    light_projection: Mat4,
+                    light_direction: Vec3,
+                    light_shadow_map: u32,
+                }
+
+                let constants = ShadowMapConstants {
+                    per_frame_buffer: globals_buffer.descriptor_index.unwrap().to_raw(),
+                    vertex_buffer: vertex_buffer.descriptor_index.unwrap().to_raw(),
+                    entity_buffer: instance_buffer.descriptor_index.unwrap().to_raw(),
+                    draw_commands: draw_commands_buffer.descriptor_index.unwrap().to_raw(),
+                    materials: material_buffer.descriptor_index.unwrap().to_raw(),
+                    _padding: [0; 3],
+                    light_projection,
+                    light_direction,
+                    light_shadow_map: light_shadow_map.descriptor_index.unwrap().to_raw(),
+                };
+
+                cmd.push_constants(bytemuck::bytes_of(&constants), 0);
+
                 cmd.draw_indexed_indirect_count(
                     draw_commands_buffer,
                     4,
@@ -551,6 +698,7 @@ impl App {
         self.gpu_assets.destroy(context);
         self.scene.destroy(context);
         self.scene_draw_gen.destroy(context);
+        self.shadow_map_renderer.destroy(context);
         context.destroy_pipeline(&self.basic_pipeline);
         context.destroy_buffer(&self.per_frame_buffer);
     }
@@ -583,8 +731,9 @@ impl SceneDrawGen {
         scene_submesh_count: u32,
         scene_submeshes: render::ResourceHandle,
         mesh_infos: render::ResourceHandle,
-        draw_commands_name: &str,
+        draw_commands_name: Cow<'static, str>,
     ) -> render::ResourceHandle {
+        let pass_name = format!("{draw_commands_name}_generation");
         let draw_commands = frame_ctx.create_transient_buffer(draw_commands_name, render::BufferDesc {
             size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
@@ -595,7 +744,7 @@ impl SceneDrawGen {
         use render::AccessKind;
 
         frame_ctx.add_pass(
-            format!("{draw_commands_name}_generation"),
+            pass_name,
             &[
                 (scene_submeshes, AccessKind::ComputeShaderRead),
                 (mesh_infos, AccessKind::ComputeShaderRead),
@@ -625,6 +774,155 @@ impl SceneDrawGen {
     }
 }
 
+pub struct ShadowMapRenderer {
+    pipeline: render::RasterPipeline,
+    depth_bias: [f32; 3],
+}
+
+impl ShadowMapRenderer {
+    pub fn new(context: &render::Context) -> Self {
+        let pipeline = {
+            let vertex_shader = utils::load_spv("shaders/shadow.vert.spv").unwrap();
+            let vertex_module = context.create_shader_module(&vertex_shader, "shadow_vertex_shader");
+            let entry = cstr::cstr!("main");
+
+            let pipeline = context.create_raster_pipeline("shadowmap_renderer_pipeline", &render::RasterPipelineDesc {
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: None,
+                vertex_input: render::VertexInput::default(),
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_bias: render::PipelineState::Dynamic,
+                    depth_clamp: true,
+                },
+                color_attachments: &[],
+                depth_state: Some(render::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: true,
+                    write: true,
+                    compare: vk::CompareOp::GREATER,
+                }),
+                multisample: render::MultisampleCount::None,
+            });
+
+            context.destroy_shader_module(vertex_module);
+
+            pipeline
+        };
+
+        Self { pipeline, depth_bias: [-4.0, 0.0, -1.5] }
+    }
+
+    pub fn render_shadow_map(
+        &self,
+        name: Cow<'static, str>,
+        frame_ctx: &mut render::FrameContext,
+
+        [width, height]: [u32; 2],
+        view_projection: Mat4,
+        draw_commands: render::ResourceHandle,
+
+        vertex_buffer: render::ResourceHandle,
+        index_buffer: render::ResourceHandle,
+        entity_data: render::ResourceHandle,
+    ) -> render::ResourceHandle {
+        let pass_name = format!("shadow_pass_for_{name}");
+        let shadow_map = frame_ctx.create_transient_image(name, render::ImageDesc {
+            format: App::DEPTH_FORMAT,
+            width,
+            height,
+            mip_levels: 1,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::DEPTH,
+        });
+
+        let pipeline = self.pipeline;
+
+        let depth_bias = self.depth_bias;
+
+        frame_ctx.add_pass(
+            pass_name,
+            &[
+                (shadow_map, render::AccessKind::DepthAttachmentWrite),
+                (draw_commands, render::AccessKind::IndirectBuffer),
+            ],
+            move |cmd, graph| {
+                let shadow_map = graph.get_image(shadow_map).unwrap();
+                
+                let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
+                let index_buffer = graph.get_buffer(index_buffer).unwrap();
+                let entity_buffer = graph.get_buffer(entity_data).unwrap();
+                let draw_commands_buffer = graph.get_buffer(draw_commands).unwrap();
+
+                let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
+                    .image_view(shadow_map.view)
+                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .clear_value(vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 0.0,
+                            stencil: 0,
+                        },
+                    })
+                    .store_op(vk::AttachmentStoreOp::STORE);
+
+                let rendering_info = vk::RenderingInfo::builder()
+                    .render_area(shadow_map.full_rect())
+                    .layer_count(1)
+                    .depth_attachment(&depth_attachemnt);
+
+                cmd.begin_rendering(&rendering_info);
+                
+                cmd.bind_raster_pipeline(pipeline);
+                cmd.bind_index_buffer(&index_buffer);
+
+                let [constant_factor, clamp, slope_factor] = depth_bias;
+                cmd.set_depth_bias(constant_factor, clamp, slope_factor);
+
+                #[repr(C)]
+                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+                struct ShadowMapConstants {
+                    view_projection: Mat4,
+                    vertex_buffer: u32,
+                    entity_buffer: u32,
+                    _padding: [u32; 2],
+                }
+
+                let constants = ShadowMapConstants {
+                    view_projection,
+                    vertex_buffer: vertex_buffer.descriptor_index.unwrap().to_raw(),
+                    entity_buffer: entity_buffer.descriptor_index.unwrap().to_raw(),
+                    _padding: [0; 2],
+                };
+
+                cmd.push_constants(bytemuck::bytes_of(&constants), 0);
+                cmd.draw_indexed_indirect_count(
+                    draw_commands_buffer,
+                    4,
+                    draw_commands_buffer,
+                    0,
+                    MAX_DRAW_COUNT as u32,
+                    std::mem::size_of::<GpuDrawCommand>() as u32,
+                );
+
+                cmd.end_rendering();
+            });
+
+        shadow_map
+    }
+
+    pub fn destroy(&self, context: &render::Context) {
+        context.destroy_pipeline(&self.pipeline);
+    }
+}
+
 fn main() {
     puffin::GlobalProfiler::lock().new_frame();
     utils::init_logger(false);
@@ -639,6 +937,9 @@ fn main() {
         .build(&event_loop)
         .expect("failed to build window");
 
+    let mut input = Input::new(&window);
+    let mut time = Time::new();
+
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
@@ -650,8 +951,6 @@ fn main() {
     let mut egui_state = egui_winit::State::new(&event_loop);
     let mut egui_renderer = EguiRenderer::new(&context);
 
-    let mut input = Input::new();
-    let mut time = Time::new();
 
     let mut app = App::new(&context, gltf_path.as_ref().map(|s| s.as_str()));
 
@@ -694,7 +993,7 @@ fn main() {
 
             let swapchain_image = frame_ctx.get_swapchain_image();
 
-            app.render(&mut frame_ctx);
+            app.render(&mut frame_ctx, &egui_ctx);
 
             let clipped_primitives = {
                 puffin::profile_scope!("egui_tessellate");

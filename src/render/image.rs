@@ -20,7 +20,7 @@ impl std::ops::Deref for Image {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageDesc {
     pub format: vk::Format,
     pub width: u32,

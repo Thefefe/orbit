@@ -297,6 +297,13 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
+    pub fn set_depth_bias(&self, constant_factor: f32, clamp: f32, slope_factor: f32) {
+        unsafe {
+            self.device.raw.cmd_set_depth_bias(self.buffer(), constant_factor, clamp, slope_factor)
+        }
+    }
+
+    #[inline(always)]
     pub fn bind_raster_pipeline(&self, pipeline: render::RasterPipeline) {
         unsafe {
             self.device.raw.cmd_bind_pipeline(self.buffer(), vk::PipelineBindPoint::GRAPHICS, pipeline.handle);
@@ -327,6 +334,19 @@ impl<'a> CommandRecorder<'a> {
                 0,
                 bytemuck::cast_slice(bindings),
             )
+        }
+    }
+
+    #[inline(always)]
+    pub fn push_constants(&self, constansts: &[u8], offset: u32) {
+        unsafe {
+            self.device.raw.cmd_push_constants(
+                self.buffer(),
+                self.descriptor.layout(),
+                vk::ShaderStageFlags::ALL,
+                offset,
+                constansts,
+            )   
         }
     }
 

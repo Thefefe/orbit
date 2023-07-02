@@ -1,4 +1,4 @@
-use std::{collections::HashSet, ops::Range};
+use std::{collections::HashSet, ops::Range, borrow::Cow};
 
 use ash::vk;
 
@@ -11,7 +11,7 @@ pub type DependencyHandle = usize;
 type PassFn = Box<dyn Fn(&render::CommandRecorder, &render::CompiledRenderGraph)>;
 
 pub struct Pass {
-    pub name: String,
+    pub name: Cow<'static, str>,
     pub func: PassFn,
 }
 
@@ -127,7 +127,7 @@ pub struct ResourceVersion {
 
 #[derive(Debug)]
 pub struct ResourceData {
-    name: String,
+    name: Cow<'static, str>,
 
     source: ResourceSource,
     resource_kind: ResourceKind,
@@ -217,7 +217,7 @@ impl RenderGraph {
 
     pub fn add_transient_resource(
         &mut self, 
-        name: String,
+        name: Cow<'static, str>,
         desc: AnyResourceDesc,
     ) -> ResourceHandle {
         self.add_resource(ResourceData {
@@ -238,7 +238,7 @@ impl RenderGraph {
 
     pub fn import_resource(
         &mut self,
-        name: String,
+        name: Cow<'static, str>,
         view: AnyResourceView,
         desc: &GraphResourceImportDesc,
     ) -> ResourceHandle {
@@ -258,7 +258,7 @@ impl RenderGraph {
         })
     }
 
-    pub fn add_pass(&mut self, name: String, func: PassFn) -> PassHandle {
+    pub fn add_pass(&mut self, name: Cow<'static, str>, func: PassFn) -> PassHandle {
         self.passes.insert(PassData {
             pass: Pass { name, func },
             dependencies: Vec::new(),
@@ -309,7 +309,7 @@ pub struct BatchData {
 
 #[derive(Debug)]
 pub struct GraphResource {
-    name: String,
+    name: Cow<'static, str>,
     resource: AnyResourceView,
 }
 
@@ -391,7 +391,7 @@ impl RenderGraph {
 
         for resource_data in self.resources.iter_mut() {
             // TODO: allocations can be reduces here by not having the names in both the resource and the GraphResource
-            let mut name = String::new();
+            let mut name: Cow<'static, str> = Cow::Borrowed("");
             std::mem::swap(&mut name, &mut resource_data.name);
             match &resource_data.source {
                 ResourceSource::Import { view } => {

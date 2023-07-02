@@ -483,6 +483,8 @@ impl Device {
         let vulkan10_features = vk::PhysicalDeviceFeatures::builder()
             .multi_draw_indirect(true)
             .sampler_anisotropy(true)
+            .depth_bias_clamp(true)
+            .depth_clamp(true)
             .build();
 
         let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()

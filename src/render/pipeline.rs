@@ -9,6 +9,31 @@ pub struct RasterPipeline {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub enum PipelineState<S> {
+    Static(S),
+    Dynamic,
+    #[default] Off,
+}
+
+impl<T> PipelineState<T> {
+    pub fn is_enabled(&self) -> bool {
+        match self {
+            PipelineState::Static(_) => true,
+            PipelineState::Dynamic   => true,
+            PipelineState::Off       => false,
+        }
+    }
+
+    pub fn is_dynamic(&self) -> bool {
+        match self {
+            PipelineState::Static(_) => false,
+            PipelineState::Dynamic   => true,
+            PipelineState::Off       => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ShaderStage<'a> {
     pub module: vk::ShaderModule,
     pub entry: &'a CStr,
@@ -27,11 +52,20 @@ pub struct VertexInput<'a> {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct DepthBias {
+    pub constant_factor: f32,
+    pub clamp: f32,
+    pub slope_factor: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RasterizerDesc {
     pub primitive_topology: vk::PrimitiveTopology,
     pub polygon_mode: vk::PolygonMode,
     pub front_face: vk::FrontFace,
     pub cull_mode: vk::CullModeFlags,
+    pub depth_bias: PipelineState<DepthBias>,
+    pub depth_clamp: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -91,7 +125,7 @@ pub struct DepthState {
     pub compare: vk::CompareOp,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum MultisampleCount {
     #[default] None,
     X2,
@@ -113,7 +147,7 @@ impl MultisampleCount {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RasterPipelineDesc<'a> {
     pub vertex_stage: ShaderStage<'a>,
-    pub fragment_stage: ShaderStage<'a>,
+    pub fragment_stage: Option<ShaderStage<'a>>,
     pub vertex_input: VertexInput<'a>,
     pub rasterizer: RasterizerDesc,
     pub color_attachments: &'a [PipelineColorAttachment],
@@ -128,10 +162,13 @@ impl RasterPipeline {
         name: &str,
         desc: &RasterPipelineDesc,
     ) -> RasterPipeline {
-        let stages = [
+        let mut stages = vec![
             desc.vertex_stage.to_vk().stage(vk::ShaderStageFlags::VERTEX).build(),
-            desc.fragment_stage.to_vk().stage(vk::ShaderStageFlags::FRAGMENT).build(),
         ];
+
+        if let Some(fragment_stage) = desc.fragment_stage {
+            stages.push(fragment_stage.to_vk().stage(vk::ShaderStageFlags::FRAGMENT).build());
+        }
 
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
             .vertex_binding_descriptions(desc.vertex_input.bindings)
@@ -140,15 +177,25 @@ impl RasterPipeline {
         let input_assembly =
             vk::PipelineInputAssemblyStateCreateInfo::builder().topology(desc.rasterizer.primitive_topology);
 
-        let rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
+        let mut rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
             .polygon_mode(desc.rasterizer.polygon_mode)
             .cull_mode(desc.rasterizer.cull_mode)
             .front_face(desc.rasterizer.front_face)
-            .line_width(1.0);
+            .line_width(1.0)
+            .depth_bias_enable(desc.rasterizer.depth_bias.is_enabled())
+            .depth_clamp_enable(desc.rasterizer.depth_clamp);
+
+        if let PipelineState::Static(depth_bias) = &desc.rasterizer.depth_bias {
+            rasterization = rasterization
+                .depth_bias_enable(true)
+                .depth_bias_constant_factor(depth_bias.constant_factor)
+                .depth_bias_clamp(depth_bias.clamp)
+                .depth_bias_slope_factor(depth_bias.slope_factor);
+        }
 
         let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
-            .viewport_count(desc.color_attachments.len() as u32)
-            .scissor_count(desc.color_attachments.len() as u32);
+            .viewport_count(1)
+            .scissor_count(1);
 
         let multisample_state =
             vk::PipelineMultisampleStateCreateInfo::builder().rasterization_samples(desc.multisample.to_vk());
@@ -160,7 +207,11 @@ impl RasterPipeline {
             .logic_op_enable(false)
             .attachments(&color_blend_attachment);
 
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let mut dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+
+        if desc.rasterizer.depth_bias.is_dynamic() {
+            dynamic_states.push(vk::DynamicState::DEPTH_BIAS);
+        }
 
         let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
 

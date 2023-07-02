@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::{sync::Mutex, borrow::Cow};
 
 use ash::vk;
 use winit::window::Window;
@@ -231,7 +231,7 @@ impl Context {
         self.graph.clear();
 
         let acquired_image_handle = self.graph.import_resource(
-            "swapchain_image".to_string(),
+            "swapchain_image".into(),
             render::AnyResourceView::Image(acquired_image.image_view),
             &render::GraphResourceImportDesc {
                 initial_access: render::AccessKind::None,
@@ -264,7 +264,7 @@ impl FrameContext<'_> {
 
     pub fn import_buffer(
         &mut self,
-        name: impl Into<String>,
+        name: impl Into<Cow<'static, str>>,
         buffer: &render::BufferView,
         desc: &render::GraphResourceImportDesc,
     ) -> render::ResourceHandle {
@@ -273,7 +273,7 @@ impl FrameContext<'_> {
 
     pub fn import_image(
         &mut self,
-        name: impl Into<String>,
+        name: impl Into<Cow<'static, str>>,
         image: &render::ImageView,
         desc: &render::GraphResourceImportDesc,
     ) -> render::ResourceHandle {
@@ -282,7 +282,7 @@ impl FrameContext<'_> {
 
     pub fn create_transient_buffer(
         &mut self,
-        name: impl Into<String>,
+        name: impl Into<Cow<'static, str>>,
         desc: render::BufferDesc
     ) -> render::ResourceHandle {
         let name = name.into();
@@ -291,7 +291,7 @@ impl FrameContext<'_> {
     
     pub fn create_transient_image(
         &mut self,
-        name: impl Into<String>,
+        name: impl Into<Cow<'static, str>>,
         desc: render::ImageDesc
     ) -> render::ResourceHandle {
         let name = name.into();
@@ -300,7 +300,7 @@ impl FrameContext<'_> {
 
     pub fn add_pass(
         &mut self,
-        name: impl Into<String>,
+        name: impl Into<Cow<'static, str>>,
         dependencies: &[(render::ResourceHandle, render::AccessKind)],
         f: impl Fn(&render::CommandRecorder, &render::CompiledRenderGraph) + 'static,
     ) -> render::PassHandle {

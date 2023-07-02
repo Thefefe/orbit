@@ -1,6 +1,6 @@
 #version 460
 
-#include "common.glsl"
+#include "common1.glsl"
 #include "types.glsl"
 
 RegisterBuffer(PerFrameBuffer, std430, readonly, {
@@ -11,8 +11,29 @@ RegisterBuffer(Materials, std430, readonly, {
     MaterialData materials[];
 });
 
-BindSlot(PerFrameBuffer, 0);
-BindSlot(Materials, 4);
+layout(push_constant, std430) uniform PushConstants {
+    uint per_frame_buffer;
+    uint vertex_buffer;
+    uint entity_buffer;
+    uint draw_commands;
+    uint materials;
+    
+    uint _padding0;
+    uint _padding1;
+    uint _padding2;
+
+    mat4 light_projection;
+    vec3 light_direction;
+    uint light_shadow_map;
+};
+
+layout(location = 0) in VertexOutput {
+    vec4 world_pos;
+    vec2 uv;
+    mat3 TBN;
+    flat uint material_index;
+    vec4 light_space_frag_pos;
+} vout;
 
 uint hash(uint a)
 {
@@ -31,13 +52,6 @@ vec3 srgb_to_linear(vec3 srgb) {
     vec3 higher = pow((srgb + vec3(0.055)) / vec3(1.055), vec3(2.4));
     return mix(higher, lower, cutoff);
 }
-
-layout(location = 0) in VertexOutput {
-    vec3 world_pos;
-    vec2 uv;
-    mat3 TBN;
-    flat uint material_index;
-} vout;
 
 layout(location = 0) out vec4 out_color;
 
@@ -62,6 +76,29 @@ float geometry_smith(float n_dot_v, float n_dot_l, float roughness) {
 
 vec3 fresnel_schlick(float h_dot_v, vec3 base_reflectivity) {
     return base_reflectivity + (1.0 - base_reflectivity) * pow(1.0 - h_dot_v, 5.0);
+}
+
+float compute_shadow(vec4 light_space_frag_pos) {
+    vec3 proj_coords = light_space_frag_pos.xyz / light_space_frag_pos.w;
+    proj_coords.y *= -1.0;
+    // float closest_depth = texture(GetSampledTexture(light_shadow_map), (proj_coords.xy + 1.0 ) / 2.0).r;
+    float current_depth = proj_coords.z;
+
+    vec2 tex_coord = (proj_coords.xy + 1.0 ) / 2.0;
+
+    float shadow = 0.0;
+    vec2 texel_size = 1.0 / textureSize(GetSampledTexture(light_shadow_map), 0);
+    for(int x = -1; x <= 1; ++x)
+    {
+        for(int y = -1; y <= 1; ++y)
+        {
+            float pcf_depth = texture(GetSampledTexture(light_shadow_map), tex_coord + vec2(x, y) * texel_size).r;
+            shadow += current_depth  > pcf_depth ? 1.0 : 0.0;
+        }    
+    }
+    shadow /= 9.0;
+
+    return shadow;
 }
 
 vec3 calculate_light(
@@ -107,8 +144,8 @@ vec3 calculate_light(
 }
 
 void main() {
-    MaterialData material = GetBuffer(Materials).materials[vout.material_index];
-    uint render_mode = GetBuffer(PerFrameBuffer).data.render_mode;
+    MaterialData material = GetBuffer(Materials, materials).materials[vout.material_index];
+    uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).data.render_mode;
 
     vec4  base_color = material.base_color;
     vec3  albedo     = base_color.rgb;
@@ -119,13 +156,13 @@ void main() {
     float ao         = 1.0;
 
     if (material.base_texture_index != TEXTURE_NONE) {
-        base_color *= texture(GetSampledTextureByIndex(material.base_texture_index), vout.uv);
+        base_color *= texture(GetSampledTexture(material.base_texture_index), vout.uv);
         albedo = base_color.rgb;
     }
 
     if (material.normal_texture_index != TEXTURE_NONE) {
         // support for 2 component normals, for now I do this for all normal maps
-        vec4 normal_tex = texture(GetSampledTextureByIndex(material.normal_texture_index), vout.uv);
+        vec4 normal_tex = texture(GetSampledTexture(material.normal_texture_index), vout.uv);
         vec3 normal_tang = normal_tex.xyz * 2.0 - 1.0;
         normal_tang.z = sqrt(abs(1 - normal_tang.x*normal_tang.x - normal_tang.y * normal_tang.y));
         normal = vout.TBN * normal_tang;
@@ -133,23 +170,23 @@ void main() {
     
     if (material.metallic_roughness_texture_index != TEXTURE_NONE) {
         vec4 metallic_roughness =
-            texture(GetSampledTextureByIndex(material.metallic_roughness_texture_index), vout.uv);
+            texture(GetSampledTexture(material.metallic_roughness_texture_index), vout.uv);
         metallic *= metallic_roughness.b;
         roughness *= metallic_roughness.g;
     }
 
     if (material.emissive_texture_index != TEXTURE_NONE) {
-        emissive *= texture(GetSampledTextureByIndex(material.emissive_texture_index), vout.uv).rgb;
+        emissive *= texture(GetSampledTexture(material.emissive_texture_index), vout.uv).rgb;
     }
 
     if (material.occulusion_texture_index != TEXTURE_NONE) {
-        ao = texture(GetSampledTextureByIndex(material.occulusion_texture_index), vout.uv).r * material.occulusion_factor;
+        ao = texture(GetSampledTexture(material.occulusion_texture_index), vout.uv).r * material.occulusion_factor;
     }
 
     vec3 base_reflectivity = mix(vec3(0.04), albedo, metallic);
 
     vec3 N = normalize(normal);
-    vec3 V = normalize(GetBuffer(PerFrameBuffer).data.view_pos - vout.world_pos);
+    vec3 V = normalize(GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_pos - vout.world_pos.xyz);
 
     out_color.a = base_color.a;
     if (out_color.a < 0.5) {
@@ -157,27 +194,23 @@ void main() {
     }
 
     if (render_mode == 1) { // uv
-        out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
+        // out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
+        out_color = vec4((vout.light_space_frag_pos.xy + 1.0) / 2.0, 0.0, 1.0);
     } else if (render_mode == 2) { // normal
         out_color = vec4(normal * 0.5 + 0.5, 1.0);
     } else if (render_mode == 3) { // metallic
-        // out_color = vec4(vec3(metallic), 1.0);
-        out_color = vec4(vout.TBN[2] * 0.5 + 0.5, 1.0);
+        out_color = vec4(vec3(metallic), 1.0);
     } else if (render_mode == 4) { // roughness
-        // out_color = vec4(vec3(roughness), 1.0);
-        out_color = vec4(vout.TBN[0] * 0.5 + 0.5, 1.0);
+        out_color = vec4(vec3(roughness), 1.0);
     } else if (render_mode == 5) { // emissive
-        // out_color = vec4(emissive, 1.0);
-        out_color = vec4(vout.TBN[1] * 0.5 + 0.5, 1.0);
+        out_color = vec4(emissive, 1.0);
     } else if (render_mode == 6) { // occulusion
-        out_color = vec4(texture(GetSampledTextureByIndex(material.normal_texture_index), vout.uv).xy, 0.0, 1.0);
-        // out_color = vec4(vec3(ao), 1.0);
+        out_color = vec4(vec3(ao), 1.0);
     } else if (render_mode == 7) { // material index
         // uint ihash = hash(in_material_index);
         // vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;
         out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);
     } else {
-        vec3 light_direction = normalize(GetBuffer(PerFrameBuffer).data.light_direction);
         vec3 light_color = vec3(4.5);
         vec3 Lo = calculate_light(
             V,
@@ -188,7 +221,7 @@ void main() {
             normal,
             metallic,
             roughness
-        );
+        ) * compute_shadow(vout.light_space_frag_pos);
 
         vec3 ambient = vec3(0.03) * albedo.rgb * ao;
         out_color.rgb = ambient + Lo + emissive;

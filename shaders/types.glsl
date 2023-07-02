@@ -1,9 +1,7 @@
 struct PerFrameData {
-    mat4 view_proj;
+    mat4 view_projection;
     vec3 view_pos;
     uint render_mode;
-    vec3 light_direction;
-    uint _padding;
 };
 
 struct MeshVertex {

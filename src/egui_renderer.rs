@@ -15,7 +15,7 @@ pub struct EguiRenderer {
     pipeline: render::RasterPipeline,
     vertex_buffer: render::Buffer,
     index_buffer: render::Buffer,
-    textures: HashMap<egui::TextureId, render::Image>,
+    textures: HashMap<u64, render::Image>,
 }
 
 impl EguiRenderer {
@@ -42,10 +42,10 @@ impl EguiRenderer {
                     module: vertex_shader,
                     entry,
                 },
-                fragment_stage: render::ShaderStage {
+                fragment_stage: Some(render::ShaderStage {
                     module: fragment_shader,
                     entry,
-                },
+                }),
                 vertex_input: render::VertexInput {
                     bindings: &[
                         vk::VertexInputBindingDescription {
@@ -80,6 +80,8 @@ impl EguiRenderer {
                     polygon_mode: vk::PolygonMode::FILL,
                     front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                     cull_mode: vk::CullModeFlags::NONE,
+                    depth_bias: render::PipelineState::Off,
+                    depth_clamp: false,
                 },
                 color_attachments: &[render::PipelineColorAttachment {
                     format: context.swapchain.format(),
@@ -138,8 +140,10 @@ impl EguiRenderer {
         }
 
         for id in textures_delta.free.iter() {
-            if let Some(image) = self.textures.remove(id) {
-                context.destroy_image(&image);
+            if let egui::TextureId::Managed(id) = id {
+                if let Some(image) = self.textures.remove(id) {
+                    context.destroy_image(&image);
+                }
             }
         }
 
@@ -175,16 +179,21 @@ impl EguiRenderer {
                     },
                 };
 
-                let image = self.textures.get(&mesh.texture_id).unwrap();
-                let texture = context.import_image(
-                    "egui_image",
-                    image,
-                    &render::GraphResourceImportDesc {
-                        initial_access: render::AccessKind::FragmentShaderRead,
-                        target_access: render::AccessKind::FragmentShaderRead,
-                        ..Default::default()
+                let texture = match mesh.texture_id {
+                    egui::TextureId::Managed(id) => {
+                        let image = self.textures.get(&id).unwrap();
+                        context.import_image(
+                            "egui_image",
+                            image,
+                            &render::GraphResourceImportDesc {
+                                initial_access: render::AccessKind::FragmentShaderRead,
+                                target_access: render::AccessKind::FragmentShaderRead,
+                                ..Default::default()
+                            },
+                        )
                     },
-                );
+                    egui::TextureId::User(handle) => handle as usize,
+                };
 
                 clipped_batches.push(ClippedBatch {
                     clip_rect,
@@ -214,6 +223,11 @@ impl EguiRenderer {
 
     pub fn update_texture(&mut self, context: &render::Context, id: egui::TextureId, delta: &egui::epaint::ImageDelta) {
         puffin::profile_function!();
+        
+        let egui::TextureId::Managed(id) = id else {
+            return;
+        };
+        
         let [width, height] = delta.image.size();
         let bytes: Vec<u8> = match &delta.image {
             egui::ImageData::Color(image) => {
@@ -230,12 +244,7 @@ impl EguiRenderer {
         let (image, is_new) = if let Some(image) = self.textures.get(&id) {
             (image.image_view, false)
         } else {
-            let (source, number) = match id {
-                egui::TextureId::Managed(number) => ("managed", number),
-                egui::TextureId::User(number) => ("user", number),
-            };
-
-            let image = context.create_image(format!("egui_image_{source}_{number}"), &render::ImageDesc {
+            let image = context.create_image(format!("egui_image_{id}"), &render::ImageDesc {
                 format: Self::IMAGE_FORMAT,
                 width: width as u32,
                 height: height as u32,

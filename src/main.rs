@@ -3,6 +3,7 @@
 use std::{f32::consts::PI, borrow::Cow};
 
 use ash::vk;
+use glam::{Vec4Swizzles};
 use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
 use assets::{GpuAssetStore};
@@ -110,7 +111,9 @@ impl Projection {
         Projection::Perspective {
                 fov,
                 near_clip,
-            } => glam::Mat4::perspective_infinite_reverse_rh(fov, aspect_ratio, near_clip),
+            } => {
+                glam::Mat4::perspective_infinite_reverse_rh(fov, aspect_ratio, near_clip)
+            },
             Projection::Orthographic {
                 half_width,
                 near_clip,
@@ -145,7 +148,7 @@ impl Camera {
     }
 }
 
-fn frustum_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
+fn frustum_planes_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
     let mut planes = [matrix.row(3); 6];
     planes[0] += matrix.row(0);
     planes[1] -= matrix.row(0);
@@ -156,17 +159,42 @@ fn frustum_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
     planes
 }
 
-fn bounding_vertices(matrix: &Mat4) -> [Vec4; 8] {
+fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec3; 8] {
+    let inv_matrix = matrix.inverse();
     [
-        vec4(-1.0,	-1.0,	-1.0,	1.0),
-        vec4(-1.0,	-1.0,	 1.0,	1.0),
-        vec4(-1.0,	 1.0,	-1.0,	1.0),
-        vec4(-1.0,	 1.0,	 1.0,	1.0),
-        vec4( 1.0,	-1.0,	-1.0,	1.0),
-        vec4( 1.0,	-1.0,	 1.0,	1.0),
-        vec4( 1.0,	 1.0,	-1.0,	1.0),
-        vec4( 1.0,	 1.0,	 1.0,	1.0),
-    ].map(|v| matrix.mul_vec4(v))
+        vec4(-1.0, -1.0, 0.0, 1.0),
+        vec4( 1.0, -1.0, 0.0, 1.0),
+        vec4( 1.0,  1.0, 0.0, 1.0),
+        vec4(-1.0,  1.0, 0.0, 1.0),
+        
+        vec4(-1.0, -1.0, 1.0, 1.0),
+        vec4( 1.0, -1.0, 1.0, 1.0),
+        vec4( 1.0,  1.0, 1.0, 1.0),
+        vec4(-1.0,  1.0, 1.0, 1.0),
+    ].map(|v| {
+        let v = inv_matrix * v;
+        v.xyz() / v.w
+    })
+}
+
+fn cascaded_directional_light_projection(
+    frustum_corners_world_space: &[Vec3; 8],
+    light_direction: Quat,
+) -> Mat4 {
+    
+    let mut min = Vec3A::splat(f32::MAX);
+    let mut max = Vec3A::splat(f32::MIN);
+    for corner_world_space in frustum_corners_world_space.iter().copied() {
+        let corner_light_space = light_direction * Vec3A::from(corner_world_space);
+        
+        min = min.min(corner_light_space);
+        max = max.max(corner_light_space);
+    }
+
+    let light_view = Mat4::from_quat(light_direction);
+    let light_projection = Mat4::orthographic_rh(min.x, max.x, min.y, max.y, -min.z, -max.z);
+
+    light_projection * light_view
 }
 
 #[repr(C)]
@@ -180,6 +208,7 @@ struct PerFrameData {
 struct App {
     gpu_assets: GpuAssetStore,
     scene: SceneBuffer,
+    debug_line_renderer: DebugLineRenderer,
     scene_draw_gen: SceneDrawGen,
     shadow_map_renderer: ShadowMapRenderer,
 
@@ -188,8 +217,12 @@ struct App {
 
     camera: Camera,
     camera_controller: CameraController,
+    mock_camera: Camera,
+    mock_camera_controller: CameraController,
     sun_light: Camera,
     light_dir_controller: CameraController,
+
+    view_mock_camera: bool,
 
     scene_editor_open: bool,
     graph_debugger_open: bool,
@@ -223,9 +256,10 @@ impl App {
                 rasterizer: render::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
                     front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                     cull_mode: vk::CullModeFlags::BACK,
-                    depth_bias: render::PipelineState::Off,
+                    depth_bias: None,
                     depth_clamp: false,
                 },
                 color_attachments: &[render::PipelineColorAttachment {
@@ -240,6 +274,7 @@ impl App {
                     compare: vk::CompareOp::GREATER,
                 }),
                 multisample: Self::MULTISAMPLING,
+                dynamic_states: &[],
             });
 
             context.destroy_shader_module(vertex_module);
@@ -258,7 +293,7 @@ impl App {
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
 
-        let per_frame_buffer = context.create_buffer("global_buffer", &render::BufferDesc {
+        let per_frame_buffer = context.create_buffer("per_frame_buffer", &render::BufferDesc {
             size: std::mem::size_of::<PerFrameData>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
@@ -281,23 +316,28 @@ impl App {
         Self {
             gpu_assets,
             scene,
+            debug_line_renderer: DebugLineRenderer::new(context),
             scene_draw_gen: SceneDrawGen::new(context),
+            shadow_map_renderer: ShadowMapRenderer::new(&context),
 
             basic_pipeline: mesh_pipeline,
             per_frame_buffer,
             
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
+            mock_camera: camera,
+            mock_camera_controller: CameraController::new(1.0, 0.003),
             sun_light: Camera {
                 transform: Transform::default(),
                 projection: Projection::Orthographic { half_width: 20.0, near_clip: -20.0, far_clip: 20.0 },
             },
             light_dir_controller: CameraController::new(1.0, 0.003),
 
+            view_mock_camera: false,
+
             scene_editor_open: false,
             profiler_open: false,
             graph_debugger_open: false,
-            shadow_map_renderer: ShadowMapRenderer::new(&context),
         }
     }
 
@@ -312,11 +352,21 @@ impl App {
         puffin::profile_function!();
 
         let delta_time = time.delta().as_secs_f32();
-        
-        if input.mouse_held(MouseButton::Right) {
-            self.camera_controller.update_look(input, &mut self.camera.transform);
+
+        self.view_mock_camera = input.key_held(KeyCode::M);
+
+        if self.view_mock_camera {
+            if input.mouse_held(MouseButton::Right) {
+                self.mock_camera_controller.update_look(input, &mut self.mock_camera.transform);
+            }
+            self.mock_camera_controller.update_movement(input, delta_time, &mut self.mock_camera.transform);
+        } else {
+            if input.mouse_held(MouseButton::Right) {
+                self.camera_controller.update_look(input, &mut self.camera.transform);
+            }
+            self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
         }
-        self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
+
         
         if input.mouse_held(MouseButton::Middle) {
             self.light_dir_controller.update_look(input, &mut self.sun_light.transform);
@@ -479,12 +529,17 @@ impl App {
         let screen_extent = frame_ctx.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
-        let view_projection = self.camera.compute_matrix(aspect_ratio);
+        let main_camera = if self.view_mock_camera {
+            &self.mock_camera
+        } else {
+            &self.camera
+        };
+        let view_projection = main_camera.compute_matrix(aspect_ratio);
 
         unsafe {
             let per_frame_data = self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut();
             per_frame_data.viewproj = view_projection;
-            per_frame_data.view_pos = self.camera.transform.position;
+            per_frame_data.view_pos = main_camera.transform.position;
         }
         
         let swapchain_image = frame_ctx.get_swapchain_image();
@@ -529,10 +584,24 @@ impl App {
         let shadow_map_draw_commands = self.scene_draw_gen
             .create_draw_commands(frame_ctx, submesh_count, submeshes, mesh_infos, "shadow_map_draw_commands".into());
 
-        self.sun_light.transform.position = self.camera.transform.position;
-        let light_projection = self.sun_light.compute_matrix(1.0);
-        let light_direction = -self.sun_light.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
+        let mock_aspect_ratio = 16.0 / 9.0;
+        let mock_view = self.mock_camera.transform.compute_matrix().inverse();
+        let mock_projection = Mat4::perspective_rh(60.0f32.to_radians(), mock_aspect_ratio, 0.1, 24.0);
+        let mock_view_projection = mock_projection * mock_view;
 
+        let mock_camera_frustum_corners = frustum_corners_from_matrix(&mock_view_projection);
+
+        let light_direction = -self.sun_light.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
+        let light_projection = cascaded_directional_light_projection(
+            &mock_camera_frustum_corners,
+            // light_direction,
+            self.sun_light.transform.orientation.inverse(),
+        );
+
+        self.debug_line_renderer.draw_line(self.mock_camera.transform.position, self.mock_camera.transform.position + light_direction, vec4(1.0, 1.0, 0.0, 1.0));
+        self.debug_line_renderer.draw_frustum(&mock_camera_frustum_corners, vec4(1.0, 1.0, 1.0, 1.0));
+        self.debug_line_renderer.draw_frustum(&frustum_corners_from_matrix(&light_projection), vec4(1.0, 1.0, 0.0, 1.0));
+        
         let mut shadow_map = 0;
 
         egui::Window::new("shadow_debug").show(egui_ctx, |ui| {
@@ -594,7 +663,7 @@ impl App {
         }
 
         frame_ctx.add_pass(
-            "mesh_pass",
+            "forward_pass",
             &dependencies,
             move |cmd, graph| {
                 let target_image = graph.get_image(target_image).unwrap();
@@ -692,11 +761,14 @@ impl App {
                 cmd.end_rendering();
             },
         );
+
+        self.debug_line_renderer.render(frame_ctx, target_image, resolve_image, depth_image, view_projection);
     }
 
     fn destroy(&self, context: &render::Context) {
         self.gpu_assets.destroy(context);
         self.scene.destroy(context);
+        self.debug_line_renderer.destroy(context);
         self.scene_draw_gen.destroy(context);
         self.shadow_map_renderer.destroy(context);
         context.destroy_pipeline(&self.basic_pipeline);
@@ -796,9 +868,10 @@ impl ShadowMapRenderer {
                 rasterizer: render::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
                     front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                     cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: render::PipelineState::Dynamic,
+                    depth_bias: Some(render::DepthBias::default()),
                     depth_clamp: true,
                 },
                 color_attachments: &[],
@@ -809,6 +882,7 @@ impl ShadowMapRenderer {
                     compare: vk::CompareOp::GREATER,
                 }),
                 multisample: render::MultisampleCount::None,
+                dynamic_states: &[vk::DynamicState::DEPTH_BIAS]
             });
 
             context.destroy_shader_module(vertex_module);
@@ -923,6 +997,258 @@ impl ShadowMapRenderer {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct DebugLineVertex {
+    position: Vec3,
+    color: [u8; 4],
+}
+
+pub struct DebugLineRenderer {
+    pipeline: render::RasterPipeline,
+    line_buffer: render::Buffer,
+    vertex_cursor: usize,
+    frame_index: usize,
+}
+
+impl DebugLineRenderer {
+    pub const MAX_VERTEX_COUNT: usize = 1_000_000;
+
+    pub fn new(context: &render::Context) -> Self {
+        let pipeline = {
+            let vertex_shader = utils::load_spv("shaders/debug_line.vert.spv").unwrap();
+            let fragment_shader = utils::load_spv("shaders/debug_line.frag.spv").unwrap();
+
+            let vertex_module = context.create_shader_module(&vertex_shader, "debug_line_vertex_shader");
+            let fragment_module = context.create_shader_module(&fragment_shader, "debug_line_fragment_shader");
+
+            let entry = cstr::cstr!("main");
+
+            let pipeline = context.create_raster_pipeline("basic_pipeline", &render::RasterPipelineDesc {
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: Some(render::ShaderStage {
+                    module: fragment_module,
+                    entry,
+                }),
+                vertex_input: render::VertexInput {
+                    bindings: &[vk::VertexInputBindingDescription {
+                        binding: 0,
+                        stride: std::mem::size_of::<DebugLineVertex>() as u32,
+                        input_rate: vk::VertexInputRate::VERTEX,
+                    }],
+                    attributes: &[
+                        vk::VertexInputAttributeDescription {
+                            location: 0,
+                            binding: 0,
+                            format: vk::Format::R32G32B32_SFLOAT,
+                            offset: bytemuck::offset_of!(DebugLineVertex, position) as u32,
+                        },
+                        vk::VertexInputAttributeDescription {
+                            location: 1,
+                            binding: 0,
+                            format: vk::Format::R8G8B8A8_UNORM,
+                            offset: bytemuck::offset_of!(DebugLineVertex, color) as u32,
+                        },
+                    ],
+                },
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::LINE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_bias: None,
+                    depth_clamp: false,
+                },
+                color_attachments: &[render::PipelineColorAttachment {
+                    format: context.swapchain.format(),
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }],
+                depth_state: Some(render::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: true,
+                    write: false,
+                    compare: vk::CompareOp::GREATER_OR_EQUAL,
+                }),
+                multisample: App::MULTISAMPLING,
+                dynamic_states: &[vk::DynamicState::DEPTH_TEST_ENABLE]
+            });
+
+            context.destroy_shader_module(vertex_module);
+            context.destroy_shader_module(fragment_module);
+
+            pipeline
+        };
+
+        let line_buffer = context.create_buffer("debug_line_buffer", &render::BufferDesc {
+            size: render::FRAME_COUNT * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>(),
+            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+            memory_location: MemoryLocation::CpuToGpu,
+        });
+
+        Self { pipeline, line_buffer, vertex_cursor: 0, frame_index: 0 }
+    }
+
+    fn remainin_vertex_space(&self) -> usize {
+        Self::MAX_VERTEX_COUNT * (self.frame_index + 1) - self.vertex_cursor
+    }
+
+    pub fn add_vertices(&mut self, vertices: &[DebugLineVertex]) {
+        assert!(self.remainin_vertex_space() >= vertices.len());
+        unsafe {
+            let dst_ptr = self.line_buffer.mapped_ptr.unwrap()
+                .as_ptr()
+                .cast::<DebugLineVertex>()
+                .add(self.vertex_cursor);
+            std::ptr::copy_nonoverlapping(vertices.as_ptr(), dst_ptr, vertices.len());
+        }
+        self.vertex_cursor += vertices.len();
+    }
+
+    pub fn draw_line(&mut self, start: Vec3, end: Vec3, color: Vec4) {
+        let color = color.to_array().map(|f| (f * 255.0) as u8);
+        self.add_vertices(&[
+            DebugLineVertex { position: start, color },
+            DebugLineVertex { position: end, color },
+        ]);
+    }
+
+    pub fn draw_frustum(&mut self, corners: &[Vec3; 8], color: Vec4) {
+        let color = color.to_array().map(|f| (f * 255.0) as u8);
+
+        self.add_vertices(&[
+            DebugLineVertex { position: corners[0], color },
+            DebugLineVertex { position: corners[1], color },
+            DebugLineVertex { position: corners[1], color },
+            DebugLineVertex { position: corners[2], color },
+            DebugLineVertex { position: corners[2], color },
+            DebugLineVertex { position: corners[3], color },
+            DebugLineVertex { position: corners[3], color },
+            DebugLineVertex { position: corners[0], color },
+            
+            DebugLineVertex { position: corners[4], color },
+            DebugLineVertex { position: corners[5], color },
+            DebugLineVertex { position: corners[5], color },
+            DebugLineVertex { position: corners[6], color },
+            DebugLineVertex { position: corners[6], color },
+            DebugLineVertex { position: corners[7], color },
+            DebugLineVertex { position: corners[7], color },
+            DebugLineVertex { position: corners[4], color },
+
+            DebugLineVertex { position: corners[0], color },
+            DebugLineVertex { position: corners[4], color },
+            DebugLineVertex { position: corners[1], color },
+            DebugLineVertex { position: corners[5], color },
+            DebugLineVertex { position: corners[2], color },
+            DebugLineVertex { position: corners[6], color },
+            DebugLineVertex { position: corners[3], color },
+            DebugLineVertex { position: corners[7], color },
+        ]);
+    }
+
+    pub fn draw_cross(&mut self, pos: Vec3, color: Vec4) {
+        let color = color.to_array().map(|f| (f * 255.0) as u8);
+
+        self.add_vertices(&[
+            DebugLineVertex { position: pos - vec3( 1.0,  1.0, 1.0) * 0.01, color },
+            DebugLineVertex { position: pos + vec3( 1.0,  1.0, 1.0) * 0.01, color },
+            DebugLineVertex { position: pos - vec3(-1.0,  1.0, 1.0) * 0.01, color },
+            DebugLineVertex { position: pos + vec3(-1.0,  1.0, 1.0) * 0.01, color },
+            DebugLineVertex { position: pos - vec3( 1.0, -1.0, 1.0) * 0.01, color },
+            DebugLineVertex { position: pos + vec3( 1.0, -1.0, 1.0) * 0.01, color },
+            DebugLineVertex { position: pos - vec3(-1.0, -1.0, 1.0) * 0.01, color },
+            DebugLineVertex { position: pos + vec3(-1.0, -1.0, 1.0) * 0.01, color },
+        ]);
+    }
+
+    pub fn render(
+        &mut self,
+        frame_ctx: &mut render::FrameContext,
+        target_image: render::ResourceHandle,
+        resolve_image: Option<render::ResourceHandle>,
+        depth_image: render::ResourceHandle,
+        view_projection: Mat4,
+    ) {
+        let line_buffer = frame_ctx.import_buffer("debug_line_buffer", &self.line_buffer, &Default::default());
+        let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>();
+        let vertex_count = self.vertex_cursor;
+        let pipeline = self.pipeline;
+        
+        let mut dependencies = vec![
+            (target_image, render::AccessKind::ColorAttachmentWrite),
+            (depth_image, render::AccessKind::DepthAttachmentRead),
+        ];
+
+        if let Some(resolve_image) = resolve_image {
+            dependencies.push((resolve_image, render::AccessKind::ColorAttachmentWrite));
+        }
+
+        frame_ctx.add_pass(
+            "debug_line_render",
+            &dependencies,
+            move |cmd, graph| {
+                let target_image = graph.get_image(target_image).unwrap();
+                let resolve_image = resolve_image.map(|handle| graph.get_image(handle).unwrap());
+                let depth_image = graph.get_image(depth_image).unwrap();
+                let line_buffer = graph.get_buffer(line_buffer).unwrap();
+
+                
+                let mut color_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(target_image.view)
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE);
+
+                if let Some(resolve_image) = resolve_image {
+                    color_attachment = color_attachment
+                        .resolve_image_view(resolve_image.view)
+                        .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+                }
+                
+                let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
+                    .image_view(depth_image.view)
+                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::NONE);
+
+                let rendering_info = vk::RenderingInfo::builder()
+                    .render_area(target_image.full_rect())
+                    .layer_count(1)
+                    .color_attachments(std::slice::from_ref(&color_attachment))
+                    .depth_attachment(&depth_attachemnt);
+
+                cmd.begin_rendering(&rendering_info);
+                cmd.bind_raster_pipeline(pipeline);
+                cmd.bind_vertex_buffer(0, &line_buffer, buffer_offset as u64);
+                cmd.push_constants(bytemuck::bytes_of(&view_projection), 0);
+
+                cmd.push_constants(bytemuck::bytes_of(&0.1f32), std::mem::size_of::<Mat4>() as u32);
+                cmd.set_depth_test_enable(false);
+                cmd.draw(0..vertex_count as u32, 0..1);
+
+                
+                cmd.push_constants(bytemuck::bytes_of(&1.0f32), std::mem::size_of::<Mat4>() as u32);
+                cmd.set_depth_test_enable(true);
+                cmd.draw(0..vertex_count as u32, 0..1);
+
+                cmd.end_rendering();
+            });
+
+        self.frame_index = (self.frame_index + 1) % render::FRAME_COUNT;
+        self.vertex_cursor = Self::MAX_VERTEX_COUNT * self.frame_index;
+    }
+
+    pub fn destroy(&self, context: &render::Context) {
+        context.destroy_pipeline(&self.pipeline);
+        context.destroy_buffer(&self.line_buffer);
+    }
+}
+
 fn main() {
     puffin::GlobalProfiler::lock().new_frame();
     utils::init_logger(false);
@@ -950,7 +1276,6 @@ fn main() {
     let egui_ctx = egui::Context::default();
     let mut egui_state = egui_winit::State::new(&event_loop);
     let mut egui_renderer = EguiRenderer::new(&context);
-
 
     let mut app = App::new(&context, gltf_path.as_ref().map(|s| s.as_str()));
 

@@ -1,3 +1,9 @@
+struct GlobalData {
+    ivec2 screen_size;
+    uint elapsed_frames;
+    float elapsed_time;
+};
+
 struct PerFrameData {
     mat4 view_projection;
     vec3 view_pos;

@@ -1,23 +1,33 @@
-use std::{sync::Mutex, borrow::Cow};
+use std::{sync::Mutex, borrow::Cow, time::Instant};
 
 use ash::vk;
 use winit::window::Window;
 
 use crate::render;
 
-use super::graph::{RenderGraph, CompiledRenderGraph};
+use super::{graph::{RenderGraph, CompiledRenderGraph}, DescriptorHandle};
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuGlobalData {
+    screen_size: [u32; 2],
+    elapsed_frames: u32,
+    elapsed_time: f32,
+}
 
 pub struct Frame {
     pub in_flight_fence: vk::Fence,
     pub image_available_semaphore: vk::Semaphore,
     pub render_finished_semaphore: vk::Semaphore,
     pub command_pool: render::CommandPool,
+
+    global_buffer: render::Buffer,
     
     buffers_to_free: Vec<render::Buffer>,
     images_to_free: Vec<render::Image>,
 }
 
-const FRAME_COUNT: usize = 2;
+pub const FRAME_COUNT: usize = 2;
 
 struct RecordSubmitStuff {
     command_pool: render::CommandPool,
@@ -36,6 +46,8 @@ pub struct Context {
 
     pub frames: [Frame; FRAME_COUNT],
     pub frame_index: usize,
+    pub elapsed_frames: usize,
+    start: Instant,
 
     record_submit_stuff: Mutex<RecordSubmitStuff>,
 }
@@ -89,11 +101,19 @@ impl Context {
 
             let command_pool = render::CommandPool::new(&device, &format!("frame{frame_index}"));
 
+            let global_buffer = render::Buffer::create_impl(&device, &descriptors, "global_buffer".into(), &render::BufferDesc {
+                size: std::mem::size_of::<GpuGlobalData>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
+            });
+
             Frame {
                 in_flight_fence,
                 image_available_semaphore,
                 render_finished_semaphore,
                 command_pool,
+                
+                global_buffer,
                 
                 buffers_to_free: Vec::new(),
                 images_to_free: Vec::new(),
@@ -119,6 +139,8 @@ impl Context {
             
             frames,
             frame_index: 0,
+            elapsed_frames: 0,
+            start: Instant::now(),
 
             record_submit_stuff,
         }
@@ -167,6 +189,8 @@ impl Drop for Context {
             }
 
             frame.command_pool.destroy(&self.device);
+
+            render::Buffer::destroy_impl(&self.device, &self.descriptors, &frame.global_buffer);
         
             for buffer in frame.buffers_to_free.iter() {
                 render::Buffer::destroy_impl(&self.device, &self.descriptors, buffer);
@@ -262,6 +286,10 @@ impl FrameContext<'_> {
         self.acquired_image_handle
     }
 
+    pub fn get_global_buffer_index(&self) -> u32 {
+        self.frames[self.frame_index].global_buffer.descriptor_index.unwrap().to_raw()
+    }
+
     pub fn import_buffer(
         &mut self,
         name: impl Into<Cow<'static, str>>,
@@ -312,6 +340,19 @@ impl FrameContext<'_> {
     }
 
     fn record(&mut self) {
+        unsafe {
+            let screen_size = self.swapchain_extent();
+            self.frames[self.frame_index].global_buffer.mapped_ptr
+                .unwrap()
+                .cast::<GpuGlobalData>()
+                .as_ptr()
+                .write(GpuGlobalData {
+                    screen_size: [screen_size.width, screen_size.height],
+                    elapsed_frames: self.context.elapsed_frames as u32,
+                    elapsed_time: self.context.start.elapsed().as_secs_f32(),
+            })
+        };
+
         self.context.graph.compile_and_flush(
             &self.context.device,
             &self.context.descriptors,
@@ -371,5 +412,6 @@ impl Drop for FrameContext<'_> {
     fn drop(&mut self) {
         self.record();
         self.context.frame_index = (self.context.frame_index + 1) % FRAME_COUNT;
+        self.context.elapsed_frames += 1;
     }
 }

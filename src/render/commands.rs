@@ -304,6 +304,13 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
+    pub fn set_depth_test_enable(&self, enable: bool) {
+        unsafe {
+            self.device.raw.cmd_set_depth_test_enable(self.buffer(), enable)
+        }
+    }
+
+    #[inline(always)]
     pub fn bind_raster_pipeline(&self, pipeline: render::RasterPipeline) {
         unsafe {
             self.device.raw.cmd_bind_pipeline(self.buffer(), vk::PipelineBindPoint::GRAPHICS, pipeline.handle);

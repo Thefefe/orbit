@@ -78,9 +78,10 @@ impl EguiRenderer {
                 rasterizer: render::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
                     front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                     cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: render::PipelineState::Off,
+                    depth_bias: None,
                     depth_clamp: false,
                 },
                 color_attachments: &[render::PipelineColorAttachment {
@@ -98,6 +99,7 @@ impl EguiRenderer {
                 }],
                 depth_state: None,
                 multisample: render::MultisampleCount::None,
+                dynamic_states: &[],
             });
 
             context.destroy_shader_module(vertex_shader);

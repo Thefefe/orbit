@@ -35,6 +35,8 @@ layout(location = 0) in VertexOutput {
     vec4 light_space_frag_pos;
 } vout;
 
+layout(location = 0) out vec4 out_color;
+
 uint hash(uint a)
 {
    a = (a+0x7ed55d16) + (a<<12);
@@ -52,11 +54,6 @@ vec3 srgb_to_linear(vec3 srgb) {
     vec3 higher = pow((srgb + vec3(0.055)) / vec3(1.055), vec3(2.4));
     return mix(higher, lower, cutoff);
 }
-
-layout(location = 0) out vec4 out_color;
-
-const float PI = 3.14159265359;
-const float EPSILON = 0.0000001; // just some small number that isn't 0
 
 float distribution_ggx(float n_dot_h, float roughness) {
     float a = roughness * roughness;
@@ -87,12 +84,12 @@ float compute_shadow(vec4 light_space_frag_pos) {
     vec2 tex_coord = (proj_coords.xy + 1.0 ) / 2.0;
 
     float shadow = 0.0;
-    vec2 texel_size = 1.0 / textureSize(GetSampledTexture(light_shadow_map), 0);
+    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(light_shadow_map), 0);
     for(int x = -1; x <= 1; ++x)
     {
         for(int y = -1; y <= 1; ++y)
         {
-            float pcf_depth = texture(GetSampledTexture(light_shadow_map), tex_coord + vec2(x, y) * texel_size).r;
+            float pcf_depth = texture(GetSampledTexture2D(light_shadow_map), tex_coord + vec2(x, y) * texel_size).r;
             shadow += current_depth  > pcf_depth ? 1.0 : 0.0;
         }    
     }
@@ -156,13 +153,13 @@ void main() {
     float ao         = 1.0;
 
     if (material.base_texture_index != TEXTURE_NONE) {
-        base_color *= texture(GetSampledTexture(material.base_texture_index), vout.uv);
+        base_color *= texture(GetSampledTexture2D(material.base_texture_index), vout.uv);
         albedo = base_color.rgb;
     }
 
     if (material.normal_texture_index != TEXTURE_NONE) {
         // support for 2 component normals, for now I do this for all normal maps
-        vec4 normal_tex = texture(GetSampledTexture(material.normal_texture_index), vout.uv);
+        vec4 normal_tex = texture(GetSampledTexture2D(material.normal_texture_index), vout.uv);
         vec3 normal_tang = normal_tex.xyz * 2.0 - 1.0;
         normal_tang.z = sqrt(abs(1 - normal_tang.x*normal_tang.x - normal_tang.y * normal_tang.y));
         normal = vout.TBN * normal_tang;
@@ -170,17 +167,17 @@ void main() {
     
     if (material.metallic_roughness_texture_index != TEXTURE_NONE) {
         vec4 metallic_roughness =
-            texture(GetSampledTexture(material.metallic_roughness_texture_index), vout.uv);
+            texture(GetSampledTexture2D(material.metallic_roughness_texture_index), vout.uv);
         metallic *= metallic_roughness.b;
         roughness *= metallic_roughness.g;
     }
 
     if (material.emissive_texture_index != TEXTURE_NONE) {
-        emissive *= texture(GetSampledTexture(material.emissive_texture_index), vout.uv).rgb;
+        emissive *= texture(GetSampledTexture2D(material.emissive_texture_index), vout.uv).rgb;
     }
 
     if (material.occulusion_texture_index != TEXTURE_NONE) {
-        ao = texture(GetSampledTexture(material.occulusion_texture_index), vout.uv).r * material.occulusion_factor;
+        ao = texture(GetSampledTexture2D(material.occulusion_texture_index), vout.uv).r * material.occulusion_factor;
     }
 
     vec3 base_reflectivity = mix(vec3(0.04), albedo, metallic);

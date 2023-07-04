@@ -21,7 +21,7 @@ impl std::ops::Deref for Buffer {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BufferDesc {
     pub size: usize,
     pub usage: vk::BufferUsageFlags,

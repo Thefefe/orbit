@@ -1,4 +1,4 @@
-use std::{collections::HashSet, ops::Range, borrow::Cow};
+use std::{collections::{HashSet, HashMap}, ops::Range, borrow::Cow};
 
 use ash::vk;
 
@@ -58,7 +58,7 @@ pub enum AnyResourceView {
     Image(render::ImageView),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AnyResourceDesc {
     Buffer(render::BufferDesc),
     Image(render::ImageDesc),
@@ -87,6 +87,36 @@ impl AnyResource {
         match self {
             AnyResource::Buffer(_)  => ResourceKind::Buffer,
             AnyResource::Image(_)   => ResourceKind::Image,
+        }
+    }
+
+    pub fn create(
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+        name: Cow<'static, str>,
+        desc: &AnyResourceDesc) -> Self {
+        match desc {
+            AnyResourceDesc::Buffer(desc) => {
+                AnyResource::Buffer(render::Buffer::create_impl(device, descriptors, name, desc))
+            },
+            AnyResourceDesc::Image(desc) => {
+                AnyResource::Image(render::Image::create_impl(device, descriptors, name, desc))
+            },
+        }
+    }
+
+    pub fn destroy(
+        &self,
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors
+    ) {
+        match self {
+            AnyResource::Buffer(buffer) => {
+                render::Buffer::destroy_impl(device, descriptors, buffer);
+            },
+            AnyResource::Image(image) => {
+                render::Image::destroy_impl(device, descriptors, image);
+            },
         }
     }
 }
@@ -310,7 +340,66 @@ pub struct BatchData {
 #[derive(Debug)]
 pub struct GraphResource {
     name: Cow<'static, str>,
-    resource: AnyResourceView,
+    resource_view: AnyResourceView,
+}
+
+#[derive(Debug)]
+struct TransientResourceNode {
+    resource: AnyResource,
+    next_node: Option<arena::Index>,
+}
+
+#[derive(Debug, Default)]
+pub struct TransientResourceRegistry {
+    resources_nodes: arena::Arena<TransientResourceNode>,
+    descriptor_lookup: HashMap<AnyResourceDesc, arena::Index>,
+}
+
+impl TransientResourceRegistry {
+    pub fn new() -> Self {
+        Self {
+            resources_nodes: arena::Arena::new(),
+            descriptor_lookup: HashMap::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.resources_nodes.clear();
+        self.descriptor_lookup.clear();
+    }
+
+    pub fn resources(&self) -> impl Iterator<Item = &AnyResource> {
+        self.resources_nodes.iter().map(|(_, node)| &node.resource)
+    }
+
+    fn get_by_descriptor(&mut self, desc: &AnyResourceDesc) -> Option<AnyResource> {
+        let index = self.descriptor_lookup.get_mut(desc)?;
+        let resource_node = self.resources_nodes.remove(*index).unwrap();
+        
+        if let Some(next_index) = resource_node.next_node {
+            *index = next_index;
+        } else {
+            self.descriptor_lookup.remove(desc);
+        }
+
+        Some(resource_node.resource)
+    }
+
+    pub fn insert(&mut self, desc: AnyResourceDesc, resource: AnyResource) {
+        if let Some(index) = self.descriptor_lookup.get_mut(&desc) {
+            let new_index = self.resources_nodes.insert(TransientResourceNode {
+                resource,
+                next_node: Some(*index),
+            });
+            *index = new_index;
+        } else {
+            let index = self.resources_nodes.insert(TransientResourceNode {
+                resource,
+                next_node: None,
+            });
+            self.descriptor_lookup.insert(desc, index);
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -321,8 +410,9 @@ pub struct CompiledRenderGraph {
     pub semaphores: Vec<vk::Semaphore>,
     pub batches: Vec<BatchData>,
 
-    pub transient_buffers: Vec<render::Buffer>,
-    pub transient_images: Vec<render::Image>,
+    // pub transient_buffers: Vec<render::Buffer>,
+    // pub transient_images: Vec<render::Image>,
+    pub transient_resource_registry: TransientResourceRegistry,
 }
 
 pub struct Batch<'a> {
@@ -363,14 +453,14 @@ impl CompiledRenderGraph {
     }
 
     pub fn get_buffer(&self, handle: render::ResourceHandle) -> Option<&render::BufferView> {
-        match &self.resources[handle].resource {
+        match &self.resources[handle].resource_view {
             AnyResourceView::Buffer(buffer) => Some(buffer),
             _ => None,
         }
     }
 
     pub fn get_image(&self, handle: render::ResourceHandle) -> Option<&render::ImageView> {
-        match &self.resources[handle].resource {
+        match &self.resources[handle].resource_view {
             AnyResourceView::Image(image) => Some(image),
             _ => None,
         }
@@ -382,12 +472,15 @@ impl RenderGraph {
         &mut self,
         device: &render::Device,
         descriptors: &render::BindlessDescriptors,
-        compiled: &mut CompiledRenderGraph
+        compiled: &mut CompiledRenderGraph,
+        leftover_resources: &mut TransientResourceRegistry,
     ) {
         puffin::profile_function!();
         compiled.clear();
 
         let sorted_passes = self.topology_sort();
+
+        std::mem::swap(leftover_resources, &mut compiled.transient_resource_registry);
 
         for resource_data in self.resources.iter_mut() {
             // TODO: allocations can be reduces here by not having the names in both the resource and the GraphResource
@@ -397,40 +490,48 @@ impl RenderGraph {
                 ResourceSource::Import { view } => {
                     compiled.resources.push(GraphResource {
                         name,
-                        resource: *view,
+                        resource_view: *view,
                     });
                 },
                 ResourceSource::Create { desc } => {
-                    match desc {
-                        AnyResourceDesc::Buffer(desc) => {
-                            let buffer = render::Buffer::create_impl(
-                                device,
-                                descriptors,
-                                resource_data.name.clone().into(),
-                                desc
-                            );
+                    let resource = leftover_resources.get_by_descriptor(desc)
+                        .unwrap_or_else(|| AnyResource::create(device, descriptors, name.clone(), desc));
+
+                    let resource_view = resource.view();
+
+                    compiled.resources.push(GraphResource { name, resource_view });
+                    compiled.transient_resource_registry.insert(*desc, resource);
+
+                    // match desc {
+                    //     AnyResourceDesc::Buffer(desc) => {
+                    //         let buffer = render::Buffer::create_impl(
+                    //             device,
+                    //             descriptors,
+                    //             resource_data.name.clone().into(),
+                    //             desc
+                    //         );
                             
-                            compiled.resources.push(GraphResource {
-                                name,
-                                resource: AnyResourceView::Buffer(buffer.view()),
-                            });
-                            compiled.transient_buffers.push(buffer);
-                        },
-                        AnyResourceDesc::Image(desc) => {
-                            let image = render::Image::create_impl(
-                                device,
-                                descriptors,
-                                resource_data.name.clone().into(),
-                                desc
-                            );
+                    //         compiled.resources.push(GraphResource {
+                    //             name,
+                    //             resource_view: AnyResourceView::Buffer(buffer.view()),
+                    //         });
+                    //         compiled.transient_buffers.push(buffer);
+                    //     },
+                    //     AnyResourceDesc::Image(desc) => {
+                    //         let image = render::Image::create_impl(
+                    //             device,
+                    //             descriptors,
+                    //             resource_data.name.clone().into(),
+                    //             desc
+                    //         );
                             
-                            compiled.resources.push(GraphResource {
-                                name,
-                                resource: AnyResourceView::Image(image.view()),
-                            });
-                            compiled.transient_images.push(image);
-                        },
-                    }
+                    //         compiled.resources.push(GraphResource {
+                    //             name,
+                    //             resource_view: AnyResourceView::Image(image.view()),
+                    //         });
+                    //         compiled.transient_images.push(image);
+                    //     },
+                    // }
                 },
             } 
         }
@@ -480,7 +581,7 @@ impl RenderGraph {
                         if !batch.memory_barrier.src_access_mask.is_empty() {
                             batch.memory_barrier.dst_access_mask |= dst_access.access_mask();
                         }
-                    } else if let AnyResourceView::Image(image) = &compiled.resources[dependency.resource_handle].resource {
+                    } else if let AnyResourceView::Image(image) = &compiled.resources[dependency.resource_handle].resource_view {
                         batch.begin_image_barrier_range.end += 1;
                         compiled.image_barriers.push(render::image_barrier(image, src_access, dst_access));
                     } else {
@@ -512,7 +613,7 @@ impl RenderGraph {
                             compiled.semaphores.push(semaphore);
                         }
 
-                        if let AnyResourceView::Image(image) = &compiled.resources[dependency.resource_handle].resource {
+                        if let AnyResourceView::Image(image) = &compiled.resources[dependency.resource_handle].resource_view {
                             if resource_data.target_access != render::AccessKind::None
                                 && dependency.access != resource_data.target_access
                             {

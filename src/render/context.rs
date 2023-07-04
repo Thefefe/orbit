@@ -5,7 +5,7 @@ use winit::window::Window;
 
 use crate::render;
 
-use super::{graph::{RenderGraph, CompiledRenderGraph}, DescriptorHandle};
+use super::{graph::{RenderGraph, CompiledRenderGraph}, DescriptorHandle, TransientResourceRegistry};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -23,8 +23,7 @@ pub struct Frame {
 
     global_buffer: render::Buffer,
     
-    buffers_to_free: Vec<render::Buffer>,
-    images_to_free: Vec<render::Image>,
+    leftover_resource_registry: TransientResourceRegistry,
 }
 
 pub const FRAME_COUNT: usize = 2;
@@ -115,8 +114,7 @@ impl Context {
                 
                 global_buffer,
                 
-                buffers_to_free: Vec::new(),
-                images_to_free: Vec::new(),
+                leftover_resource_registry: TransientResourceRegistry::new(),
             }
         });
 
@@ -191,14 +189,14 @@ impl Drop for Context {
             frame.command_pool.destroy(&self.device);
 
             render::Buffer::destroy_impl(&self.device, &self.descriptors, &frame.global_buffer);
-        
-            for buffer in frame.buffers_to_free.iter() {
-                render::Buffer::destroy_impl(&self.device, &self.descriptors, buffer);
+
+            for resource in frame.leftover_resource_registry.resources() {
+                resource.destroy(&self.device, &self.descriptors)
             }
-    
-            for image in frame.images_to_free.iter() {
-                render::Image::destroy_impl(&self.device, &self.descriptors, image);
-            }
+        }
+
+        for resource in self.compiled_graph.transient_resource_registry.resources() {
+            resource.destroy(&self.device, &self.descriptors);
         }
 
         self.swapchain.destroy(&self.device);
@@ -233,17 +231,6 @@ impl Context {
         }
 
         frame.command_pool.reset(&self.device);
-
-        {
-            puffin::profile_scope!("last_frame_releases");
-            for buffer in frame.buffers_to_free.drain(..) {
-                render::Buffer::destroy_impl(&self.device, &self.descriptors, &buffer);
-            }
-    
-            for image in frame.images_to_free.drain(..) {
-                render::Image::destroy_impl(&self.device, &self.descriptors, &image);
-            }
-        }
 
         self.swapchain.resize(self.window.inner_size().into());
 
@@ -340,6 +327,7 @@ impl FrameContext<'_> {
     }
 
     fn record(&mut self) {
+        puffin::profile_function!();
         unsafe {
             let screen_size = self.swapchain_extent();
             self.frames[self.frame_index].global_buffer.mapped_ptr
@@ -352,59 +340,74 @@ impl FrameContext<'_> {
                     elapsed_time: self.context.start.elapsed().as_secs_f32(),
             })
         };
+        let frame = &mut self.context.frames[self.context.frame_index];
 
         self.context.graph.compile_and_flush(
             &self.context.device,
             &self.context.descriptors,
-            &mut self.context.compiled_graph
+            &mut self.context.compiled_graph,
+            &mut frame.leftover_resource_registry,
         );
 
-        let frame = &mut self.context.frames[self.context.frame_index];
+        {
+            puffin::profile_scope!("command_recording");
+            for (batch_index, batch) in self.context.compiled_graph.iter_batches().enumerate() {
+                puffin::profile_scope!("batch_record", format!("{batch_index}"));
+                let cmd_buffer = frame.command_pool
+                    .begin_new(&self.context.device, vk::CommandBufferUsageFlags::empty());
 
-        std::mem::swap(&mut self.context.compiled_graph.transient_buffers, &mut frame.buffers_to_free);
-        std::mem::swap(&mut self.context.compiled_graph.transient_images, &mut frame.images_to_free);
+                for semaphore in batch.wait_semaphores {
+                    cmd_buffer.wait_semaphore(*semaphore, batch.memory_barrier.src_stage_mask);
+                }
 
-        for batch in self.context.compiled_graph.iter_batches() {
-            let cmd_buffer = frame.command_pool
-                .begin_new(&self.context.device, vk::CommandBufferUsageFlags::empty());
-
-            for semaphore in batch.wait_semaphores {
-                cmd_buffer.wait_semaphore(*semaphore, batch.memory_barrier.src_stage_mask);
-            }
-
-            for semaphore in batch.finish_semaphores   {
-                cmd_buffer.signal_semaphore(*semaphore, batch.memory_barrier.dst_stage_mask);
-            }
-            
-            let recorder = cmd_buffer.record(&self.context.device, &self.context.descriptors);
+                for semaphore in batch.finish_semaphores   {
+                    cmd_buffer.signal_semaphore(*semaphore, batch.memory_barrier.dst_stage_mask);
+                }
                 
-            self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
-            self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
+                let recorder = cmd_buffer.record(&self.context.device, &self.context.descriptors);
+                    
+                self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
+                self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
 
-            if batch.memory_barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE
-            || batch.memory_barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE
-            || batch.memory_barrier.src_access_mask | batch.memory_barrier.dst_access_mask != vk::AccessFlags2::NONE
-            {
-                recorder.barrier(&[], batch.begin_image_barriers, &[batch.memory_barrier]);
-            } else {
-                recorder.barrier(&[], batch.begin_image_barriers, &[]);
-            };
+                if batch.memory_barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE
+                || batch.memory_barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE
+                || batch.memory_barrier.src_access_mask | batch.memory_barrier.dst_access_mask != vk::AccessFlags2::NONE
+                {
+                    recorder.barrier(&[], batch.begin_image_barriers, &[batch.memory_barrier]);
+                } else {
+                    recorder.barrier(&[], batch.begin_image_barriers, &[]);
+                };
 
-            for pass in batch.passes {
-                recorder.begin_debug_label(&pass.name, None);
-                (pass.func)(&recorder, &self.context.compiled_graph);
-                recorder.end_debug_label();
+                for pass in batch.passes {
+                    recorder.begin_debug_label(&pass.name, None);
+                    (pass.func)(&recorder, &self.context.compiled_graph);
+                    recorder.end_debug_label();
+                }
+
+                recorder.barrier(&[], batch.finish_image_barriers, &[]);
             }
-
-            recorder.barrier(&[], batch.finish_image_barriers, &[]);
         }
 
-        self.context.device.submit(frame.command_pool.buffers(), frame.in_flight_fence);
-        self.context.swapchain.queue_present(
-            &self.context.device,
-            self.acquired_image,
-            frame.render_finished_semaphore,
-        );
+        {
+            puffin::profile_scope!("command_submit");
+            self.context.device.submit(frame.command_pool.buffers(), frame.in_flight_fence);
+        }
+        {
+            puffin::profile_scope!("queue_present");
+            self.context.swapchain.queue_present(
+                &self.context.device,
+                self.acquired_image,
+                frame.render_finished_semaphore,
+            );
+        }
+
+        {
+            puffin::profile_scope!("leftover_resource_releases");
+            for resource in frame.leftover_resource_registry.resources() {
+                resource.destroy(&self.context.device, &self.context.descriptors)
+            }
+        }
+        frame.leftover_resource_registry.clear();
     }
 }
 

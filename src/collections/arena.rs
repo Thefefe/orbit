@@ -32,13 +32,13 @@ impl NonZeroSlot {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Entry<T> {
     generation: Generation,
     value: EntryValue<T>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum EntryValue<T> {
     Occupied { val: T },
     Free { next_free: Option<NonZeroSlot> }
@@ -91,11 +91,21 @@ impl Index {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Arena<T> {
     entries: Vec<Entry<T>>,
     first_free: Option<NonZeroSlot>,
     len: u32,
+}
+
+impl<T> Default for Arena<T> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            first_free: None,
+            len: 0,
+        }
+    }
 }
 
 impl<T> Arena<T> {

@@ -22,8 +22,6 @@ pub struct Frame {
     pub command_pool: render::CommandPool,
 
     global_buffer: render::Buffer,
-    
-    leftover_resource_registry: TransientResourceRegistry,
 }
 
 pub const FRAME_COUNT: usize = 2;
@@ -42,6 +40,7 @@ pub struct Context {
 
     pub graph: RenderGraph,
     pub compiled_graph: CompiledRenderGraph,
+    leftover_resource_registry: TransientResourceRegistry,
 
     pub frames: [Frame; FRAME_COUNT],
     pub frame_index: usize,
@@ -113,8 +112,6 @@ impl Context {
                 command_pool,
                 
                 global_buffer,
-                
-                leftover_resource_registry: TransientResourceRegistry::new(),
             }
         });
 
@@ -134,6 +131,7 @@ impl Context {
             
             graph: RenderGraph::new(),
             compiled_graph: CompiledRenderGraph::new(),
+            leftover_resource_registry: TransientResourceRegistry::new(),
             
             frames,
             frame_index: 0,
@@ -191,9 +189,10 @@ impl Drop for Context {
 
             render::Buffer::destroy_impl(&self.device, &self.descriptors, &frame.global_buffer);
 
-            for resource in frame.leftover_resource_registry.resources() {
-                resource.destroy(&self.device, &self.descriptors)
-            }
+        }
+        
+        for resource in self.leftover_resource_registry.resources() {
+            resource.destroy(&self.device, &self.descriptors)
         }
 
         for resource in self.compiled_graph.transient_resource_registry.resources() {
@@ -347,7 +346,7 @@ impl FrameContext<'_> {
             &self.context.device,
             &self.context.descriptors,
             &mut self.context.compiled_graph,
-            &mut frame.leftover_resource_registry,
+            &mut self.context.leftover_resource_registry,
         );
 
         {
@@ -404,11 +403,12 @@ impl FrameContext<'_> {
 
         {
             puffin::profile_scope!("leftover_resource_releases");
-            for resource in frame.leftover_resource_registry.resources() {
+            for resource in self.leftover_resource_registry.resources() {
                 resource.destroy(&self.context.device, &self.context.descriptors)
             }
         }
-        frame.leftover_resource_registry.clear();
+
+        self.context.leftover_resource_registry.clear();
     }
 }
 

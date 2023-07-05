@@ -3,7 +3,6 @@
 use std::{f32::consts::PI, borrow::Cow};
 
 use ash::vk;
-use glam::{Vec4Swizzles};
 use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
 use assets::{GpuAssetStore};
@@ -130,6 +129,12 @@ impl Projection {
             }
         }
     }
+
+    pub fn near(&self) -> f32 {
+        match self {
+            Projection::Orthographic { near_clip, .. } | Projection::Perspective { near_clip, .. } => *near_clip,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -148,6 +153,33 @@ impl Camera {
     }
 }
 
+const NDC_BOUNDS: [Vec4; 8] = [
+    vec4(-1.0, -1.0, 0.0, 1.0),
+    vec4( 1.0, -1.0, 0.0, 1.0),
+    vec4( 1.0,  1.0, 0.0, 1.0),
+    vec4(-1.0,  1.0, 0.0, 1.0),
+    
+    vec4(-1.0, -1.0, 1.0, 1.0),
+    vec4( 1.0, -1.0, 1.0, 1.0),
+    vec4( 1.0,  1.0, 1.0, 1.0),
+    vec4(-1.0,  1.0, 1.0, 1.0),
+];
+
+const SHADOW_CASCADE_COUNT: usize = 4;
+
+fn uniform_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32{
+    near + (far - near) * (index as f32 / cascade_count as f32)
+}
+
+fn logarithmic_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32 {
+    near * (far / near).powf(index as f32 / cascade_count as f32)
+}
+
+fn practical_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize, lambda: f32) -> f32 {
+    logarithmic_frustum_split(index, near, far, cascade_count) * lambda +
+    uniform_frustum_split(index, near, far, cascade_count) * (1.0 - lambda)
+}
+
 fn frustum_planes_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
     let mut planes = [matrix.row(3); 6];
     planes[0] += matrix.row(0);
@@ -159,29 +191,18 @@ fn frustum_planes_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
     planes
 }
 
-fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec3; 8] {
+fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec4; 8] {
     let inv_matrix = matrix.inverse();
-    [
-        vec4(-1.0, -1.0, 0.0, 1.0),
-        vec4( 1.0, -1.0, 0.0, 1.0),
-        vec4( 1.0,  1.0, 0.0, 1.0),
-        vec4(-1.0,  1.0, 0.0, 1.0),
-        
-        vec4(-1.0, -1.0, 1.0, 1.0),
-        vec4( 1.0, -1.0, 1.0, 1.0),
-        vec4( 1.0,  1.0, 1.0, 1.0),
-        vec4(-1.0,  1.0, 1.0, 1.0),
-    ].map(|v| {
+    NDC_BOUNDS.map(|v| {
         let v = inv_matrix * v;
-        v.xyz() / v.w
+        v / v.w
     })
 }
 
 fn cascaded_directional_light_projection(
-    frustum_corners_world_space: &[Vec3; 8],
+    frustum_corners_world_space: &[Vec4; 8],
     light_direction: Quat,
 ) -> Mat4 {
-    
     let mut min = Vec3A::splat(f32::MAX);
     let mut max = Vec3A::splat(f32::MIN);
     for corner_world_space in frustum_corners_world_space.iter().copied() {
@@ -199,8 +220,27 @@ fn cascaded_directional_light_projection(
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct GpuShadowCascade {
+    light_projection: Mat4,
+    shadow_map_index: u32,
+    far_view_distance: f32,
+    _padding: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct GpuDirectionalLight {
+    cascades: [GpuShadowCascade; SHADOW_CASCADE_COUNT],
+    color: Vec4,
+    direction: Vec3,
+    _padding: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct PerFrameData {
-    viewproj: Mat4,
+    view_projection: Mat4,
+    view: Mat4,
     view_pos: Vec3,
     render_mode: u32,
 }
@@ -214,6 +254,7 @@ struct App {
 
     basic_pipeline: render::RasterPipeline,
     per_frame_buffer: render::Buffer,
+    directional_light_buffer: render::Buffer,
 
     camera: Camera,
     camera_controller: CameraController,
@@ -222,6 +263,10 @@ struct App {
     sun_light: Camera,
     light_dir_controller: CameraController,
 
+    light_color: Vec3,
+    max_shadow_distance: f32,
+    frustum_split_lambda: f32,
+    selected_cascade: usize,
     view_mock_camera: bool,
 
     scene_editor_open: bool,
@@ -298,6 +343,12 @@ impl App {
             usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
+        
+        let directional_light_buffer = context.create_buffer("directional_light_buffer", &render::BufferDesc {
+            size: std::mem::size_of::<GpuDirectionalLight>(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            memory_location: MemoryLocation::CpuToGpu,
+        });
 
         unsafe {
             per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().render_mode = 0;
@@ -322,6 +373,7 @@ impl App {
 
             basic_pipeline: mesh_pipeline,
             per_frame_buffer,
+            directional_light_buffer,
             
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
@@ -333,6 +385,10 @@ impl App {
             },
             light_dir_controller: CameraController::new(1.0, 0.003),
 
+            light_color: Vec3::splat(1.0),
+            max_shadow_distance: 200.0,
+            frustum_split_lambda: 0.5,
+            selected_cascade: 0,
             view_mock_camera: false,
 
             scene_editor_open: false,
@@ -529,17 +585,14 @@ impl App {
         let screen_extent = frame_ctx.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
-        let main_camera = if self.view_mock_camera {
-            &self.mock_camera
-        } else {
-            &self.camera
-        };
-        let view_projection = main_camera.compute_matrix(aspect_ratio);
+        let view_projection_matrix = self.camera.compute_matrix(aspect_ratio);
+        let view_matrix = self.camera.transform.compute_matrix().inverse();
 
         unsafe {
             let per_frame_data = self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut();
-            per_frame_data.viewproj = view_projection;
-            per_frame_data.view_pos = main_camera.transform.position;
+            per_frame_data.view_projection = view_projection_matrix;
+            per_frame_data.view = view_matrix;
+            per_frame_data.view_pos = self.camera.transform.position;
         }
         
         let swapchain_image = frame_ctx.get_swapchain_image();
@@ -574,9 +627,12 @@ impl App {
         let material_buffer = frame_ctx.import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
         let entity_buffer = frame_ctx.import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
 
-        let submeshes = frame_ctx.import_buffer("scene_submeshe_buffer", &self.scene.submesh_buffer, &Default::default());
+        let submeshes = frame_ctx.import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, &Default::default());
         let mesh_infos = frame_ctx.import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
         let submesh_count = self.scene.submesh_data.len() as u32;
+
+        let directional_light_buffer = frame_ctx
+            .import_buffer("directional_light_buffer", &self.directional_light_buffer, &Default::default());
 
         let draw_commands_buffer = self.scene_draw_gen
             .create_draw_commands(frame_ctx, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
@@ -584,70 +640,89 @@ impl App {
         let shadow_map_draw_commands = self.scene_draw_gen
             .create_draw_commands(frame_ctx, submesh_count, submeshes, mesh_infos, "shadow_map_draw_commands".into());
 
-        let mock_aspect_ratio = 16.0 / 9.0;
-        let mock_view = self.mock_camera.transform.compute_matrix().inverse();
-        let mock_projection = Mat4::perspective_rh(60.0f32.to_radians(), mock_aspect_ratio, 0.1, 24.0);
-        let mock_view_projection = mock_projection * mock_view;
-
-        let mock_camera_frustum_corners = frustum_corners_from_matrix(&mock_view_projection);
-
         let light_direction = -self.sun_light.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
-        let light_projection = cascaded_directional_light_projection(
-            &mock_camera_frustum_corners,
-            // light_direction,
-            self.sun_light.transform.orientation.inverse(),
-        );
 
-        self.debug_line_renderer.draw_line(self.mock_camera.transform.position, self.mock_camera.transform.position + light_direction, vec4(1.0, 1.0, 0.0, 1.0));
-        self.debug_line_renderer.draw_frustum(&mock_camera_frustum_corners, vec4(1.0, 1.0, 1.0, 1.0));
-        self.debug_line_renderer.draw_frustum(&frustum_corners_from_matrix(&light_projection), vec4(1.0, 1.0, 0.0, 1.0));
+        let inv_light_direction = self.sun_light.transform.orientation.inverse();
         
-        let mut shadow_map = 0;
+        let directional_light_data = unsafe {
+            self.directional_light_buffer.mapped_ptr.unwrap().cast::<GpuDirectionalLight>().as_mut()
+        };
+
+        let mut shadow_maps: [render::ResourceHandle; SHADOW_CASCADE_COUNT] = [0; SHADOW_CASCADE_COUNT];
 
         egui::Window::new("shadow_debug").show(egui_ctx, |ui| {
-            if let Projection::Orthographic { half_width, near_clip, far_clip } = &mut self.sun_light.projection {
-                ui.horizontal(|ui| {
-                    ui.label("half_width");
-                    ui.add(egui::DragValue::new(half_width).speed(0.01));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("near_clip");
-                    ui.add(egui::DragValue::new(near_clip).speed(0.01));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("far_clip");
-                    ui.add(egui::DragValue::new(far_clip).speed(0.01));
-                });
+            ui.horizontal(|ui| {
+                ui.label("light_color");
+                let mut array = self.light_color.to_array();
+                ui.color_edit_button_rgb(&mut array);
+                self.light_color = Vec3::from_array(array);
+            });
+            
+            let [constant_factor, clamp, slope_factor] = &mut self.shadow_map_renderer.depth_bias;
 
-                let [constant_factor, clamp, slope_factor] = &mut self.shadow_map_renderer.depth_bias;
+            ui.horizontal(|ui| {
+                ui.label("depth_bias_constant_factor");
+                ui.add(egui::DragValue::new(constant_factor).speed(0.01));
+            });
+            ui.horizontal(|ui| {
+                ui.label("depth_bias_clamp");
+                ui.add(egui::DragValue::new(clamp).speed(0.01));
+            });
+            ui.horizontal(|ui| {
+                ui.label("depth_bias_slope_factor");
+                ui.add(egui::DragValue::new(slope_factor).speed(0.01));
+            });
 
-                ui.horizontal(|ui| {
-                    ui.label("depth_bias_constant_factor");
-                    ui.add(egui::DragValue::new(constant_factor).speed(0.01));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("depth_bias_clamp");
-                    ui.add(egui::DragValue::new(clamp).speed(0.01));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("depth_bias_slope_factor");
-                    ui.add(egui::DragValue::new(slope_factor).speed(0.01));
-                });
+            ui.horizontal(|ui| {
+                ui.label("max_shadow_distance");
+                ui.add(egui::DragValue::new(&mut self.max_shadow_distance).speed(1.0));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("lambda");
+                ui.add(egui::Slider::new(&mut self.frustum_split_lambda, 0.0..=1.0));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("selected_cascade");
+                ui.add(egui::Slider::new(&mut self.selected_cascade, 0..=SHADOW_CASCADE_COUNT - 1));
+            });
+
+            let lambda = self.frustum_split_lambda;
+            for i in 0..SHADOW_CASCADE_COUNT {
+                let Projection::Perspective { fov, near_clip } = self.camera.projection else { todo!() };
+                let far_clip = self.max_shadow_distance;
+
+                let near = practical_frustum_split(i, near_clip, far_clip, SHADOW_CASCADE_COUNT, lambda);
+                let far = practical_frustum_split(i+1, near, far_clip, SHADOW_CASCADE_COUNT, lambda);
+                let projection = Mat4::perspective_rh(fov, aspect_ratio, near, far);
+                let view_projection = projection * view_matrix;
+                let subfrustum_corners = frustum_corners_from_matrix(&view_projection);
+                let light_projection = cascaded_directional_light_projection(
+                    &subfrustum_corners,
+                    inv_light_direction,
+                );
+    
+                shadow_maps[i] = self.shadow_map_renderer.render_shadow_map(
+                    "sun_shadow_map".into(),
+                    frame_ctx,
+                    [1024 * 4; 2],
+                    light_projection,
+                    shadow_map_draw_commands,
+                    vertex_buffer,
+                    index_buffer,
+                    entity_buffer
+                );
+    
+                directional_light_data.cascades[i].far_view_distance = far;
+                directional_light_data.cascades[i].light_projection = light_projection;
             }
 
-            shadow_map = self.shadow_map_renderer.render_shadow_map(
-                "sun_shadow_map".into(),
-                frame_ctx,
-                [1024 * 4; 2],
-                light_projection,
-                shadow_map_draw_commands,
-                vertex_buffer,
-                index_buffer,
-                entity_buffer
-            );
-
-            ui.image(egui::TextureId::User(shadow_map as u64), egui::Vec2::new(250.0, 250.0));
+            ui.image(egui::TextureId::User(shadow_maps[self.selected_cascade] as u64), egui::Vec2::new(250.0, 250.0));
         });
+
+        directional_light_data.direction = light_direction;
+        directional_light_data.color = self.light_color.extend(1.0);
 
         let pipeline = self.basic_pipeline;
 
@@ -655,8 +730,9 @@ impl App {
             (target_image, render::AccessKind::ColorAttachmentWrite),
             (depth_image, render::AccessKind::DepthAttachmentWrite),
             (draw_commands_buffer, render::AccessKind::IndirectBuffer),
-            (shadow_map, render::AccessKind::FragmentShaderRead)
         ];
+
+        dependencies.extend(shadow_maps.map(|h| (h, render::AccessKind::FragmentShaderRead)));
 
         if let Some(resolve_image) = resolve_image {
             dependencies.push((resolve_image, render::AccessKind::ColorAttachmentWrite));
@@ -678,7 +754,9 @@ impl App {
 
                 let instance_buffer = graph.get_buffer(entity_buffer).unwrap();
                 let draw_commands_buffer = graph.get_buffer(shadow_map_draw_commands).unwrap();
-                let light_shadow_map = graph.get_image(shadow_map).unwrap();
+                let directional_light_buffer = graph.get_buffer(directional_light_buffer).unwrap();
+
+                let shadow_maps = shadow_maps.map(|h| graph.get_image(h).unwrap().descriptor_index.unwrap().to_raw());
 
                 let mut color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(target_image.view)
@@ -729,10 +807,8 @@ impl App {
                     entity_buffer: u32,
                     draw_commands: u32,
                     materials: u32,
-                    _padding: [u32; 3],
-                    light_projection: Mat4,
-                    light_direction: Vec3,
-                    light_shadow_map: u32,
+                    directional_light_buffer: u32,
+                    cascade_shadow_maps: [u32; SHADOW_CASCADE_COUNT],
                 }
 
                 let constants = ShadowMapConstants {
@@ -741,10 +817,8 @@ impl App {
                     entity_buffer: instance_buffer.descriptor_index.unwrap().to_raw(),
                     draw_commands: draw_commands_buffer.descriptor_index.unwrap().to_raw(),
                     materials: material_buffer.descriptor_index.unwrap().to_raw(),
-                    _padding: [0; 3],
-                    light_projection,
-                    light_direction,
-                    light_shadow_map: light_shadow_map.descriptor_index.unwrap().to_raw(),
+                    directional_light_buffer: directional_light_buffer.descriptor_index.unwrap().to_raw(),
+                    cascade_shadow_maps: shadow_maps,
                 };
 
                 cmd.push_constants(bytemuck::bytes_of(&constants), 0);
@@ -762,7 +836,7 @@ impl App {
             },
         );
 
-        self.debug_line_renderer.render(frame_ctx, target_image, resolve_image, depth_image, view_projection);
+        self.debug_line_renderer.render(frame_ctx, target_image, resolve_image, depth_image, view_projection_matrix);
     }
 
     fn destroy(&self, context: &render::Context) {
@@ -773,6 +847,7 @@ impl App {
         self.shadow_map_renderer.destroy(context);
         context.destroy_pipeline(&self.basic_pipeline);
         context.destroy_buffer(&self.per_frame_buffer);
+        context.destroy_buffer(&self.directional_light_buffer);
     }
 }
 const MAX_DRAW_COUNT: usize = 1_000_000;
@@ -1117,36 +1192,36 @@ impl DebugLineRenderer {
         ]);
     }
 
-    pub fn draw_frustum(&mut self, corners: &[Vec3; 8], color: Vec4) {
+    pub fn draw_frustum(&mut self, corners: &[Vec4; 8], color: Vec4) {
         let color = color.to_array().map(|f| (f * 255.0) as u8);
 
         self.add_vertices(&[
-            DebugLineVertex { position: corners[0], color },
-            DebugLineVertex { position: corners[1], color },
-            DebugLineVertex { position: corners[1], color },
-            DebugLineVertex { position: corners[2], color },
-            DebugLineVertex { position: corners[2], color },
-            DebugLineVertex { position: corners[3], color },
-            DebugLineVertex { position: corners[3], color },
-            DebugLineVertex { position: corners[0], color },
+            DebugLineVertex { position: corners[0].truncate(), color },
+            DebugLineVertex { position: corners[1].truncate(), color },
+            DebugLineVertex { position: corners[1].truncate(), color },
+            DebugLineVertex { position: corners[2].truncate(), color },
+            DebugLineVertex { position: corners[2].truncate(), color },
+            DebugLineVertex { position: corners[3].truncate(), color },
+            DebugLineVertex { position: corners[3].truncate(), color },
+            DebugLineVertex { position: corners[0].truncate(), color },
             
-            DebugLineVertex { position: corners[4], color },
-            DebugLineVertex { position: corners[5], color },
-            DebugLineVertex { position: corners[5], color },
-            DebugLineVertex { position: corners[6], color },
-            DebugLineVertex { position: corners[6], color },
-            DebugLineVertex { position: corners[7], color },
-            DebugLineVertex { position: corners[7], color },
-            DebugLineVertex { position: corners[4], color },
+            DebugLineVertex { position: corners[4].truncate(), color },
+            DebugLineVertex { position: corners[5].truncate(), color },
+            DebugLineVertex { position: corners[5].truncate(), color },
+            DebugLineVertex { position: corners[6].truncate(), color },
+            DebugLineVertex { position: corners[6].truncate(), color },
+            DebugLineVertex { position: corners[7].truncate(), color },
+            DebugLineVertex { position: corners[7].truncate(), color },
+            DebugLineVertex { position: corners[4].truncate(), color },
 
-            DebugLineVertex { position: corners[0], color },
-            DebugLineVertex { position: corners[4], color },
-            DebugLineVertex { position: corners[1], color },
-            DebugLineVertex { position: corners[5], color },
-            DebugLineVertex { position: corners[2], color },
-            DebugLineVertex { position: corners[6], color },
-            DebugLineVertex { position: corners[3], color },
-            DebugLineVertex { position: corners[7], color },
+            DebugLineVertex { position: corners[0].truncate(), color },
+            DebugLineVertex { position: corners[4].truncate(), color },
+            DebugLineVertex { position: corners[1].truncate(), color },
+            DebugLineVertex { position: corners[5].truncate(), color },
+            DebugLineVertex { position: corners[2].truncate(), color },
+            DebugLineVertex { position: corners[6].truncate(), color },
+            DebugLineVertex { position: corners[3].truncate(), color },
+            DebugLineVertex { position: corners[7].truncate(), color },
         ]);
     }
 

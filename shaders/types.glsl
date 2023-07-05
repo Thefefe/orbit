@@ -4,8 +4,24 @@ struct GlobalData {
     float elapsed_time;
 };
 
+struct ShadowCascade {
+    mat4 light_projection;
+    uint shadow_map_index;
+    float far_view_distance;
+    uint _padding0;
+    uint _padding1;
+};
+
+struct DirectionalLightData {
+    ShadowCascade cascades[4];
+    vec4 color;
+    vec3 direction;
+    uint _padding;
+};
+
 struct PerFrameData {
     mat4 view_projection;
+    mat4 view;
     vec3 view_pos;
     uint render_mode;
 };

@@ -7,6 +7,10 @@ RegisterBuffer(PerFrameBuffer, std430, readonly, {
     PerFrameData data;
 });
 
+RegisterBuffer(DirectionalLightBuffer, std430, readonly, {
+    DirectionalLightData data;
+});
+
 RegisterBuffer(VertexBuffer, std430, readonly, {
     MeshVertex vertices[];
 });
@@ -26,22 +30,16 @@ layout(push_constant, std430) uniform PushConstants {
     uint entity_buffer;
     uint draw_commands;
     uint materials;
-    
-    uint _padding0;
-    uint _padding1;
-    uint _padding2;
-
-    mat4 light_projection;
-    vec3 light_direction;
-    uint light_shadow_map;
+    uint directional_light_buffer;
+    uint cascade_shadow_maps[4];
 };
 
 layout(location = 0) out VertexOutput {
     vec4 world_pos;
+    vec4 view_pos;
     vec2 uv;
     mat3 TBN;
     flat uint material_index;
-    vec4 light_space_frag_pos;
 } vout;
 
 void main() {
@@ -52,7 +50,7 @@ void main() {
     gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_projection * vout.world_pos;
 
     vout.uv = vertex.uv;
-    vout.light_space_frag_pos = light_projection * vout.world_pos;
+    vout.view_pos = -GetBuffer(PerFrameBuffer, per_frame_buffer).data.view * vout.world_pos;
 
     vec3 normal = vertex.norm;
     vec3 tangent = vertex.tang.xyz;

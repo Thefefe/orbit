@@ -145,6 +145,7 @@ impl Context {
     }
 
     pub fn record_and_submit(&self, f: impl FnOnce(&render::CommandRecorder)) {
+        puffin::profile_function!();
         let mut record_submit_stuff = self.record_submit_stuff.lock().unwrap();
         record_submit_stuff.command_pool.reset(&self.device);
         let buffer = record_submit_stuff.command_pool.begin_new(&self.device, vk::CommandBufferUsageFlags::empty());

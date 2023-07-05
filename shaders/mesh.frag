@@ -7,6 +7,10 @@ RegisterBuffer(PerFrameBuffer, std430, readonly, {
     PerFrameData data;
 });
 
+RegisterBuffer(DirectionalLightBuffer, std430, readonly, {
+    DirectionalLightData data;
+});
+
 RegisterBuffer(Materials, std430, readonly, {
     MaterialData materials[];
 });
@@ -17,22 +21,16 @@ layout(push_constant, std430) uniform PushConstants {
     uint entity_buffer;
     uint draw_commands;
     uint materials;
-    
-    uint _padding0;
-    uint _padding1;
-    uint _padding2;
-
-    mat4 light_projection;
-    vec3 light_direction;
-    uint light_shadow_map;
+    uint directional_light_buffer;
+    uint cascade_shadow_maps[4];
 };
 
 layout(location = 0) in VertexOutput {
     vec4 world_pos;
+    vec4 view_pos;
     vec2 uv;
     mat3 TBN;
     flat uint material_index;
-    vec4 light_space_frag_pos;
 } vout;
 
 layout(location = 0) out vec4 out_color;
@@ -75,7 +73,7 @@ vec3 fresnel_schlick(float h_dot_v, vec3 base_reflectivity) {
     return base_reflectivity + (1.0 - base_reflectivity) * pow(1.0 - h_dot_v, 5.0);
 }
 
-float compute_shadow(vec4 light_space_frag_pos) {
+float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
     vec3 proj_coords = light_space_frag_pos.xyz / light_space_frag_pos.w;
     proj_coords.y *= -1.0;
     // float closest_depth = texture(GetSampledTexture(light_shadow_map), (proj_coords.xy + 1.0 ) / 2.0).r;
@@ -83,13 +81,15 @@ float compute_shadow(vec4 light_space_frag_pos) {
 
     vec2 tex_coord = (proj_coords.xy + 1.0 ) / 2.0;
 
+    if (tex_coord.x < 0.0 || tex_coord.x > 1.0 || tex_coord.y < 0.0 || tex_coord.y > 1.0) return 1.0;
+
     float shadow = 0.0;
-    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(light_shadow_map), 0);
+    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
     for(int x = -1; x <= 1; ++x)
     {
         for(int y = -1; y <= 1; ++y)
         {
-            float pcf_depth = texture(GetSampledTexture2D(light_shadow_map), tex_coord + vec2(x, y) * texel_size).r;
+            float pcf_depth = texture(GetSampledTexture2D(shadow_map), tex_coord + vec2(x, y) * texel_size).r;
             shadow += current_depth  > pcf_depth ? 1.0 : 0.0;
         }    
     }
@@ -139,6 +139,31 @@ vec3 calculate_light(
 
     return (kD * albedo / PI + specular) * radiance * n_dot_l;
 }
+
+float uniform_frustum_split(uint index, float near, float far, float cascade_count){
+    return near + (far - near) * (float(index) / float(cascade_count));
+}
+
+float logarithmic_frustum_split(uint index, float near, float far, float cascade_count) {
+    return near * pow((far / near), float(index) / float(cascade_count));
+}
+
+float practical_frustum_split(uint index, float near, float far, float cascade_count, float lambda) {
+    return logarithmic_frustum_split(index, near, far, cascade_count) * lambda +  
+           uniform_frustum_split(index, near, far, cascade_count) * (1.0 - lambda);
+}
+
+const int CASCADE_COUNT = 4;
+const float MAX_SHADOW_DISTANCE = 200.0;
+
+const vec3 CASCADE_COLORS[6] = vec3[](
+    vec3(1.0, 0.25, 0.25),
+    vec3(0.25, 1.0, 0.25),
+    vec3(0.25, 0.25, 1.0),
+    vec3(1.0, 1.0, 0.25),
+    vec3(0.25, 1.0, 1.0),
+    vec3(1.0, 0.25, 1.0)
+);
 
 void main() {
     MaterialData material = GetBuffer(Materials, materials).materials[vout.material_index];
@@ -190,38 +215,71 @@ void main() {
         discard;
     }
 
-    if (render_mode == 1) { // uv
-        // out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
-        out_color = vec4((vout.light_space_frag_pos.xy + 1.0) / 2.0, 0.0, 1.0);
-    } else if (render_mode == 2) { // normal
-        out_color = vec4(normal * 0.5 + 0.5, 1.0);
-    } else if (render_mode == 3) { // metallic
-        out_color = vec4(vec3(metallic), 1.0);
-    } else if (render_mode == 4) { // roughness
-        out_color = vec4(vec3(roughness), 1.0);
-    } else if (render_mode == 5) { // emissive
-        out_color = vec4(emissive, 1.0);
-    } else if (render_mode == 6) { // occulusion
-        out_color = vec4(vec3(ao), 1.0);
-    } else if (render_mode == 7) { // material index
-        // uint ihash = hash(in_material_index);
-        // vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;
-        out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);
-    } else {
-        vec3 light_color = vec3(4.5);
-        vec3 Lo = calculate_light(
-            V,
-            light_direction,
-            light_color,
-            base_reflectivity,
-            albedo,
-            normal,
-            metallic,
-            roughness
-        ) * compute_shadow(vout.light_space_frag_pos);
+    uint cascade_index = CASCADE_COUNT;
+    for(uint i = 1; i <= CASCADE_COUNT; ++i) {
+        if(vout.view_pos.z < GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[CASCADE_COUNT - i].far_view_distance) {
+            cascade_index -= 1;
+        }
+    }
 
-        vec3 ambient = vec3(0.03) * albedo.rgb * ao;
-        out_color.rgb = ambient + Lo + emissive;
+    vec4 light_space_frag_pos = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].light_projection * vout.world_pos;
+    // uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].shadow_map_index;
+    uint shadow_map = cascade_shadow_maps[cascade_index];
+    // uint cascade_index = clamp(int(vout.view_pos.z) / 6, 0, 3);
+
+    float shadow = 1.0;
+    if (cascade_index < CASCADE_COUNT) shadow = compute_shadow(light_space_frag_pos, shadow_map);
+
+    switch (render_mode) {
+        case 0:
+            vec3 light_direction =  GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
+            vec3 light_color = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.color.rgb;
+            vec3 Lo = calculate_light(
+                V,
+                light_direction,
+                light_color,
+                base_reflectivity,
+                albedo,
+                normal,
+                metallic,
+                roughness
+            ) * shadow;
+
+            vec3 ambient = vec3(0.03) * albedo.rgb * ao;
+            out_color.rgb = ambient + Lo + emissive;
+            break;
+        case 1: 
+            // out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
+            float shadow = max(shadow, 0.3);
+            vec3 cascade_color = vec3(0.25);
+            if (cascade_index < CASCADE_COUNT) cascade_color = CASCADE_COLORS[cascade_index];
+            out_color = vec4(cascade_color * albedo * shadow, 1.0);
+            break;
+        case 2: 
+            out_color = vec4(normal * 0.5 + 0.5, 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            break;
+        case 3: 
+            out_color = vec4(vec3(metallic), 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            break;
+        case 4: 
+            out_color = vec4(vec3(roughness), 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            break;
+        case 5: 
+            out_color = vec4(emissive, 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            break;
+        case 6: 
+            out_color = vec4(vec3(ao), 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            break;
+        case 7: 
+            // uint ihash = hash(in_material_index);
+            // vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;
+            out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);
+            break;
     }
 
     if (render_mode != 0) {

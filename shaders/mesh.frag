@@ -225,7 +225,6 @@ void main() {
     vec4 light_space_frag_pos = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].light_projection * vout.world_pos;
     // uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].shadow_map_index;
     uint shadow_map = cascade_shadow_maps[cascade_index];
-    // uint cascade_index = clamp(int(vout.view_pos.z) / 6, 0, 3);
 
     float shadow = 1.0;
     if (cascade_index < CASCADE_COUNT) shadow = compute_shadow(light_space_frag_pos, shadow_map);
@@ -233,7 +232,8 @@ void main() {
     switch (render_mode) {
         case 0:
             vec3 light_direction =  GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
-            vec3 light_color = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.color.rgb;
+            vec3 light_color = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.color;
+            light_color *= GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.intensitiy;
             vec3 Lo = calculate_light(
                 V,
                 light_direction,

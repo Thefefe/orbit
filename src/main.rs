@@ -231,7 +231,8 @@ struct GpuShadowCascade {
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct GpuDirectionalLight {
     cascades: [GpuShadowCascade; SHADOW_CASCADE_COUNT],
-    color: Vec4,
+    color: Vec3,
+    intensity: f32,
     direction: Vec3,
     _padding: u32,
 }
@@ -264,6 +265,7 @@ struct App {
     light_dir_controller: CameraController,
 
     light_color: Vec3,
+    light_intensitiy: f32,
     max_shadow_distance: f32,
     frustum_split_lambda: f32,
     selected_cascade: usize,
@@ -386,6 +388,7 @@ impl App {
             light_dir_controller: CameraController::new(1.0, 0.003),
 
             light_color: Vec3::splat(1.0),
+            light_intensitiy: 1.0,
             max_shadow_distance: 200.0,
             frustum_split_lambda: 0.5,
             selected_cascade: 0,
@@ -657,6 +660,10 @@ impl App {
                 ui.color_edit_button_rgb(&mut array);
                 self.light_color = Vec3::from_array(array);
             });
+            ui.horizontal(|ui| {
+                ui.label("light_intensitiy");
+                ui.add(egui::DragValue::new(&mut self.light_intensitiy).speed(0.4));
+            });
             
             let [constant_factor, clamp, slope_factor] = &mut self.shadow_map_renderer.depth_bias;
 
@@ -722,7 +729,8 @@ impl App {
         });
 
         directional_light_data.direction = light_direction;
-        directional_light_data.color = self.light_color.extend(1.0);
+        directional_light_data.color = self.light_color;
+        directional_light_data.intensity = self.light_intensitiy;
 
         let pipeline = self.basic_pipeline;
 

@@ -14,7 +14,8 @@ struct ShadowCascade {
 
 struct DirectionalLightData {
     ShadowCascade cascades[4];
-    vec4 color;
+    vec3 color;
+    float intensitiy;
     vec3 direction;
     uint _padding;
 };

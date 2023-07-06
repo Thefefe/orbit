@@ -75,7 +75,10 @@ impl Context {
                     desc.present_mode,
                     present_mode
                 );
+            } else {
+                log::info!("selected present mode: {present_mode:?}");
             }
+
 
             let surface_format = surface_info.choose_surface_format();
 

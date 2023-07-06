@@ -1352,7 +1352,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::IMMEDIATE,
+            present_mode: vk::PresentModeKHR::FIFO,
         },
     );
 

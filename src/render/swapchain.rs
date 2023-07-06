@@ -31,6 +31,7 @@ impl SwapchainInner {
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .present_mode(config.present_mode)
             .pre_transform(device.gpu.surface_info.capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .clipped(false)

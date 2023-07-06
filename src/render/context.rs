@@ -5,7 +5,7 @@ use winit::window::Window;
 
 use crate::render;
 
-use super::{graph::{RenderGraph, CompiledRenderGraph}, DescriptorHandle, TransientResourceRegistry};
+use super::{graph::{RenderGraph, CompiledRenderGraph, self}, DescriptorHandle, TransientResourceCache};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -40,7 +40,7 @@ pub struct Context {
 
     pub graph: RenderGraph,
     pub compiled_graph: CompiledRenderGraph,
-    leftover_resource_registry: TransientResourceRegistry,
+    transient_resource_cache: TransientResourceCache,
 
     pub frames: [Frame; FRAME_COUNT],
     pub frame_index: usize,
@@ -134,7 +134,7 @@ impl Context {
             
             graph: RenderGraph::new(),
             compiled_graph: CompiledRenderGraph::new(),
-            leftover_resource_registry: TransientResourceRegistry::new(),
+            transient_resource_cache: TransientResourceCache::new(),
             
             frames,
             frame_index: 0,
@@ -194,11 +194,11 @@ impl Drop for Context {
 
         }
         
-        for resource in self.leftover_resource_registry.resources() {
+        for resource in self.transient_resource_cache.resources() {
             resource.destroy(&self.device, &self.descriptors)
         }
 
-        for resource in self.compiled_graph.transient_resource_registry.resources() {
+        for resource in self.compiled_graph.transient_resource_cache.resources() {
             resource.destroy(&self.device, &self.descriptors);
         }
 
@@ -243,17 +243,19 @@ impl Context {
             .unwrap();
 
         self.graph.clear();
+        std::mem::swap(&mut self.transient_resource_cache, &mut self.compiled_graph.transient_resource_cache);
 
-        let acquired_image_handle = self.graph.import_resource(
-            "swapchain_image".into(),
-            render::AnyResourceView::Image(acquired_image.image_view),
-            &render::GraphResourceImportDesc {
-                initial_access: render::AccessKind::None,
-                target_access: render::AccessKind::Present,
-                wait_semaphore: Some(frame.image_available_semaphore),
-                finish_semaphore: Some(frame.render_finished_semaphore),
-            }
-        );
+        let acquired_image_handle = self.graph.add_resource(graph::ResourceData {
+            name: "swapchain_image".into(),
+            source: graph::ResourceSource::Import { view: render::AnyResourceView::Image(acquired_image.image_view) },
+            early_descriptor_index: None,
+
+            initial_access: render::AccessKind::None,
+            target_access: render::AccessKind::Present,
+            wait_semaphore: Some(frame.image_available_semaphore),
+            finish_semaphore: Some(frame.render_finished_semaphore),
+            versions: vec![],
+        });
 
         FrameContext {
             context: self,
@@ -286,7 +288,19 @@ impl FrameContext<'_> {
         buffer: &render::BufferView,
         desc: &render::GraphResourceImportDesc,
     ) -> render::ResourceHandle {
-        self.context.graph.import_resource(name.into(), render::AnyResourceView::Buffer(*buffer), desc)
+        let name = name.into();
+        let view = render::AnyResourceView::Buffer(*buffer);
+        self.context.graph.add_resource(graph::ResourceData {
+            name,
+            source: graph::ResourceSource::Import { view },
+            early_descriptor_index: None,
+
+            initial_access: desc.initial_access,
+            target_access: desc.target_access,
+            wait_semaphore: desc.wait_semaphore,
+            finish_semaphore: desc.finish_semaphore,
+            versions: vec![],
+        })
     }
 
     pub fn import_image(
@@ -295,7 +309,19 @@ impl FrameContext<'_> {
         image: &render::ImageView,
         desc: &render::GraphResourceImportDesc,
     ) -> render::ResourceHandle {
-        self.context.graph.import_resource(name.into(), render::AnyResourceView::Image(*image), desc)
+        let name = name.into();
+        let view = render::AnyResourceView::Image(*image);
+        self.context.graph.add_resource(graph::ResourceData {
+            name,
+            source: graph::ResourceSource::Import { view },
+            early_descriptor_index: None,
+
+            initial_access: desc.initial_access,
+            target_access: desc.target_access,
+            wait_semaphore: desc.wait_semaphore,
+            finish_semaphore: desc.finish_semaphore,
+            versions: vec![],
+        })
     }
 
     pub fn create_transient_buffer(
@@ -304,7 +330,20 @@ impl FrameContext<'_> {
         desc: render::BufferDesc
     ) -> render::ResourceHandle {
         let name = name.into();
-        self.context.graph.add_transient_resource(name, render::AnyResourceDesc::Buffer(desc))
+        let desc = render::AnyResourceDesc::Buffer(desc);
+        let cache = self.context.transient_resource_cache.get_by_descriptor(&desc);
+        self.context.graph.add_resource(graph::ResourceData {
+            name,
+         
+            source: graph::ResourceSource::Create { desc, cache, },
+            early_descriptor_index: None,
+
+            initial_access: render::AccessKind::None,
+            target_access: render::AccessKind::None,
+            wait_semaphore: None,
+            finish_semaphore: None,
+            versions: vec![],
+        })
     }
     
     pub fn create_transient_image(
@@ -313,7 +352,20 @@ impl FrameContext<'_> {
         desc: render::ImageDesc
     ) -> render::ResourceHandle {
         let name = name.into();
-        self.context.graph.add_transient_resource(name, render::AnyResourceDesc::Image(desc))
+        let desc = render::AnyResourceDesc::Image(desc);
+        let cache = self.context.transient_resource_cache.get_by_descriptor(&desc);
+        self.context.graph.add_resource(graph::ResourceData {
+            name,
+         
+            source: graph::ResourceSource::Create { desc, cache },
+            early_descriptor_index: None,
+
+            initial_access: render::AccessKind::None,
+            target_access: render::AccessKind::None,
+            wait_semaphore: None,
+            finish_semaphore: None,
+            versions: vec![],
+        })
     }
 
     pub fn add_pass(
@@ -349,7 +401,6 @@ impl FrameContext<'_> {
             &self.context.device,
             &self.context.descriptors,
             &mut self.context.compiled_graph,
-            &mut self.context.leftover_resource_registry,
         );
 
         {
@@ -406,12 +457,12 @@ impl FrameContext<'_> {
 
         {
             puffin::profile_scope!("leftover_resource_releases");
-            for resource in self.leftover_resource_registry.resources() {
+            for resource in self.transient_resource_cache.resources() {
                 resource.destroy(&self.context.device, &self.context.descriptors)
             }
         }
 
-        self.context.leftover_resource_registry.clear();
+        self.context.transient_resource_cache.clear();
     }
 }
 

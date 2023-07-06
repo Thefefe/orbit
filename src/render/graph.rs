@@ -4,6 +4,8 @@ use ash::vk;
 
 use crate::{render, collections::arena};
 
+use super::RawDescriptorIndex;
+
 pub type ResourceHandle = usize;
 pub type PassHandle = arena::Index;
 pub type DependencyHandle = usize;
@@ -141,12 +143,13 @@ impl AnyResourceDesc {
 
 #[derive(Debug)]
 pub enum ResourceSource {
+    Create {
+        desc: AnyResourceDesc,
+        cache: Option<AnyResource>,
+    },
     Import {
         view: AnyResourceView,
     },
-    Create {
-        desc: AnyResourceDesc,
-    }
 }
 
 #[derive(Debug)]
@@ -157,21 +160,27 @@ pub struct ResourceVersion {
 
 #[derive(Debug)]
 pub struct ResourceData {
-    name: Cow<'static, str>,
+    pub name: Cow<'static, str>,
 
-    source: ResourceSource,
-    resource_kind: ResourceKind,
-    is_transient: bool,
+    pub source: ResourceSource,
+    pub early_descriptor_index: Option<RawDescriptorIndex>,
 
-    initial_access: render::AccessKind,
-    target_access: render::AccessKind,
-    wait_semaphore: Option<vk::Semaphore>,
-    finish_semaphore: Option<vk::Semaphore>,
+    pub initial_access: render::AccessKind,
+    pub target_access: render::AccessKind,
+    pub wait_semaphore: Option<vk::Semaphore>,
+    pub finish_semaphore: Option<vk::Semaphore>,
 
-    versions: Vec<ResourceVersion>,
+    pub versions: Vec<ResourceVersion>,
 }
 
 impl ResourceData {
+    fn kind(&self) -> render::ResourceKind {
+        match self.source {
+            ResourceSource::Create { desc, .. } => desc.kind(),
+            ResourceSource::Import { view } => view.kind(),
+        }
+    }
+
     fn current_version(&self) -> usize {
         self.versions.len()
     }
@@ -239,53 +248,10 @@ impl RenderGraph {
         self.dependencies.clear();
     }
 
-    fn add_resource(&mut self, resource_data: ResourceData) -> ResourceHandle {
+    pub fn add_resource(&mut self, resource_data: ResourceData) -> ResourceHandle {
         let index = self.resources.len();
         self.resources.push(resource_data);
         index
-    }
-
-    pub fn add_transient_resource(
-        &mut self, 
-        name: Cow<'static, str>,
-        desc: AnyResourceDesc,
-    ) -> ResourceHandle {
-        self.add_resource(ResourceData {
-            name,
-            
-            source: ResourceSource::Create { desc },
-            resource_kind: desc.kind(),
-
-            is_transient: true,
-            initial_access: render::AccessKind::None,
-            target_access: render::AccessKind::None,
-            wait_semaphore: None,
-            finish_semaphore: None,
-
-            versions: vec![],
-        })
-    }
-
-    pub fn import_resource(
-        &mut self,
-        name: Cow<'static, str>,
-        view: AnyResourceView,
-        desc: &GraphResourceImportDesc,
-    ) -> ResourceHandle {
-        self.add_resource(ResourceData {
-            name,
-
-            source: ResourceSource::Import { view },
-            resource_kind: view.kind(),
-            is_transient: false,
-
-            initial_access: desc.initial_access,
-            target_access: desc.target_access,
-            wait_semaphore: desc.wait_semaphore,
-            finish_semaphore: desc.finish_semaphore,
-
-            versions: vec![],
-        })
     }
 
     pub fn add_pass(&mut self, name: Cow<'static, str>, func: PassFn) -> PassHandle {
@@ -350,12 +316,12 @@ struct TransientResourceNode {
 }
 
 #[derive(Debug, Default)]
-pub struct TransientResourceRegistry {
+pub struct TransientResourceCache {
     resources_nodes: arena::Arena<TransientResourceNode>,
     descriptor_lookup: HashMap<AnyResourceDesc, arena::Index>,
 }
 
-impl TransientResourceRegistry {
+impl TransientResourceCache {
     pub fn new() -> Self {
         Self {
             resources_nodes: arena::Arena::new(),
@@ -372,7 +338,7 @@ impl TransientResourceRegistry {
         self.resources_nodes.iter().map(|(_, node)| &node.resource)
     }
 
-    fn get_by_descriptor(&mut self, desc: &AnyResourceDesc) -> Option<AnyResource> {
+    pub fn get_by_descriptor(&mut self, desc: &AnyResourceDesc) -> Option<AnyResource> {
         let index = self.descriptor_lookup.get_mut(desc)?;
         let resource_node = self.resources_nodes.remove(*index).unwrap();
         
@@ -410,9 +376,7 @@ pub struct CompiledRenderGraph {
     pub semaphores: Vec<vk::Semaphore>,
     pub batches: Vec<BatchData>,
 
-    // pub transient_buffers: Vec<render::Buffer>,
-    // pub transient_images: Vec<render::Image>,
-    pub transient_resource_registry: TransientResourceRegistry,
+    pub transient_resource_cache: TransientResourceCache,
 }
 
 pub struct Batch<'a> {
@@ -473,66 +437,31 @@ impl RenderGraph {
         device: &render::Device,
         descriptors: &render::BindlessDescriptors,
         compiled: &mut CompiledRenderGraph,
-        leftover_resources: &mut TransientResourceRegistry,
     ) {
         puffin::profile_function!();
         compiled.clear();
 
         let sorted_passes = self.topology_sort();
 
-        std::mem::swap(leftover_resources, &mut compiled.transient_resource_registry);
-
         for resource_data in self.resources.iter_mut() {
             // TODO: allocations can be reduces here by not having the names in both the resource and the GraphResource
             let mut name: Cow<'static, str> = Cow::Borrowed("");
             std::mem::swap(&mut name, &mut resource_data.name);
-            match &resource_data.source {
+            match &mut resource_data.source {
+                ResourceSource::Create { desc, cache: cached } => {
+                    let resource = cached.take().unwrap_or_else(|| AnyResource::create(device, descriptors, name.clone(), desc));
+                    let resource_view = resource.view();
+
+                    compiled.resources.push(GraphResource { name, resource_view });
+                    compiled.transient_resource_cache.insert(*desc, resource);
+                },
                 ResourceSource::Import { view } => {
                     compiled.resources.push(GraphResource {
                         name,
                         resource_view: *view,
                     });
                 },
-                ResourceSource::Create { desc } => {
-                    let resource = leftover_resources.get_by_descriptor(desc)
-                        .unwrap_or_else(|| AnyResource::create(device, descriptors, name.clone(), desc));
-
-                    let resource_view = resource.view();
-
-                    compiled.resources.push(GraphResource { name, resource_view });
-                    compiled.transient_resource_registry.insert(*desc, resource);
-
-                    // match desc {
-                    //     AnyResourceDesc::Buffer(desc) => {
-                    //         let buffer = render::Buffer::create_impl(
-                    //             device,
-                    //             descriptors,
-                    //             resource_data.name.clone().into(),
-                    //             desc
-                    //         );
-                            
-                    //         compiled.resources.push(GraphResource {
-                    //             name,
-                    //             resource_view: AnyResourceView::Buffer(buffer.view()),
-                    //         });
-                    //         compiled.transient_buffers.push(buffer);
-                    //     },
-                    //     AnyResourceDesc::Image(desc) => {
-                    //         let image = render::Image::create_impl(
-                    //             device,
-                    //             descriptors,
-                    //             resource_data.name.clone().into(),
-                    //             desc
-                    //         );
-                            
-                    //         compiled.resources.push(GraphResource {
-                    //             name,
-                    //             resource_view: AnyResourceView::Image(image.view()),
-                    //         });
-                    //         compiled.transient_images.push(image);
-                    //     },
-                    // }
-                },
+                
             } 
         }
 
@@ -559,7 +488,7 @@ impl RenderGraph {
                 for &dependency in pass.dependencies.iter() {
                     let dependency = &self.dependencies[dependency];
                     let resource_data = &self.resources[dependency.resource_handle];
-                    let resource_kind = resource_data.resource_kind;
+                    let resource_kind = resource_data.kind();
 
                     if dependency.resource_version == 0 {
                         if let Some(semaphore) = resource_data.wait_semaphore {

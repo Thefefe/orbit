@@ -139,19 +139,6 @@ vec3 calculate_light(
     return (kD * albedo / PI + specular) * radiance * n_dot_l;
 }
 
-float uniform_frustum_split(uint index, float near, float far, float cascade_count){
-    return near + (far - near) * (float(index) / float(cascade_count));
-}
-
-float logarithmic_frustum_split(uint index, float near, float far, float cascade_count) {
-    return near * pow((far / near), float(index) / float(cascade_count));
-}
-
-float practical_frustum_split(uint index, float near, float far, float cascade_count, float lambda) {
-    return logarithmic_frustum_split(index, near, far, cascade_count) * lambda +  
-           uniform_frustum_split(index, near, far, cascade_count) * (1.0 - lambda);
-}
-
 const int CASCADE_COUNT = 4;
 const float MAX_SHADOW_DISTANCE = 200.0;
 
@@ -214,12 +201,15 @@ void main() {
         discard;
     }
 
-    uint cascade_index = CASCADE_COUNT;
-    for(uint i = 1; i <= CASCADE_COUNT; ++i) {
-        if(vout.view_pos.z < GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[CASCADE_COUNT - i].far_view_distance) {
-            cascade_index -= 1;
-        }
-    }
+    vec4 cascade_far_view_distances = vec4(
+        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[0].far_view_distance,
+        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[1].far_view_distance,
+        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[2].far_view_distance,
+        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[3].far_view_distance
+    );
+    bvec4 cascade_comparison = greaterThan(vec4(vout.view_pos.z), cascade_far_view_distances);
+    vec4 cascade_index_vec = mix(vec4(0.0), vec4(1.0), cascade_comparison);
+    uint cascade_index = uint(dot(cascade_index_vec, cascade_index_vec));
 
     vec4 light_space_frag_pos = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].light_projection * vout.world_pos;
     uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].shadow_map_index;

@@ -222,8 +222,9 @@ fn cascaded_directional_light_projection(
 struct GpuShadowCascade {
     light_projection: Mat4,
     shadow_map_index: u32,
+    near_view_distance: f32,
     far_view_distance: f32,
-    _padding: [u32; 2],
+    _padding: u32,
 }
 
 #[repr(C)]
@@ -675,7 +676,8 @@ impl App {
                 index_buffer,
                 entity_buffer
             );
-
+            
+            directional_light_data.cascades[i].near_view_distance = near;
             directional_light_data.cascades[i].far_view_distance = far;
             directional_light_data.cascades[i].light_projection = light_projection;
             directional_light_data.cascades[i].shadow_map_index = context

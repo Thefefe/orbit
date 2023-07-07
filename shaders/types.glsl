@@ -7,8 +7,8 @@ struct GlobalData {
 struct ShadowCascade {
     mat4 light_projection;
     uint shadow_map_index;
+    float near_view_distance;
     float far_view_distance;
-    uint _padding0;
     uint _padding1;
 };
 

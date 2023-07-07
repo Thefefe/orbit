@@ -1,9 +1,83 @@
-use std::{ops::Range, borrow::Cow};
+use std::{ops::{Range, RangeBounds}, borrow::Cow};
 
 use crate::render;
 use ash::vk;
 use gpu_allocator::{MemoryLocation, vulkan::{AllocationCreateDesc, AllocationScheme}};
 use render::AccessKind;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ImageView {
+    pub handle: vk::Image,
+    pub descriptor_index: Option<render::DescriptorIndex>,
+    pub format: vk::Format,
+    pub view: vk::ImageView,
+    pub extent: vk::Extent2D,
+    pub subresource_range: vk::ImageSubresourceRange,
+}
+
+impl ImageView   {
+    #[inline(always)]
+    pub fn width(&self) -> u32 {
+        self.extent.width
+    }
+
+    #[inline(always)]
+    pub fn height(&self) -> u32 {
+        self.extent.height
+    }
+
+    #[inline(always)]
+    pub fn full_viewport(&self) -> vk::Viewport {
+        vk::Viewport {
+            x: 0.0,
+            y: self.extent.height as f32,
+            width: self.extent.width as f32,
+            height: -(self.extent.height as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn full_rect(&self) -> vk::Rect2D {
+        vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: self.extent,
+        }
+    }
+
+    #[inline(always)]
+    pub fn subresource_range(
+        &self,
+        mip_levels: impl RangeBounds<u32>,
+        layers: impl RangeBounds<u32>
+    ) -> vk::ImageSubresourceRange {
+        let (base_array_layer, layer_count) =
+            crate::utils::range_bounds_to_base_count(layers, 0, self.subresource_range.layer_count);
+        let (base_mip_level, level_count) =
+            crate::utils::range_bounds_to_base_count(mip_levels, 0, self.subresource_range.level_count);
+        vk::ImageSubresourceRange {
+            aspect_mask: self.subresource_range.aspect_mask,
+            base_array_layer,
+            layer_count,
+            base_mip_level,
+            level_count,
+        }
+    }
+
+
+    #[inline(always)]
+    pub fn subresource_layers(&self, mip_level: u32, layers: impl RangeBounds<u32>) -> vk::ImageSubresourceLayers {
+        let (base_array_layer, layer_count) =
+            crate::utils::range_bounds_to_base_count(layers, 0, self.subresource_range.layer_count);
+        vk::ImageSubresourceLayers {
+            aspect_mask: self.subresource_range.aspect_mask,
+            mip_level,
+            base_array_layer,
+            layer_count,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Image {
@@ -36,7 +110,8 @@ impl Image {
         device: &render::Device,
         descriptors: &render::BindlessDescriptors,
         name: Cow<'static, str>,
-        desc: &ImageDesc
+        desc: &ImageDesc,
+        preallocated_descriptor_index: Option<render::DescriptorIndex>,
     ) -> Image {
         puffin::profile_function!(&name);
         let create_info = vk::ImageCreateInfo::builder()
@@ -93,8 +168,13 @@ impl Image {
         device.set_debug_name(view, &format!("{}_view", name));
 
         let descriptor_index = if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
-            let index = descriptors.alloc_image_resource(device, view);
-            Some(index)
+            if let Some(descriptor_index) = preallocated_descriptor_index {
+                descriptors.write_image_resource(device, descriptor_index, view);
+                Some(descriptor_index)
+            } else {
+                let index = descriptors.alloc_image_resource(device, view);
+                Some(index)
+            }
         } else {
             None
         };
@@ -128,14 +208,14 @@ impl Image {
 
     pub fn set_sampler_flags(&mut self, sampler_flags: render::SamplerFlags) {
         if let Some(index) = self.image_view.descriptor_index.as_mut() {
-            *index = index.with_sampler(sampler_flags);
+            *index = render::descriptor_index_with_sampler(*index, sampler_flags);
         }
     }
 }
 
 impl render::Context {
     pub fn create_image(&self, name: impl Into<Cow<'static, str>>, desc: &ImageDesc) -> Image {
-        Image::create_impl(&self.device, &self.descriptors, name.into(), desc)
+        Image::create_impl(&self.device, &self.descriptors, name.into(), desc, None)
     }
 
     pub fn immediate_write_image(

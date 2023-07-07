@@ -117,6 +117,10 @@ impl<T> Arena<T> {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty() && self.len == 0
+    }
+
     pub fn with_capacity(capacity: u32) -> Self {
         Self {
             entries: Vec::with_capacity(capacity as usize),

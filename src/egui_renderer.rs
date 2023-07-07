@@ -1,12 +1,12 @@
 use std::{ops::Range, collections::HashMap};
 
-use crate::{render::{self, DescriptorHandle}, utils::load_spv};
+use crate::{render::{self}, utils::load_spv};
 use ash::vk;
 use gpu_allocator::MemoryLocation;
 
 struct ClippedBatch {
     clip_rect: vk::Rect2D,
-    texture: render::ResourceHandle,
+    texture: render::GraphHandle<render::Image>,
     index_range: Range<u32>,
     vertex_offset: i32,
 }
@@ -132,7 +132,7 @@ impl EguiRenderer {
 
     fn update(
         &mut self,
-        context: &mut render::FrameContext,
+        context: &mut render::Context,
         clipped_primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
     ) -> Vec<ClippedBatch> {
@@ -194,7 +194,10 @@ impl EguiRenderer {
                             },
                         )
                     },
-                    egui::TextureId::User(handle) => handle as usize,
+                    egui::TextureId::User(handle) => render::GraphHandle {
+                        resource_index: handle as usize,
+                        _phantom: std::marker::PhantomData,
+                    },
                 };
 
                 clipped_batches.push(ClippedBatch {
@@ -294,10 +297,10 @@ impl EguiRenderer {
 
     pub fn render(
         &mut self,
-        context: &mut render::FrameContext,
+        context: &mut render::Context,
         clipped_primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
-        target_image: render::ResourceHandle
+        target_image: render::GraphHandle<render::Image>,
     ) {
         puffin::profile_function!();
 
@@ -321,14 +324,13 @@ impl EguiRenderer {
             &render::GraphResourceImportDesc::default(),
         );
 
-        context.add_pass(
-            "egui_draw",
-            &[(target_image, render::AccessKind::ColorAttachmentWrite)],
-            move |cmd, graph| {
-                let target_image = graph.get_image(target_image).unwrap();
+        context.add_pass("egui_draw")
+            .with_dependency(target_image, render::AccessKind::ColorAttachmentWrite)
+            .render(move |cmd, graph| {
+                let target_image = graph.get_image(target_image);
                 
-                let index_buffer = graph.get_buffer(index_buffer).unwrap();
-                let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
+                let index_buffer = graph.get_buffer(index_buffer);
+                let vertex_buffer = graph.get_buffer(vertex_buffer);
 
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(target_image.view)
@@ -350,19 +352,18 @@ impl EguiRenderer {
                 for batch in clipped_batches.iter() {
                     cmd.set_scissor(0, &[batch.clip_rect]);
 
-                    let texture = graph.get_image(batch.texture).unwrap();
+                    let texture = graph.get_image(batch.texture);
 
                     cmd.push_bindings(&[
                         bytemuck::cast(screen_size[0]),
                         bytemuck::cast(screen_size[1]),
-                        texture.descriptor_index.unwrap().to_raw(),
+                        texture.descriptor_index.unwrap(),
                     ]);
                     cmd.draw_indexed(batch.index_range.clone(), 0..1, batch.vertex_offset);                    
                 }
 
                 cmd.end_rendering();
-            },
-        );
+            });
     }
 
     pub fn destroy(&self, context: &render::Context) {

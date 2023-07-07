@@ -4,6 +4,13 @@ use ash::vk;
 use gpu_allocator::{vulkan::{AllocationScheme, AllocationCreateDesc}, MemoryLocation};
 use crate::render;
 
+#[derive(Debug, Clone, Copy)]
+pub struct BufferView {
+    pub handle: vk::Buffer,
+    pub descriptor_index: Option<render::DescriptorIndex>,
+    pub size: u64
+}
+
 #[derive(Debug, Clone)]
 pub struct Buffer {
     pub name: Cow<'static, str>,
@@ -33,7 +40,8 @@ impl Buffer {
         device: &render::Device,
         descriptors: &render::BindlessDescriptors,
         name: Cow<'static, str>,
-        desc: &BufferDesc
+        desc: &BufferDesc,
+        preallocated_descriptor_index: Option<render::DescriptorIndex>,
     ) -> Buffer {
         puffin::profile_function!(&name);
         let create_info = vk::BufferCreateInfo::builder()
@@ -58,7 +66,12 @@ impl Buffer {
         }
 
         let descriptor_index = if desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) {
-            Some(descriptors.alloc_buffer_resource(device, handle))
+            if let Some(descriptor_index) = preallocated_descriptor_index {
+                descriptors.write_buffer_resource(device, descriptor_index, handle);
+                Some(descriptor_index)
+            } else {
+                Some(descriptors.alloc_buffer_resource(device, handle))
+            }
         } else {
             None
         };
@@ -93,7 +106,7 @@ impl Buffer {
 
 impl render::Context {
     pub fn create_buffer(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc) -> Buffer {
-        Buffer::create_impl(&self.device, &self.descriptors, name.into(), desc)
+        Buffer::create_impl(&self.device, &self.descriptors, name.into(), desc, None)
     }
 
     pub fn create_buffer_init(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc, init: &[u8]) -> Buffer {
@@ -103,7 +116,7 @@ impl render::Context {
             desc.usage |= vk::BufferUsageFlags::TRANSFER_DST;
         }
 
-        let buffer = Buffer::create_impl(&self.device, &self.descriptors, name.into(), &desc);
+        let buffer = Buffer::create_impl(&self.device, &self.descriptors, name.into(), &desc, None);
         self.immediate_write_buffer(&buffer, init, 0);
 
         buffer
@@ -128,7 +141,8 @@ impl render::Context {
                     size: copy_size,
                     usage: vk::BufferUsageFlags::TRANSFER_SRC,
                     memory_location: MemoryLocation::CpuToGpu,
-                }
+                },
+                None
             );
 
             unsafe {

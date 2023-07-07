@@ -1,6 +1,3 @@
-mod types;
-pub use types::*;
-
 mod device;
 pub use device::*;
 

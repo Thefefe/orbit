@@ -3,12 +3,9 @@ use std::{collections::{HashSet, HashMap}, ops::Range, borrow::Cow};
 use ash::vk;
 
 use crate::{render, collections::arena};
-
-use super::RawDescriptorIndex;
-
-pub type ResourceHandle = usize;
-pub type PassHandle = arena::Index;
-pub type DependencyHandle = usize;
+pub type GraphResourceIndex = usize;
+pub type GraphPassIndex = arena::Index;
+pub type GraphDependencyIndex = usize;
 
 type PassFn = Box<dyn Fn(&render::CommandRecorder, &render::CompiledRenderGraph)>;
 
@@ -23,11 +20,12 @@ impl std::fmt::Debug for Pass {
     }
 }
 
-trait RenderResource {
+pub trait RenderResource {
     type View;
     type Desc;
 
     fn view(&self) -> Self::View;
+    fn descriptor_index(&self) -> Option<render::DescriptorIndex>;
 }
 
 impl RenderResource for render::Buffer {
@@ -37,6 +35,11 @@ impl RenderResource for render::Buffer {
     fn view(&self) -> Self::View {
         self.buffer_view
     }
+
+    fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
+        self.descriptor_index
+    }
+    
 }
 
 impl RenderResource for render::Image {
@@ -45,6 +48,10 @@ impl RenderResource for render::Image {
 
     fn view(&self) -> Self::View {
         self.image_view
+    }
+
+    fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
+        self.descriptor_index
     }
 }
 
@@ -76,6 +83,13 @@ impl RenderResource for AnyResource {
             AnyResource::Image(image) => AnyResourceView::Image(image.view()),
         }
     }
+
+    fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
+        match self {
+            AnyResource::Buffer(buffer) => buffer.descriptor_index,
+            AnyResource::Image(image) => image.descriptor_index,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,13 +110,27 @@ impl AnyResource {
         device: &render::Device,
         descriptors: &render::BindlessDescriptors,
         name: Cow<'static, str>,
-        desc: &AnyResourceDesc) -> Self {
+        desc: &AnyResourceDesc,
+        preallocated_descriptor_index: Option<render::DescriptorIndex>,
+    ) -> Self {
         match desc {
             AnyResourceDesc::Buffer(desc) => {
-                AnyResource::Buffer(render::Buffer::create_impl(device, descriptors, name, desc))
+                AnyResource::Buffer(render::Buffer::create_impl(
+                    device,
+                    descriptors,
+                    name,
+                    desc,
+                    preallocated_descriptor_index
+                ))
             },
             AnyResourceDesc::Image(desc) => {
-                AnyResource::Image(render::Image::create_impl(device, descriptors, name, desc))
+                AnyResource::Image(render::Image::create_impl(
+                    device,
+                    descriptors,
+                    name,
+                    desc,
+                    preallocated_descriptor_index
+                ))
             },
         }
     }
@@ -155,15 +183,15 @@ pub enum ResourceSource {
 #[derive(Debug)]
 pub struct ResourceVersion {
     last_access: render::AccessKind,
-    source_pass: PassHandle,
+    source_pass: GraphPassIndex,
 }
 
 #[derive(Debug)]
-pub struct ResourceData {
+pub struct GraphResourceData {
     pub name: Cow<'static, str>,
 
     pub source: ResourceSource,
-    pub early_descriptor_index: Option<RawDescriptorIndex>,
+    pub descriptor_index: Option<render::DescriptorIndex>,
 
     pub initial_access: render::AccessKind,
     pub target_access: render::AccessKind,
@@ -173,7 +201,7 @@ pub struct ResourceData {
     pub versions: Vec<ResourceVersion>,
 }
 
-impl ResourceData {
+impl GraphResourceData {
     fn kind(&self) -> render::ResourceKind {
         match self.source {
             ResourceSource::Create { desc, .. } => desc.kind(),
@@ -194,7 +222,7 @@ impl ResourceData {
         }
     }
 
-    fn source_pass(&self, version: usize) -> Option<PassHandle> {
+    fn source_pass(&self, version: usize) -> Option<GraphPassIndex> {
         if version != 0 {
             Some(self.versions[version - 1].source_pass)
         } else {
@@ -206,15 +234,15 @@ impl ResourceData {
 #[derive(Debug)]
 pub struct PassData {
     pass: Pass,
-    dependencies: Vec<DependencyHandle>,
+    dependencies: Vec<GraphDependencyIndex>,
     alive: bool,
 }
 
 #[derive(Debug)]
 struct DependencyData {
     access: render::AccessKind,
-    pass_handle: PassHandle,
-    resource_handle: ResourceHandle,
+    pass_handle: GraphPassIndex,
+    resource_handle: GraphResourceIndex,
     resource_version: usize,
 }
 
@@ -228,8 +256,8 @@ pub struct GraphResourceImportDesc {
 
 #[derive(Debug)]
 pub struct RenderGraph {
-    resources: Vec<ResourceData>,
-    passes: arena::Arena<PassData>,
+    pub resources: Vec<GraphResourceData>,
+    pub passes: arena::Arena<PassData>,
     dependencies: Vec<DependencyData>,
 }
 
@@ -248,13 +276,13 @@ impl RenderGraph {
         self.dependencies.clear();
     }
 
-    pub fn add_resource(&mut self, resource_data: ResourceData) -> ResourceHandle {
+    pub fn add_resource(&mut self, resource_data: GraphResourceData) -> GraphResourceIndex {
         let index = self.resources.len();
         self.resources.push(resource_data);
         index
     }
 
-    pub fn add_pass(&mut self, name: Cow<'static, str>, func: PassFn) -> PassHandle {
+    pub fn add_pass(&mut self, name: Cow<'static, str>, func: PassFn) -> GraphPassIndex {
         self.passes.insert(PassData {
             pass: Pass { name, func },
             dependencies: Vec::new(),
@@ -264,8 +292,8 @@ impl RenderGraph {
 
     pub fn add_dependency(
         &mut self,
-        pass_handle: PassHandle,
-        resource_handle: ResourceHandle,
+        pass_handle: GraphPassIndex,
+        resource_handle: GraphResourceIndex,
         access: render::AccessKind,
     ) -> usize {
         let resource_version = self.resources[resource_handle].current_version();
@@ -304,7 +332,7 @@ pub struct BatchData {
 }
 
 #[derive(Debug)]
-pub struct GraphResource {
+pub struct CompiledGraphResource {
     name: Cow<'static, str>,
     resource_view: AnyResourceView,
 }
@@ -327,6 +355,10 @@ impl TransientResourceCache {
             resources_nodes: arena::Arena::new(),
             descriptor_lookup: HashMap::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.resources_nodes.is_empty() && self.descriptor_lookup.is_empty()
     }
 
     pub fn clear(&mut self) {
@@ -370,13 +402,11 @@ impl TransientResourceCache {
 
 #[derive(Debug, Default)]
 pub struct CompiledRenderGraph {
-    pub resources: Vec<GraphResource>,
+    pub resources: Vec<CompiledGraphResource>,
     pub passes: Vec<Pass>,
     pub image_barriers: Vec<vk::ImageMemoryBarrier2>,
     pub semaphores: Vec<vk::Semaphore>,
     pub batches: Vec<BatchData>,
-
-    pub transient_resource_cache: TransientResourceCache,
 }
 
 pub struct Batch<'a> {
@@ -416,17 +446,17 @@ impl CompiledRenderGraph {
         self.batches.clear();
     }
 
-    pub fn get_buffer(&self, handle: render::ResourceHandle) -> Option<&render::BufferView> {
-        match &self.resources[handle].resource_view {
-            AnyResourceView::Buffer(buffer) => Some(buffer),
-            _ => None,
+    pub fn get_buffer(&self, handle: render::GraphHandle<render::Buffer>) -> &render::BufferView {
+        match &self.resources[handle.resource_index].resource_view {
+            AnyResourceView::Buffer(buffer) => buffer,
+            _ => unreachable!(),
         }
     }
 
-    pub fn get_image(&self, handle: render::ResourceHandle) -> Option<&render::ImageView> {
-        match &self.resources[handle].resource_view {
-            AnyResourceView::Image(image) => Some(image),
-            _ => None,
+    pub fn get_image(&self, handle: render::GraphHandle<render::Image>) -> &render::ImageView {
+        match &self.resources[handle.resource_index].resource_view {
+            AnyResourceView::Image(image) => image,
+            _ => unreachable!(),
         }
     }
 }
@@ -437,7 +467,9 @@ impl RenderGraph {
         device: &render::Device,
         descriptors: &render::BindlessDescriptors,
         compiled: &mut CompiledRenderGraph,
+        to_be_used_transient_resource_cache: &mut TransientResourceCache,
     ) {
+        assert!(to_be_used_transient_resource_cache.is_empty());
         puffin::profile_function!();
         compiled.clear();
 
@@ -448,20 +480,25 @@ impl RenderGraph {
             let mut name: Cow<'static, str> = Cow::Borrowed("");
             std::mem::swap(&mut name, &mut resource_data.name);
             match &mut resource_data.source {
-                ResourceSource::Create { desc, cache: cached } => {
-                    let resource = cached.take().unwrap_or_else(|| AnyResource::create(device, descriptors, name.clone(), desc));
+                ResourceSource::Create { desc, cache, } => {
+                    let resource = cache.take().unwrap_or_else(|| AnyResource::create(
+                        device,
+                        descriptors,
+                        name.clone(),
+                        desc,
+                        resource_data.descriptor_index,
+                    ));
                     let resource_view = resource.view();
 
-                    compiled.resources.push(GraphResource { name, resource_view });
-                    compiled.transient_resource_cache.insert(*desc, resource);
+                    compiled.resources.push(CompiledGraphResource { name, resource_view });
+                    to_be_used_transient_resource_cache.insert(*desc, resource);
                 },
                 ResourceSource::Import { view } => {
-                    compiled.resources.push(GraphResource {
+                    compiled.resources.push(CompiledGraphResource {
                         name,
                         resource_view: *view,
                     });
-                },
-                
+                },  
             } 
         }
 
@@ -570,11 +607,11 @@ impl RenderGraph {
 #[derive(Debug)]
 struct SortedPasses {
     ranges: Vec<Range<usize>>,
-    passes: Vec<PassHandle>,
+    passes: Vec<GraphPassIndex>,
 }
 
 impl SortedPasses {
-    fn passes(&self) -> impl Iterator<Item = &[PassHandle]> {
+    fn passes(&self) -> impl Iterator<Item = &[GraphPassIndex]> {
         self.ranges.iter().map(|range| &self.passes[range.clone()])
     }
 }
@@ -613,7 +650,7 @@ impl RenderGraph {
         sorted_passes
     }
 
-    fn prev_passes(&self, pass: PassHandle) -> impl Iterator<Item = PassHandle> + '_ {
+    fn prev_passes(&self, pass: GraphPassIndex) -> impl Iterator<Item = GraphPassIndex> + '_ {
         self.passes.get(pass).map(|pass| pass.dependencies.iter().filter_map(|&dependency_handle| {
             let handle = self.dependencies[dependency_handle].resource_handle;
             let version = self.dependencies[dependency_handle].resource_version;

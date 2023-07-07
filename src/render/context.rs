@@ -1,11 +1,11 @@
-use std::{sync::Mutex, borrow::Cow, time::Instant};
+use std::{sync::Mutex, borrow::Cow, time::Instant, marker::PhantomData};
 
 use ash::vk;
 use winit::window::Window;
 
 use crate::render;
 
-use super::{graph::{RenderGraph, CompiledRenderGraph, self}, DescriptorHandle, TransientResourceCache};
+use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, RenderResource};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -16,12 +16,13 @@ pub struct GpuGlobalData {
 }
 
 pub struct Frame {
-    pub in_flight_fence: vk::Fence,
-    pub image_available_semaphore: vk::Semaphore,
-    pub render_finished_semaphore: vk::Semaphore,
-    pub command_pool: render::CommandPool,
-
+    in_flight_fence: vk::Fence,
+    image_available_semaphore: vk::Semaphore,
+    render_finished_semaphore: vk::Semaphore,
+    command_pool: render::CommandPool,
     global_buffer: render::Buffer,
+
+    in_use_transient_resources: TransientResourceCache,
 }
 
 pub const FRAME_COUNT: usize = 2;
@@ -29,6 +30,11 @@ pub const FRAME_COUNT: usize = 2;
 struct RecordSubmitStuff {
     command_pool: render::CommandPool,
     fence: vk::Fence,
+}
+
+struct FrameContext {
+    acquired_image: render::AcquiredImage,
+    acquired_image_handle: GraphImageHandle,
 }
 
 pub struct Context {
@@ -48,6 +54,8 @@ pub struct Context {
     start: Instant,
 
     record_submit_stuff: Mutex<RecordSubmitStuff>,
+
+    frame_context: Option<FrameContext>,
 }
 
 pub struct ContextDesc {
@@ -106,15 +114,16 @@ impl Context {
                 size: std::mem::size_of::<GpuGlobalData>(),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                 memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
-            });
+            }, None);
 
             Frame {
                 in_flight_fence,
                 image_available_semaphore,
                 render_finished_semaphore,
                 command_pool,
-                
                 global_buffer,
+
+                in_use_transient_resources: TransientResourceCache::new(),
             }
         });
 
@@ -142,6 +151,8 @@ impl Context {
             start: Instant::now(),
 
             record_submit_stuff,
+
+            frame_context: None,
         }
     }
 
@@ -191,16 +202,16 @@ impl Drop for Context {
             frame.command_pool.destroy(&self.device);
 
             render::Buffer::destroy_impl(&self.device, &self.descriptors, &frame.global_buffer);
-
+            
+            for resource in frame.in_use_transient_resources.resources() {
+                resource.destroy(&self.device, &self.descriptors);
+            }
         }
         
         for resource in self.transient_resource_cache.resources() {
             resource.destroy(&self.device, &self.descriptors)
         }
 
-        for resource in self.compiled_graph.transient_resource_cache.resources() {
-            resource.destroy(&self.device, &self.descriptors);
-        }
 
         self.swapchain.destroy(&self.device);
         self.descriptors.destroy(&self.device);
@@ -208,22 +219,9 @@ impl Drop for Context {
     }
 }
 
-pub struct FrameContext<'a> {
-    pub context: &'a mut Context,
-    pub acquired_image: render::AcquiredImage,
-    pub acquired_image_handle: render::ResourceHandle,
-}
-
-impl std::ops::Deref for FrameContext<'_> {
-    type Target = Context;
-
-    fn deref(&self) -> &Self::Target {
-        self.context
-    }
-}
-
 impl Context {
-    pub fn begin_frame(&mut self) -> FrameContext {
+    pub fn begin_frame(&mut self) {
+        assert!(self.frame_context.is_none(), "frame already began");
         puffin::profile_function!();
         let frame = &mut self.frames[self.frame_index];
 
@@ -243,12 +241,15 @@ impl Context {
             .unwrap();
 
         self.graph.clear();
-        std::mem::swap(&mut self.transient_resource_cache, &mut self.compiled_graph.transient_resource_cache);
 
-        let acquired_image_handle = self.graph.add_resource(graph::ResourceData {
+        assert!(self.transient_resource_cache.is_empty());
+        std::mem::swap(&mut self.transient_resource_cache, &mut frame.in_use_transient_resources);
+
+        let acquired_image_handle = self.graph.add_resource(graph::GraphResourceData {
             name: "swapchain_image".into(),
+            
             source: graph::ResourceSource::Import { view: render::AnyResourceView::Image(acquired_image.image_view) },
-            early_descriptor_index: None,
+            descriptor_index: None,
 
             initial_access: render::AccessKind::None,
             target_access: render::AccessKind::Present,
@@ -257,29 +258,98 @@ impl Context {
             versions: vec![],
         });
 
-        FrameContext {
-            context: self,
+        self.frame_context = Some(FrameContext {
             acquired_image,
-            acquired_image_handle
+            acquired_image_handle: GraphHandle { resource_index:acquired_image_handle, _phantom: PhantomData },
+        });        
+    }
+}
+
+#[derive(Debug)]
+pub struct GraphHandle<T> {
+    pub resource_index: render::GraphResourceIndex,
+    pub _phantom: PhantomData<T>,
+}
+
+impl<T> Clone for GraphHandle<T> {
+    fn clone(&self) -> Self {
+        Self {
+            resource_index: self.resource_index.clone(),
+            _phantom: self._phantom.clone()
         }
     }
 }
 
-impl FrameContext<'_> {
+impl<T> Copy for GraphHandle<T> { }
+
+pub type GraphBufferHandle = GraphHandle<render::Buffer>;
+pub type GraphImageHandle = GraphHandle<render::Image>;
+
+impl From<GraphHandle<render::Image>> for egui::TextureId {
+    fn from(value: GraphHandle<render::Image>) -> Self {
+        Self::User(value.resource_index as u64)
+    }
+}
+
+pub struct PassBuilder<'a> {
+    context: &'a mut Context,
+    name: Cow<'static, str>,
+    dependencies: Vec<(render::GraphResourceIndex, render::AccessKind)>,
+}
+
+pub trait IntoGraphDependency {
+    fn into_dependency(self) -> (render::GraphResourceIndex, render::AccessKind);
+}
+
+impl<T> IntoGraphDependency for (render::GraphHandle<T>, render::AccessKind) {
+    fn into_dependency(self) -> (render::GraphResourceIndex, render::AccessKind) {
+        (self.0.resource_index, self.1)
+    }
+}
+
+impl<'a> PassBuilder<'a> {
+    pub fn with_dependency<T>(mut self, handle: render::GraphHandle<T>, access: render::AccessKind) -> Self {
+        self.dependencies.push((handle.resource_index, access));
+        self
+    }
+
+    pub fn with_dependencies<I>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: IntoGraphDependency
+    {
+        self.dependencies.extend(iter.into_iter().map(|item| item.into_dependency()));
+        self
+    }
+
+    pub fn render(self, f: impl Fn(&render::CommandRecorder, &render::CompiledRenderGraph) + 'static) -> render::GraphPassIndex {
+        let pass = self.context.graph.add_pass(self.name, Box::new(f));
+        for (resource, access) in self.dependencies.iter().copied() {
+            self.context.graph.add_dependency(pass, resource, access);
+        }
+        pass
+    }
+}
+
+impl Context {
     pub fn swapchain_extent(&self) -> vk::Extent2D {
-        self.acquired_image.extent
+        self.frame_context.as_ref().unwrap().acquired_image.extent
     }
 
     pub fn swapchain_format(&self) -> vk::Format {
-        self.acquired_image.format
+        self.frame_context.as_ref().unwrap().acquired_image.format
     }
 
-    pub fn get_swapchain_image(&self) -> render::ResourceHandle {
-        self.acquired_image_handle
+    pub fn get_swapchain_image(&self) -> render::GraphImageHandle {
+        self.frame_context.as_ref().unwrap().acquired_image_handle
     }
 
     pub fn get_global_buffer_index(&self) -> u32 {
-        self.frames[self.frame_index].global_buffer.descriptor_index.unwrap().to_raw()
+        self.frames[self.frame_index].global_buffer.descriptor_index.unwrap()
+    }
+
+    pub fn get_transient_resource_descriptor_index<T>(&self, handle: GraphHandle<T>) -> Option<render::DescriptorIndex> {
+        self.graph.resources[handle.resource_index].descriptor_index
     }
 
     pub fn import_buffer(
@@ -287,20 +357,22 @@ impl FrameContext<'_> {
         name: impl Into<Cow<'static, str>>,
         buffer: &render::BufferView,
         desc: &render::GraphResourceImportDesc,
-    ) -> render::ResourceHandle {
+    ) -> GraphHandle<render::Buffer> {
         let name = name.into();
         let view = render::AnyResourceView::Buffer(*buffer);
-        self.context.graph.add_resource(graph::ResourceData {
+        let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,
             source: graph::ResourceSource::Import { view },
-            early_descriptor_index: None,
+            descriptor_index: buffer.descriptor_index,
 
             initial_access: desc.initial_access,
             target_access: desc.target_access,
             wait_semaphore: desc.wait_semaphore,
             finish_semaphore: desc.finish_semaphore,
             versions: vec![],
-        })
+        });
+
+        GraphHandle { resource_index, _phantom: PhantomData }
     }
 
     pub fn import_image(
@@ -308,107 +380,122 @@ impl FrameContext<'_> {
         name: impl Into<Cow<'static, str>>,
         image: &render::ImageView,
         desc: &render::GraphResourceImportDesc,
-    ) -> render::ResourceHandle {
+    ) -> GraphHandle<render::Image> {
         let name = name.into();
         let view = render::AnyResourceView::Image(*image);
-        self.context.graph.add_resource(graph::ResourceData {
+        let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,
             source: graph::ResourceSource::Import { view },
-            early_descriptor_index: None,
+            descriptor_index: image.descriptor_index,
 
             initial_access: desc.initial_access,
             target_access: desc.target_access,
             wait_semaphore: desc.wait_semaphore,
             finish_semaphore: desc.finish_semaphore,
             versions: vec![],
-        })
+        });
+
+        GraphHandle { resource_index, _phantom: PhantomData }
     }
 
     pub fn create_transient_buffer(
         &mut self,
         name: impl Into<Cow<'static, str>>,
-        desc: render::BufferDesc
-    ) -> render::ResourceHandle {
+        buffer_desc: render::BufferDesc
+    ) -> GraphHandle<render::Buffer> {
         let name = name.into();
-        let desc = render::AnyResourceDesc::Buffer(desc);
-        let cache = self.context.transient_resource_cache.get_by_descriptor(&desc);
-        self.context.graph.add_resource(graph::ResourceData {
+        let desc = render::AnyResourceDesc::Buffer(buffer_desc);
+        let cache = self.transient_resource_cache.get_by_descriptor(&desc);
+        let descriptor_index = match &cache {
+            Some(cache) => cache.descriptor_index(),
+            None if buffer_desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) => Some(self.descriptors.alloc_buffer_index()),
+            _ => None
+        };
+
+        let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,
          
-            source: graph::ResourceSource::Create { desc, cache, },
-            early_descriptor_index: None,
+            source: graph::ResourceSource::Create { desc, cache },
+            descriptor_index,
 
             initial_access: render::AccessKind::None,
             target_access: render::AccessKind::None,
             wait_semaphore: None,
             finish_semaphore: None,
             versions: vec![],
-        })
+        });
+
+        GraphHandle { resource_index, _phantom: PhantomData }
     }
     
     pub fn create_transient_image(
         &mut self,
         name: impl Into<Cow<'static, str>>,
-        desc: render::ImageDesc
-    ) -> render::ResourceHandle {
+        image_desc: render::ImageDesc
+    ) -> GraphHandle<render::Image> {
         let name = name.into();
-        let desc = render::AnyResourceDesc::Image(desc);
-        let cache = self.context.transient_resource_cache.get_by_descriptor(&desc);
-        self.context.graph.add_resource(graph::ResourceData {
+        let desc = render::AnyResourceDesc::Image(image_desc);
+        let cache = self.transient_resource_cache.get_by_descriptor(&desc);
+        let descriptor_index = match &cache {
+            Some(cache) => cache.descriptor_index(),
+            None if image_desc.usage.contains(vk::ImageUsageFlags::SAMPLED) => Some(self.descriptors.alloc_buffer_index()),
+            _ => None
+        };
+
+        let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,
          
             source: graph::ResourceSource::Create { desc, cache },
-            early_descriptor_index: None,
-
+            descriptor_index,
             initial_access: render::AccessKind::None,
             target_access: render::AccessKind::None,
             wait_semaphore: None,
             finish_semaphore: None,
             versions: vec![],
-        })
+        });
+
+        GraphHandle { resource_index, _phantom: PhantomData }
     }
 
-    pub fn add_pass(
-        &mut self,
-        name: impl Into<Cow<'static, str>>,
-        dependencies: &[(render::ResourceHandle, render::AccessKind)],
-        f: impl Fn(&render::CommandRecorder, &render::CompiledRenderGraph) + 'static,
-    ) -> render::PassHandle {
-        let pass = self.context.graph.add_pass(name.into(), Box::new(f));
-        for (resource, access) in dependencies.iter().copied() {
-            self.context.graph.add_dependency(pass, resource, access);
+    pub fn add_pass(&mut self, name: impl Into<Cow<'static, str>>) -> PassBuilder {
+        PassBuilder { 
+            context: self,
+            name: name.into(),
+            dependencies: Vec::new(),
         }
-        pass
     }
 
-    fn record(&mut self) {
+    pub fn end_frame(&mut self) {
         puffin::profile_function!();
+        let frame_context = self.frame_context.take().unwrap();
+        
         unsafe {
-            let screen_size = self.swapchain_extent();
+            let screen_size = frame_context.acquired_image.extent;
             self.frames[self.frame_index].global_buffer.mapped_ptr
                 .unwrap()
                 .cast::<GpuGlobalData>()
                 .as_ptr()
                 .write(GpuGlobalData {
                     screen_size: [screen_size.width, screen_size.height],
-                    elapsed_frames: self.context.elapsed_frames as u32,
-                    elapsed_time: self.context.start.elapsed().as_secs_f32(),
+                    elapsed_frames: self.elapsed_frames as u32,
+                    elapsed_time: self.start.elapsed().as_secs_f32(),
             })
         };
-        let frame = &mut self.context.frames[self.context.frame_index];
+        let frame = &mut self.frames[self.frame_index];
 
-        self.context.graph.compile_and_flush(
-            &self.context.device,
-            &self.context.descriptors,
-            &mut self.context.compiled_graph,
+        self.graph.compile_and_flush(
+            &self.device,
+            &self.descriptors,
+            &mut self.compiled_graph,
+            &mut frame.in_use_transient_resources,
         );
 
         {
             puffin::profile_scope!("command_recording");
-            for (batch_index, batch) in self.context.compiled_graph.iter_batches().enumerate() {
+            for (batch_index, batch) in self.compiled_graph.iter_batches().enumerate() {
                 puffin::profile_scope!("batch_record", format!("{batch_index}"));
                 let cmd_buffer = frame.command_pool
-                    .begin_new(&self.context.device, vk::CommandBufferUsageFlags::empty());
+                    .begin_new(&self.device, vk::CommandBufferUsageFlags::empty());
 
                 for semaphore in batch.wait_semaphores {
                     cmd_buffer.wait_semaphore(*semaphore, batch.memory_barrier.src_stage_mask);
@@ -418,10 +505,10 @@ impl FrameContext<'_> {
                     cmd_buffer.signal_semaphore(*semaphore, batch.memory_barrier.dst_stage_mask);
                 }
                 
-                let recorder = cmd_buffer.record(&self.context.device, &self.context.descriptors);
+                let recorder = cmd_buffer.record(&self.device, &self.descriptors);
                     
-                self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
-                self.context.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
+                self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
+                self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
 
                 if batch.memory_barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE
                 || batch.memory_barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE
@@ -434,7 +521,7 @@ impl FrameContext<'_> {
 
                 for pass in batch.passes {
                     recorder.begin_debug_label(&pass.name, None);
-                    (pass.func)(&recorder, &self.context.compiled_graph);
+                    (pass.func)(&recorder, &self.compiled_graph);
                     recorder.end_debug_label();
                 }
 
@@ -444,13 +531,13 @@ impl FrameContext<'_> {
 
         {
             puffin::profile_scope!("command_submit");
-            self.context.device.submit(frame.command_pool.buffers(), frame.in_flight_fence);
+            self.device.submit(frame.command_pool.buffers(), frame.in_flight_fence);
         }
         {
             puffin::profile_scope!("queue_present");
-            self.context.swapchain.queue_present(
-                &self.context.device,
-                self.acquired_image,
+            self.swapchain.queue_present(
+                &self.device,
+                frame_context.acquired_image,
                 frame.render_finished_semaphore,
             );
         }
@@ -458,18 +545,12 @@ impl FrameContext<'_> {
         {
             puffin::profile_scope!("leftover_resource_releases");
             for resource in self.transient_resource_cache.resources() {
-                resource.destroy(&self.context.device, &self.context.descriptors)
+                resource.destroy(&self.device, &self.descriptors)
             }
+            self.transient_resource_cache.clear();
         }
 
-        self.context.transient_resource_cache.clear();
-    }
-}
-
-impl Drop for FrameContext<'_> {
-    fn drop(&mut self) {
-        self.record();
-        self.context.frame_index = (self.context.frame_index + 1) % FRAME_COUNT;
-        self.context.elapsed_frames += 1;
+        self.frame_index = (self.frame_index + 1) % FRAME_COUNT;
+        self.elapsed_frames += 1;
     }
 }

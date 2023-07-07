@@ -332,7 +332,7 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
-    pub fn push_bindings(&self, bindings: &[render::RawDescriptorIndex]) {
+    pub fn push_bindings(&self, bindings: &[render::DescriptorIndex]) {
         unsafe {
             self.device.raw.cmd_push_constants(
                 self.buffer(),

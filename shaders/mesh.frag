@@ -22,7 +22,6 @@ layout(push_constant, std430) uniform PushConstants {
     uint draw_commands;
     uint materials;
     uint directional_light_buffer;
-    uint cascade_shadow_maps[4];
 };
 
 layout(location = 0) in VertexOutput {
@@ -223,8 +222,8 @@ void main() {
     }
 
     vec4 light_space_frag_pos = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].light_projection * vout.world_pos;
-    // uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].shadow_map_index;
-    uint shadow_map = cascade_shadow_maps[cascade_index];
+    uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].shadow_map_index;
+    // uint shadow_map = cascade_shadow_maps[cascade_index];
 
     float shadow = 1.0;
     if (cascade_index < CASCADE_COUNT) shadow = compute_shadow(light_space_frag_pos, shadow_map);

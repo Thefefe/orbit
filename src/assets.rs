@@ -1,4 +1,3 @@
-use crate::render::DescriptorHandle;
 use crate::{render, collections::arena};
 use crate::collections::freelist_alloc::*;
 
@@ -237,7 +236,7 @@ impl GpuAssetStore {
     }
 
     fn get_texture_desc_index(&self, handle: TextureHandle) -> u32 {
-        self.textures[handle].descriptor_index.unwrap().to_raw()
+        self.textures[handle].descriptor_index.unwrap()
     }
 
     pub fn add_material(&mut self, context: &render::Context, material_data: MaterialData) -> MaterialHandle {

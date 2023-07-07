@@ -9,7 +9,7 @@ use ash::vk;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuBindingContants {
-    indices: [RawDescriptorIndex; 32],
+    indices: [DescriptorIndex; 32],
 }
 
 impl GpuBindingContants {
@@ -19,7 +19,7 @@ impl GpuBindingContants {
         }
     }
 
-    pub fn set(&mut self, bindings: impl IntoIterator<Item = RawDescriptorIndex>) -> &[RawDescriptorIndex] {
+    pub fn set(&mut self, bindings: impl IntoIterator<Item = DescriptorIndex>) -> &[DescriptorIndex] {
         let mut len = 0;
         for binding in bindings {
             self.indices[len] = binding;
@@ -108,31 +108,7 @@ impl IndexAllocator {
     }
 }
 
-pub type RawDescriptorIndex = u32;
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct BufferDescriptorIndex(u32);
-
-pub trait DescriptorHandle {
-    fn to_raw(self) -> RawDescriptorIndex;
-}
-
-impl DescriptorHandle for BufferDescriptorIndex {
-    fn to_raw(self) -> RawDescriptorIndex {
-        self.0
-    }
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct ImageDescriptorIndex(u32);
-
-impl DescriptorHandle for ImageDescriptorIndex {
-    fn to_raw(self) -> RawDescriptorIndex {
-        self.0
-    }
-}
+pub type DescriptorIndex = u32;
 
 pub struct BindlessDescriptors {
     descriptor_layouts: Vec<vk::DescriptorSetLayout>,
@@ -279,7 +255,49 @@ impl BindlessDescriptors {
         }
     }
 
-    pub fn alloc_buffer_resource(&self, device: &render::Device, handle: vk::Buffer) -> BufferDescriptorIndex {
+    pub fn alloc_buffer_index(&self) -> DescriptorIndex {
+        self.global_index_allocator.alloc()
+    }
+
+    pub fn alloc_image_index(&self) -> DescriptorIndex {
+        self.global_index_allocator.alloc()
+    }
+
+    pub fn write_buffer_resource(&self, device: &render::Device, index: DescriptorIndex, handle: vk::Buffer) {
+        unsafe {
+            let buffer_info =
+                vk::DescriptorBufferInfo::builder().buffer(handle).offset(0).range(vk::WHOLE_SIZE).build();
+
+            let write_info = vk::WriteDescriptorSet::builder()
+                .dst_set(self.descriptor_sets[DescriptorTableType::Buffer.set_index() as usize])
+                .dst_binding(0)
+                .dst_array_element(index)
+                .descriptor_type(DescriptorTableType::Buffer.to_vk())
+                .buffer_info(std::slice::from_ref(&buffer_info));
+
+            device.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
+        }
+    }
+
+    pub fn write_image_resource(&self, device: &render::Device, index: DescriptorIndex, handle: vk::ImageView) {
+        unsafe {
+            let image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(handle)
+                .build();
+
+            let write_info = vk::WriteDescriptorSet::builder()
+                .dst_set(self.descriptor_sets[DescriptorTableType::Image.set_index() as usize])
+                .dst_binding(self.immutable_samplers.len() as u32)
+                .dst_array_element(index)
+                .descriptor_type(DescriptorTableType::Image.to_vk())
+                .image_info(std::slice::from_ref(&image_info));
+
+            device.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
+        }
+    }
+
+    pub fn alloc_buffer_resource(&self, device: &render::Device, handle: vk::Buffer) -> DescriptorIndex {
         puffin::profile_function!();
         let index = self.global_index_allocator.alloc();
 
@@ -297,14 +315,10 @@ impl BindlessDescriptors {
             device.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
         }
 
-        BufferDescriptorIndex(index)
+        index
     }
 
-    pub fn free_descriptor_index(&self, handle: impl DescriptorHandle) {
-        self.global_index_allocator.free(handle.to_raw());
-    }
-
-    pub fn alloc_image_resource(&self, device: &render::Device, view_handle: vk::ImageView) -> ImageDescriptorIndex {
+    pub fn alloc_image_resource(&self, device: &render::Device, view_handle: vk::ImageView) -> DescriptorIndex {
         let index = self.global_index_allocator.alloc();
 
         unsafe {
@@ -323,7 +337,11 @@ impl BindlessDescriptors {
             device.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
         }
 
-        ImageDescriptorIndex(index)
+        index
+    }
+
+    pub fn free_descriptor_index(&self, index: DescriptorIndex) {
+        self.global_index_allocator.free(index);
     }
 
     pub fn destroy(&self, device: &render::Device) {
@@ -395,8 +413,6 @@ impl SamplerFlags {
     }
 }
 
-impl ImageDescriptorIndex {
-    pub fn with_sampler(self, sampler: SamplerFlags) -> Self {
-        Self(self.0 | (sampler.0 << 30))
-    }
+pub fn descriptor_index_with_sampler(index: DescriptorIndex, sampler: SamplerFlags) -> DescriptorIndex {
+    index | (sampler.0 << 30)
 }

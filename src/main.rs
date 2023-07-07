@@ -29,7 +29,6 @@ mod gltf_loader;
 
 mod egui_renderer;
 
-use render::DescriptorHandle;
 use input::Input;
 use egui_renderer::EguiRenderer;
 
@@ -581,11 +580,11 @@ impl App {
         }
     }
 
-    fn render(&mut self, frame_ctx: &mut render::FrameContext, egui_ctx: &egui::Context) {
+    fn render(&mut self, context: &mut render::Context, egui_ctx: &egui::Context) {
         puffin::profile_function!();
-        self.scene.update_instances(frame_ctx);
+        self.scene.update_instances(context);
 
-        let screen_extent = frame_ctx.swapchain_extent();
+        let screen_extent = context.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
         let view_projection_matrix = self.camera.compute_matrix(aspect_ratio);
@@ -598,12 +597,12 @@ impl App {
             per_frame_data.view_pos = self.camera.transform.position;
         }
         
-        let swapchain_image = frame_ctx.get_swapchain_image();
+        let swapchain_image = context.get_swapchain_image();
         let (target_image, resolve_image) = if Self::MULTISAMPLING == render::MultisampleCount::None {
             (swapchain_image, None)
         } else {
-            let msaa_image = frame_ctx.create_transient_image("msaa_image", render::ImageDesc {
-                format: frame_ctx.swapchain_format(),
+            let msaa_image = context.create_transient_image("msaa_image", render::ImageDesc {
+                format: context.swapchain_format(),
                 width: screen_extent.width,
                 height: screen_extent.height,
                 mip_levels: 1,
@@ -613,7 +612,7 @@ impl App {
             });
             (msaa_image, Some(swapchain_image))
         };
-        let depth_image = frame_ctx.create_transient_image("depth_image", render::ImageDesc {
+        let depth_image = context.create_transient_image("depth_image", render::ImageDesc {
             format: Self::DEPTH_FORMAT,
             width: screen_extent.width,
             height: screen_extent.height,
@@ -623,25 +622,25 @@ impl App {
             aspect: vk::ImageAspectFlags::DEPTH,
         });
         
-        let globals_buffer = frame_ctx.import_buffer("globals_buffer", &self.per_frame_buffer, &Default::default());
+        let globals_buffer = context.import_buffer("globals_buffer", &self.per_frame_buffer, &Default::default());
         
-        let vertex_buffer = frame_ctx.import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
-        let index_buffer = frame_ctx.import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
-        let material_buffer = frame_ctx.import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
-        let entity_buffer = frame_ctx.import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
+        let vertex_buffer = context.import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
+        let index_buffer = context.import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
+        let material_buffer = context.import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
+        let entity_buffer = context.import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
 
-        let submeshes = frame_ctx.import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, &Default::default());
-        let mesh_infos = frame_ctx.import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
+        let submeshes = context.import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, &Default::default());
+        let mesh_infos = context.import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
         let submesh_count = self.scene.submesh_data.len() as u32;
 
-        let directional_light_buffer = frame_ctx
+        let directional_light_buffer = context
             .import_buffer("directional_light_buffer", &self.directional_light_buffer, &Default::default());
 
         let draw_commands_buffer = self.scene_draw_gen
-            .create_draw_commands(frame_ctx, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
+            .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
 
         let shadow_map_draw_commands = self.scene_draw_gen
-            .create_draw_commands(frame_ctx, submesh_count, submeshes, mesh_infos, "shadow_map_draw_commands".into());
+            .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "shadow_map_draw_commands".into());
 
         let light_direction = -self.sun_light.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
 
@@ -651,7 +650,40 @@ impl App {
             self.directional_light_buffer.mapped_ptr.unwrap().cast::<GpuDirectionalLight>().as_mut()
         };
 
-        let mut shadow_maps: [render::ResourceHandle; SHADOW_CASCADE_COUNT] = [0; SHADOW_CASCADE_COUNT];
+        let lambda = self.frustum_split_lambda;
+        let shadow_maps: [render::GraphImageHandle; SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
+            let Projection::Perspective { fov, near_clip } = self.camera.projection else { todo!() };
+            let far_clip = self.max_shadow_distance;
+
+            let near = practical_frustum_split(i, near_clip, far_clip, SHADOW_CASCADE_COUNT, lambda);
+            let far = practical_frustum_split(i+1, near, far_clip, SHADOW_CASCADE_COUNT, lambda);
+            let projection = Mat4::perspective_rh(fov, aspect_ratio, near, far);
+            let view_projection = projection * view_matrix;
+            let subfrustum_corners = frustum_corners_from_matrix(&view_projection);
+            let light_projection = cascaded_directional_light_projection(
+                &subfrustum_corners,
+                inv_light_direction,
+            );
+
+            let shadow_map = self.shadow_map_renderer.render_shadow_map(
+                "sun_shadow_map".into(),
+                context,
+                [1024 * 4; 2],
+                light_projection,
+                shadow_map_draw_commands,
+                vertex_buffer,
+                index_buffer,
+                entity_buffer
+            );
+
+            directional_light_data.cascades[i].far_view_distance = far;
+            directional_light_data.cascades[i].light_projection = light_projection;
+            directional_light_data.cascades[i].shadow_map_index = context
+                .get_transient_resource_descriptor_index(shadow_map)
+                .unwrap();
+
+            shadow_map
+        });
 
         egui::Window::new("shadow_debug").show(egui_ctx, |ui| {
             ui.horizontal(|ui| {
@@ -695,37 +727,7 @@ impl App {
                 ui.add(egui::Slider::new(&mut self.selected_cascade, 0..=SHADOW_CASCADE_COUNT - 1));
             });
 
-            let lambda = self.frustum_split_lambda;
-            for i in 0..SHADOW_CASCADE_COUNT {
-                let Projection::Perspective { fov, near_clip } = self.camera.projection else { todo!() };
-                let far_clip = self.max_shadow_distance;
-
-                let near = practical_frustum_split(i, near_clip, far_clip, SHADOW_CASCADE_COUNT, lambda);
-                let far = practical_frustum_split(i+1, near, far_clip, SHADOW_CASCADE_COUNT, lambda);
-                let projection = Mat4::perspective_rh(fov, aspect_ratio, near, far);
-                let view_projection = projection * view_matrix;
-                let subfrustum_corners = frustum_corners_from_matrix(&view_projection);
-                let light_projection = cascaded_directional_light_projection(
-                    &subfrustum_corners,
-                    inv_light_direction,
-                );
-    
-                shadow_maps[i] = self.shadow_map_renderer.render_shadow_map(
-                    "sun_shadow_map".into(),
-                    frame_ctx,
-                    [1024 * 4; 2],
-                    light_projection,
-                    shadow_map_draw_commands,
-                    vertex_buffer,
-                    index_buffer,
-                    entity_buffer
-                );
-    
-                directional_light_data.cascades[i].far_view_distance = far;
-                directional_light_data.cascades[i].light_projection = light_projection;
-            }
-
-            ui.image(egui::TextureId::User(shadow_maps[self.selected_cascade] as u64), egui::Vec2::new(250.0, 250.0));
+            ui.image(shadow_maps[self.selected_cascade], egui::Vec2::new(250.0, 250.0));
         });
 
         directional_light_data.direction = light_direction;
@@ -733,38 +735,27 @@ impl App {
         directional_light_data.intensity = self.light_intensitiy;
 
         let pipeline = self.basic_pipeline;
+        
+        context.add_pass("forward_pass")
+            .with_dependency(target_image, render::AccessKind::ColorAttachmentWrite)
+            .with_dependency(depth_image, render::AccessKind::DepthAttachmentWrite)
+            .with_dependency(draw_commands_buffer, render::AccessKind::IndirectBuffer)
+            .with_dependencies(shadow_maps.map(|h| (h, render::AccessKind::FragmentShaderRead)))
+            .with_dependencies(resolve_image.map(|h| (h, render::AccessKind::ColorAttachmentWrite)))
+            .render(move |cmd, graph| {
+                let target_image = graph.get_image(target_image);
+                let resolve_image = resolve_image.map(|handle| graph.get_image(handle));
+                let depth_image = graph.get_image(depth_image);
 
-        let mut dependencies = vec![
-            (target_image, render::AccessKind::ColorAttachmentWrite),
-            (depth_image, render::AccessKind::DepthAttachmentWrite),
-            (draw_commands_buffer, render::AccessKind::IndirectBuffer),
-        ];
-
-        dependencies.extend(shadow_maps.map(|h| (h, render::AccessKind::FragmentShaderRead)));
-
-        if let Some(resolve_image) = resolve_image {
-            dependencies.push((resolve_image, render::AccessKind::ColorAttachmentWrite));
-        }
-
-        frame_ctx.add_pass(
-            "forward_pass",
-            &dependencies,
-            move |cmd, graph| {
-                let target_image = graph.get_image(target_image).unwrap();
-                let resolve_image = resolve_image.map(|handle| graph.get_image(handle).unwrap());
-                let depth_image = graph.get_image(depth_image).unwrap();
-
-                let globals_buffer = graph.get_buffer(globals_buffer).unwrap();
+                let globals_buffer = graph.get_buffer(globals_buffer);
                 
-                let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
-                let index_buffer = graph.get_buffer(index_buffer).unwrap();
-                let material_buffer = graph.get_buffer(material_buffer).unwrap();
+                let vertex_buffer = graph.get_buffer(vertex_buffer);
+                let index_buffer = graph.get_buffer(index_buffer);
+                let material_buffer = graph.get_buffer(material_buffer);
 
-                let instance_buffer = graph.get_buffer(entity_buffer).unwrap();
-                let draw_commands_buffer = graph.get_buffer(shadow_map_draw_commands).unwrap();
-                let directional_light_buffer = graph.get_buffer(directional_light_buffer).unwrap();
-
-                let shadow_maps = shadow_maps.map(|h| graph.get_image(h).unwrap().descriptor_index.unwrap().to_raw());
+                let instance_buffer = graph.get_buffer(entity_buffer);
+                let draw_commands_buffer = graph.get_buffer(shadow_map_draw_commands);
+                let directional_light_buffer = graph.get_buffer(directional_light_buffer);
 
                 let mut color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(target_image.view)
@@ -816,17 +807,15 @@ impl App {
                     draw_commands: u32,
                     materials: u32,
                     directional_light_buffer: u32,
-                    cascade_shadow_maps: [u32; SHADOW_CASCADE_COUNT],
                 }
 
                 let constants = ShadowMapConstants {
-                    per_frame_buffer: globals_buffer.descriptor_index.unwrap().to_raw(),
-                    vertex_buffer: vertex_buffer.descriptor_index.unwrap().to_raw(),
-                    entity_buffer: instance_buffer.descriptor_index.unwrap().to_raw(),
-                    draw_commands: draw_commands_buffer.descriptor_index.unwrap().to_raw(),
-                    materials: material_buffer.descriptor_index.unwrap().to_raw(),
-                    directional_light_buffer: directional_light_buffer.descriptor_index.unwrap().to_raw(),
-                    cascade_shadow_maps: shadow_maps,
+                    per_frame_buffer: globals_buffer.descriptor_index.unwrap(),
+                    vertex_buffer: vertex_buffer.descriptor_index.unwrap(),
+                    entity_buffer: instance_buffer.descriptor_index.unwrap(),
+                    draw_commands: draw_commands_buffer.descriptor_index.unwrap(),
+                    materials: material_buffer.descriptor_index.unwrap(),
+                    directional_light_buffer: directional_light_buffer.descriptor_index.unwrap(),
                 };
 
                 cmd.push_constants(bytemuck::bytes_of(&constants), 0);
@@ -841,10 +830,9 @@ impl App {
                 );
 
                 cmd.end_rendering();
-            },
-        );
+            });
 
-        self.debug_line_renderer.render(frame_ctx, target_image, resolve_image, depth_image, view_projection_matrix);
+        self.debug_line_renderer.render(context, target_image, resolve_image, depth_image, view_projection_matrix);
     }
 
     fn destroy(&self, context: &render::Context) {
@@ -882,12 +870,12 @@ impl SceneDrawGen {
 
     pub fn create_draw_commands(
         &self,
-        frame_ctx: &mut render::FrameContext,
+        frame_ctx: &mut render::Context,
         scene_submesh_count: u32,
-        scene_submeshes: render::ResourceHandle,
-        mesh_infos: render::ResourceHandle,
+        scene_submeshes: render::GraphBufferHandle,
+        mesh_infos: render::GraphBufferHandle,
         draw_commands_name: Cow<'static, str>,
-    ) -> render::ResourceHandle {
+    ) -> render::GraphBufferHandle {
         let pass_name = format!("{draw_commands_name}_generation");
         let draw_commands = frame_ctx.create_transient_buffer(draw_commands_name, render::BufferDesc {
             size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
@@ -898,28 +886,24 @@ impl SceneDrawGen {
 
         use render::AccessKind;
 
-        frame_ctx.add_pass(
-            pass_name,
-            &[
-                (scene_submeshes, AccessKind::ComputeShaderRead),
-                (mesh_infos, AccessKind::ComputeShaderRead),
-                (draw_commands, AccessKind::ComputeShaderWrite),
-            ],
-            move |cmd, graph| {
-                let scene_submeshes = graph.get_buffer(scene_submeshes).unwrap();
-                let mesh_infos = graph.get_buffer(mesh_infos).unwrap();
-                let draw_commands = graph.get_buffer(draw_commands).unwrap();
+        frame_ctx.add_pass(pass_name)
+            .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
+            .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
+            .with_dependency(draw_commands, AccessKind::ComputeShaderWrite)
+            .render(move |cmd, graph| {
+                let scene_submeshes = graph.get_buffer(scene_submeshes);
+                let mesh_infos = graph.get_buffer(mesh_infos);
+                let draw_commands = graph.get_buffer(draw_commands);
 
                 cmd.bind_compute_pipeline(pipeline);
 
                 cmd.push_bindings(&[
-                    scene_submeshes.descriptor_index.unwrap().to_raw(),
-                    mesh_infos.descriptor_index.unwrap().to_raw(),
-                    draw_commands.descriptor_index.unwrap().to_raw(),
+                    scene_submeshes.descriptor_index.unwrap(),
+                    mesh_infos.descriptor_index.unwrap(),
+                    draw_commands.descriptor_index.unwrap(),
                 ]);
                 cmd.dispatch([scene_submesh_count / 256 + 1, 1, 1]);
-            }
-        );
+            });
         
         draw_commands
     }
@@ -979,16 +963,16 @@ impl ShadowMapRenderer {
     pub fn render_shadow_map(
         &self,
         name: Cow<'static, str>,
-        frame_ctx: &mut render::FrameContext,
+        frame_ctx: &mut render::Context,
 
         [width, height]: [u32; 2],
         view_projection: Mat4,
-        draw_commands: render::ResourceHandle,
+        draw_commands: render::GraphBufferHandle,
 
-        vertex_buffer: render::ResourceHandle,
-        index_buffer: render::ResourceHandle,
-        entity_data: render::ResourceHandle,
-    ) -> render::ResourceHandle {
+        vertex_buffer: render::GraphBufferHandle,
+        index_buffer: render::GraphBufferHandle,
+        entity_data: render::GraphBufferHandle,
+    ) -> render::GraphImageHandle {
         let pass_name = format!("shadow_pass_for_{name}");
         let shadow_map = frame_ctx.create_transient_image(name, render::ImageDesc {
             format: App::DEPTH_FORMAT,
@@ -1004,19 +988,16 @@ impl ShadowMapRenderer {
 
         let depth_bias = self.depth_bias;
 
-        frame_ctx.add_pass(
-            pass_name,
-            &[
-                (shadow_map, render::AccessKind::DepthAttachmentWrite),
-                (draw_commands, render::AccessKind::IndirectBuffer),
-            ],
-            move |cmd, graph| {
-                let shadow_map = graph.get_image(shadow_map).unwrap();
+        frame_ctx.add_pass(pass_name)
+            .with_dependency(shadow_map, render::AccessKind::DepthAttachmentWrite)
+            .with_dependency(draw_commands, render::AccessKind::IndirectBuffer)
+            .render(move |cmd, graph| {
+                let shadow_map = graph.get_image(shadow_map);
                 
-                let vertex_buffer = graph.get_buffer(vertex_buffer).unwrap();
-                let index_buffer = graph.get_buffer(index_buffer).unwrap();
-                let entity_buffer = graph.get_buffer(entity_data).unwrap();
-                let draw_commands_buffer = graph.get_buffer(draw_commands).unwrap();
+                let vertex_buffer = graph.get_buffer(vertex_buffer);
+                let index_buffer = graph.get_buffer(index_buffer);
+                let entity_buffer = graph.get_buffer(entity_data);
+                let draw_commands_buffer = graph.get_buffer(draw_commands);
 
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
                     .image_view(shadow_map.view)
@@ -1054,8 +1035,8 @@ impl ShadowMapRenderer {
 
                 let constants = ShadowMapConstants {
                     view_projection,
-                    vertex_buffer: vertex_buffer.descriptor_index.unwrap().to_raw(),
-                    entity_buffer: entity_buffer.descriptor_index.unwrap().to_raw(),
+                    vertex_buffer: vertex_buffer.descriptor_index.unwrap(),
+                    entity_buffer: entity_buffer.descriptor_index.unwrap(),
                     _padding: [0; 2],
                 };
 
@@ -1250,10 +1231,10 @@ impl DebugLineRenderer {
 
     pub fn render(
         &mut self,
-        frame_ctx: &mut render::FrameContext,
-        target_image: render::ResourceHandle,
-        resolve_image: Option<render::ResourceHandle>,
-        depth_image: render::ResourceHandle,
+        frame_ctx: &mut render::Context,
+        target_image: render::GraphImageHandle,
+        resolve_image: Option<render::GraphImageHandle>,
+        depth_image: render::GraphImageHandle,
         view_projection: Mat4,
     ) {
         let line_buffer = frame_ctx.import_buffer("debug_line_buffer", &self.line_buffer, &Default::default());
@@ -1270,14 +1251,15 @@ impl DebugLineRenderer {
             dependencies.push((resolve_image, render::AccessKind::ColorAttachmentWrite));
         }
 
-        frame_ctx.add_pass(
-            "debug_line_render",
-            &dependencies,
-            move |cmd, graph| {
-                let target_image = graph.get_image(target_image).unwrap();
-                let resolve_image = resolve_image.map(|handle| graph.get_image(handle).unwrap());
-                let depth_image = graph.get_image(depth_image).unwrap();
-                let line_buffer = graph.get_buffer(line_buffer).unwrap();
+        frame_ctx.add_pass("debug_line_render")
+            .with_dependency(target_image, render::AccessKind::ColorAttachmentWrite)
+            .with_dependency(depth_image, render::AccessKind::DepthAttachmentRead)
+            .with_dependencies(resolve_image.map(|h| (h, render::AccessKind::ColorAttachmentWrite)))
+            .render(move |cmd, graph| {
+                let target_image = graph.get_image(target_image);
+                let resolve_image = resolve_image.map(|handle| graph.get_image(handle));
+                let depth_image = graph.get_image(depth_image);
+                let line_buffer = graph.get_buffer(line_buffer);
 
                 
                 let mut color_attachment = vk::RenderingAttachmentInfo::builder()
@@ -1397,17 +1379,19 @@ fn main() {
                 return;
             }
 
-            let mut frame_ctx = context.begin_frame();
+            context.begin_frame();
 
-            let swapchain_image = frame_ctx.get_swapchain_image();
+            let swapchain_image = context.get_swapchain_image();
 
-            app.render(&mut frame_ctx, &egui_ctx);
+            app.render(&mut context, &egui_ctx);
 
             let clipped_primitives = {
                 puffin::profile_scope!("egui_tessellate");
                 egui_ctx.tessellate(full_output.shapes)
             };
-            egui_renderer.render(&mut frame_ctx, &clipped_primitives, &full_output.textures_delta, swapchain_image);
+            egui_renderer.render(&mut context, &clipped_primitives, &full_output.textures_delta, swapchain_image);
+
+            context.end_frame();
 
             input.clear_frame()
         }

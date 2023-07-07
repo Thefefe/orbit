@@ -31,7 +31,6 @@ layout(push_constant, std430) uniform PushConstants {
     uint draw_commands;
     uint materials;
     uint directional_light_buffer;
-    uint cascade_shadow_maps[4];
 };
 
 layout(location = 0) out VertexOutput {

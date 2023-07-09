@@ -365,20 +365,14 @@ fn load_texture(
         },
     };
 
-    let sampler_flags = {
-        let mut flags = render::SamplerFlags::empty();
-
-        if texture.sampler().min_filter() == Some(gltf::texture::MinFilter::Nearest) {
-            flags |= render::SamplerFlags::NEAREST;
-        }
-
-        if texture.sampler().wrap_s() == gltf::texture::WrappingMode::Repeat
-            || texture.sampler().wrap_t() == gltf::texture::WrappingMode::Repeat
-        {
-            flags |= render::SamplerFlags::REPEAT;
-        }
-
-        flags
+    use gltf::texture::{MagFilter, WrappingMode};
+    let sampler_flags = match (texture.sampler().mag_filter().unwrap_or(MagFilter::Linear), texture.sampler().wrap_s()) {
+        (MagFilter::Nearest, WrappingMode::ClampToEdge      ) => render::SamplerKind::NearestClamp,
+        (MagFilter::Nearest, WrappingMode::MirroredRepeat   ) => render::SamplerKind::NearestRepeat,
+        (MagFilter::Nearest, WrappingMode::Repeat           ) => render::SamplerKind::NearestRepeat,
+        (MagFilter::Linear,  WrappingMode::ClampToEdge      ) => render::SamplerKind::LinearClamp,
+        (MagFilter::Linear,  WrappingMode::MirroredRepeat   ) => render::SamplerKind::LinearRepeat,
+        (MagFilter::Linear,  WrappingMode::Repeat           ) => render::SamplerKind::LinearRepeat,
     };
     image.set_sampler_flags(sampler_flags);
 

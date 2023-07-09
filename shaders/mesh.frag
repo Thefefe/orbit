@@ -75,7 +75,6 @@ vec3 fresnel_schlick(float h_dot_v, vec3 base_reflectivity) {
 float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
     vec3 proj_coords = light_space_frag_pos.xyz / light_space_frag_pos.w;
     proj_coords.y *= -1.0;
-    // float closest_depth = texture(GetSampledTexture(light_shadow_map), (proj_coords.xy + 1.0 ) / 2.0).r;
     float current_depth = proj_coords.z;
 
     vec2 tex_coord = (proj_coords.xy + 1.0 ) / 2.0;
@@ -88,8 +87,10 @@ float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
     {
         for(int y = -1; y <= 1; ++y)
         {
-            float pcf_depth = texture(GetSampledTexture2D(shadow_map), tex_coord + vec2(x, y) * texel_size).r;
-            shadow += current_depth  > pcf_depth ? 1.0 : 0.0;
+            shadow += texture(
+                sampler2DShadow(GetTexture2D(shadow_map), _uComparisonSamplers[SHADOW_SAMPLER]),
+                vec3(tex_coord + vec2(x, y) * texel_size, current_depth)
+            );
         }    
     }
     shadow /= 9.0;

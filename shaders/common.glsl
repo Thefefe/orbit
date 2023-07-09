@@ -8,7 +8,7 @@ layout(push_constant) uniform BindingIndexArray {
 #define GetBufferRegistryName(Name) _u##Name##Registry
 #define GetBindingIndexName(Name) _##Name##_BINDING_INDEX
 
-#define IMMUTABLE_SAMPLER_COUNT 4
+#define IMMUTABLE_SAMPLER_COUNT 5
 
 layout(set = 1, binding = 0) uniform sampler _uSamplers[IMMUTABLE_SAMPLER_COUNT];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2D _uTextures[];
@@ -43,11 +43,12 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2D _uTextures[
 
 #define TEXTURE_NONE 0xFFFFFFFF
 
-#define TEXTURE_INDEX_TEXTURE_MASK 0x3FFFFFFF
-#define TEXTURE_INDEX_SAMPLER_MASK 0xC0000000
+#define TEXTURE_INDEX_TEXTURE_MASK 0x00FFFFFF
+#define TEXTURE_INDEX_SAMPLER_MASK 0xFF000000
+#define SAMPLER_BIT_COUNT 24
 
 #define GET_SAMPLER_INDEX(Index) \
-    ((Index & TEXTURE_INDEX_SAMPLER_MASK) >> 30)
+    ((Index & TEXTURE_INDEX_SAMPLER_MASK) >> SAMPLER_BIT_COUNT)
 
 #define GetSampledTextureByIndex(Index) \
     sampler2D(GetTextureByIndex(Index), _uSamplers[nonuniformEXT(GET_SAMPLER_INDEX(Index))])

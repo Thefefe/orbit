@@ -166,7 +166,7 @@ const NDC_BOUNDS: [Vec4; 8] = [
 ];
 
 const SHADOW_CASCADE_COUNT: usize = 4;
-const SHADOW_RESOLUTION: u32 = 1024 * 2;
+const SHADOW_RESOLUTION: u32 = 1024 * 4;
 
 fn uniform_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32{
     near + (far - near) * (index as f32 / cascade_count as f32)
@@ -223,10 +223,8 @@ fn directional_light_projection_from_view_frustum(
     let max_size = f32::max(far_diagonal, forward_diagonal);
 
     // make the cascade square
-    // let size = vec2(max_size, max_size);
     let size = right_bottom - left_top;
-    let square_size = max_size;
-    let half_diff = (Vec2::splat(square_size) - size) / 2.0;
+    let half_diff = (Vec2::splat(max_size) - size) / 2.0;
     left_top -= half_diff;
     right_bottom += half_diff;
 

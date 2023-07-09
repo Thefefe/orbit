@@ -119,14 +119,14 @@ pub struct BindlessDescriptors {
 
     global_index_allocator: IndexAllocator,
 
-    immutable_samplers: Vec<vk::Sampler>,
+    immutable_samplers: [vk::Sampler; SAMPLER_COUNT],
 }
 
 impl BindlessDescriptors {
     pub fn new(device: &render::Device) -> Self {
-        let immutable_samplers: Vec<vk::Sampler> = SamplerFlags::iter_all()
-            .map(|sampler_flags| create_sampler(device, sampler_flags))
-            .collect();
+        let immutable_samplers = SamplerKind::ALL.map(|sampler_kind| unsafe {
+            device.raw.create_sampler(&sampler_kind.create_info(), None).unwrap()
+        });
 
         let descriptor_layouts: Vec<_> = DescriptorTableType::all_types()
             .map(|desc_type| {
@@ -298,7 +298,6 @@ impl BindlessDescriptors {
     }
 
     pub fn alloc_buffer_resource(&self, device: &render::Device, handle: vk::Buffer) -> DescriptorIndex {
-        puffin::profile_function!();
         let index = self.global_index_allocator.alloc();
 
         unsafe {
@@ -360,59 +359,94 @@ impl BindlessDescriptors {
     }
 }
 
-fn create_sampler(device: &render::Device, sampler_flags: SamplerFlags) -> vk::Sampler {
-    let address_mode = if sampler_flags.contains(SamplerFlags::REPEAT) {
-        vk::SamplerAddressMode::REPEAT
-    } else {
-        vk::SamplerAddressMode::CLAMP_TO_EDGE
-    };
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SamplerKind {
+    LinearClamp      = 0,
+    LinearRepeat     = 1,
+    NearestClamp     = 2,
+    NearestRepeat    = 3,
+    ShadowComparison = 4,
+}
 
-    let filter_mode = if sampler_flags.contains(SamplerFlags::NEAREST) {
-        vk::Filter::NEAREST
-    } else {
-        vk::Filter::LINEAR
-    };
+const SAMPLER_COUNT: usize = 5;
 
-    let mipmap_mode = if sampler_flags.contains(SamplerFlags::NEAREST) {
-        vk::SamplerMipmapMode::NEAREST
-    } else {
-        vk::SamplerMipmapMode::LINEAR
-    };
+impl SamplerKind {
+    pub const ALL: [SamplerKind; SAMPLER_COUNT] = [
+        Self::LinearClamp,
+        Self::LinearRepeat,
+        Self::NearestClamp,
+        Self::NearestRepeat,
+        Self::ShadowComparison,
+    ];
 
-    let create_info = vk::SamplerCreateInfo::builder()
-        .address_mode_u(address_mode)
-        .address_mode_v(address_mode)
-        .address_mode_w(address_mode)
-        .anisotropy_enable(true)
-        .max_anisotropy(16.0)
-        .min_filter(filter_mode)
-        .mag_filter(filter_mode)
-        .mipmap_mode(mipmap_mode)
-        .min_lod(0.0)
-        .max_lod(vk::LOD_CLAMP_NONE)
-        .build();
-    
-    unsafe {
-        device.raw.create_sampler(&create_info, None).unwrap()
+    fn create_info(self) -> vk::SamplerCreateInfo {
+        match self {
+            SamplerKind::LinearClamp => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_filter(vk::Filter::LINEAR)
+                .mag_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+            SamplerKind::LinearRepeat => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_filter(vk::Filter::LINEAR)
+                .mag_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+            SamplerKind::NearestClamp => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_filter(vk::Filter::NEAREST)
+                .mag_filter(vk::Filter::NEAREST)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+            SamplerKind::NearestRepeat => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_filter(vk::Filter::NEAREST)
+                .mag_filter(vk::Filter::NEAREST)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+            SamplerKind::ShadowComparison => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .min_filter(vk::Filter::NEAREST)
+                .mag_filter(vk::Filter::NEAREST)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .min_lod(0.0)
+                .max_lod(1.0)
+                .compare_enable(true)
+                .compare_op(vk::CompareOp::GREATER_OR_EQUAL)
+                .build(),
+        }
     }
 }
 
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SamplerFlags(u32);
-ash::vk_bitflags_wrapped!(SamplerFlags, u32);
-
-const SAMPELER_BIT_COUNT: u32 = 2;
-
-impl SamplerFlags {
-    pub const NEAREST: Self = Self(0b10);
-    pub const REPEAT: Self = Self(0b01);
-
-    fn iter_all() -> impl Iterator<Item = Self> {
-        (0..2u32.pow(SAMPELER_BIT_COUNT)).map(Self)
-    }
-}
-
-pub fn descriptor_index_with_sampler(index: DescriptorIndex, sampler: SamplerFlags) -> DescriptorIndex {
-    index | (sampler.0 << 30)
+pub fn descriptor_index_with_sampler(index: DescriptorIndex, sampler: SamplerKind) -> DescriptorIndex {
+    assert!(index >> 24 == 0);
+    index | ((sampler as u32) << 24)
 }

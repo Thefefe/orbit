@@ -206,7 +206,7 @@ impl Image {
         device.deallocate(image.alloc_index);
     }
 
-    pub fn set_sampler_flags(&mut self, sampler_flags: render::SamplerFlags) {
+    pub fn set_sampler_flags(&mut self, sampler_flags: render::SamplerKind) {
         if let Some(index) = self.image_view.descriptor_index.as_mut() {
             *index = render::descriptor_index_with_sampler(*index, sampler_flags);
         }

@@ -213,7 +213,6 @@ void main() {
 
     vec4 light_space_frag_pos = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].light_projection * vout.world_pos;
     uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].shadow_map_index;
-    // uint shadow_map = cascade_shadow_maps[cascade_index];
 
     float shadow = 1.0;
     if (cascade_index < CASCADE_COUNT) shadow = compute_shadow(light_space_frag_pos, shadow_map);
@@ -241,7 +240,12 @@ void main() {
             // out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
             float shadow = max(shadow, 0.3);
             vec3 cascade_color = vec3(0.25);
-            if (cascade_index < CASCADE_COUNT) cascade_color = CASCADE_COLORS[cascade_index];
+            bvec4 outside_shadow_map = bvec4(
+                lessThan(light_space_frag_pos.xy, vec2(-1.0)),
+                greaterThan(light_space_frag_pos.xy, vec2(1.0))
+            );
+            if (cascade_index < CASCADE_COUNT && !any(outside_shadow_map))
+                cascade_color = CASCADE_COLORS[cascade_index];
             out_color = vec4(cascade_color * albedo * shadow, 1.0);
             break;
         case 2: 

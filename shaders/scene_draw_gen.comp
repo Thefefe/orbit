@@ -30,14 +30,8 @@ void main() {
 		Submesh submesh = GetBuffer(SceneDraw).submeshes[gID];
 		MeshInfo mesh_info = GetBuffer(MeshInfos).mesh_infos[submesh.mesh_index];
 
+		// TODO: culling, subgroup ballot
 		uint draw_index = atomicAdd(GetBuffer(DrawCommands).draw_command_count, 1);
-	
-		// GetBuffer(DrawCommands).draw_commands[draw_index].index_count 	 = 1;
-    	// GetBuffer(DrawCommands).draw_commands[draw_index].instance_count = 2;
-    	// GetBuffer(DrawCommands).draw_commands[draw_index].first_index    = 3;
-    	// GetBuffer(DrawCommands).draw_commands[draw_index].vertex_offset  = 4;
-    	// GetBuffer(DrawCommands).draw_commands[draw_index].first_instance = 5;
-    	// GetBuffer(DrawCommands).draw_commands[draw_index].material_index = 6;
 
 		GetBuffer(DrawCommands).draw_commands[draw_index].index_count 	 = mesh_info.index_count;
     	GetBuffer(DrawCommands).draw_commands[draw_index].instance_count = 1;

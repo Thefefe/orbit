@@ -3,6 +3,7 @@
 use std::{f32::consts::PI, borrow::Cow};
 
 use ash::vk;
+use glam::Vec3Swizzles;
 use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
 use assets::{GpuAssetStore};
@@ -153,18 +154,19 @@ impl Camera {
 }
 
 const NDC_BOUNDS: [Vec4; 8] = [
-    vec4(-1.0, -1.0, 0.0, 1.0),
-    vec4( 1.0, -1.0, 0.0, 1.0),
-    vec4( 1.0,  1.0, 0.0, 1.0),
-    vec4(-1.0,  1.0, 0.0, 1.0),
+    vec4(-1.0, -1.0, 0.0,  1.0),
+    vec4( 1.0, -1.0, 0.0,  1.0),
+    vec4( 1.0,  1.0, 0.0,  1.0),
+    vec4(-1.0,  1.0, 0.0,  1.0),
     
-    vec4(-1.0, -1.0, 1.0, 1.0),
-    vec4( 1.0, -1.0, 1.0, 1.0),
-    vec4( 1.0,  1.0, 1.0, 1.0),
-    vec4(-1.0,  1.0, 1.0, 1.0),
+    vec4(-1.0, -1.0, 1.0,  1.0),
+    vec4( 1.0, -1.0, 1.0,  1.0),
+    vec4( 1.0,  1.0, 1.0,  1.0),
+    vec4(-1.0,  1.0, 1.0,  1.0),
 ];
 
 const SHADOW_CASCADE_COUNT: usize = 4;
+const SHADOW_RESOLUTION: u32 = 1024 * 2;
 
 fn uniform_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32{
     near + (far - near) * (index as f32 / cascade_count as f32)
@@ -198,9 +200,10 @@ fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec4; 8] {
     })
 }
 
-fn cascaded_directional_light_projection(
+fn directional_light_projection_from_view_frustum(
     frustum_corners_world_space: &[Vec4; 8],
     light_direction: Quat,
+    resolution: u32,
 ) -> Mat4 {
     let mut min = Vec3A::splat(f32::MAX);
     let mut max = Vec3A::splat(f32::MIN);
@@ -211,8 +214,33 @@ fn cascaded_directional_light_projection(
         max = max.max(corner_light_space);
     }
 
+    let mut left_top = min.xy();
+    let mut right_bottom = max.xy();
+
+    //make constant size
+    let far_diagonal = Vec3A::distance(frustum_corners_world_space[6].into(), frustum_corners_world_space[4].into());
+    let forward_diagonal = Vec3A::distance(frustum_corners_world_space[6].into(), frustum_corners_world_space[0].into());
+    let max_size = f32::max(far_diagonal, forward_diagonal);
+
+    // make the cascade square
+    // let size = vec2(max_size, max_size);
+    let size = right_bottom - left_top;
+    let square_size = max_size;
+    let half_diff = (Vec2::splat(square_size) - size) / 2.0;
+    left_top -= half_diff;
+    right_bottom += half_diff;
+
+    // align to texels
+    let pixel_size = max_size / resolution as f32;
+    left_top = (left_top / pixel_size).floor() * pixel_size;
+    right_bottom = (right_bottom / pixel_size).floor() * pixel_size;
+
     let light_view = Mat4::from_quat(light_direction);
-    let light_projection = Mat4::orthographic_rh(min.x, max.x, min.y, max.y, -min.z, -max.z);
+    let light_projection = Mat4::orthographic_rh(
+        left_top.x, right_bottom.x,
+        left_top.y, right_bottom.y,
+        -min.z, -max.z
+    );
 
     light_projection * light_view
 }
@@ -271,9 +299,13 @@ struct App {
     selected_cascade: usize,
     view_mock_camera: bool,
 
-    scene_editor_open: bool,
-    graph_debugger_open: bool,
-    profiler_open: bool,
+    use_mock_camera: bool,
+    show_cascade_view_frustum: bool,
+    show_cascade_light_frustum: bool,
+    open_scene_editor_open: bool,
+    open_graph_debugger: bool,
+    open_profiler: bool,
+    open_shadow_debugger: bool,
 }
 
 impl App {
@@ -359,7 +391,6 @@ impl App {
         let camera = Camera {
             transform: Transform {
                 position: vec3(0.0, 2.0, 0.0),
-                orientation: Quat::from_rotation_y(180.0f32.to_radians()),
                 ..Default::default()
             },
             projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.001 },
@@ -388,15 +419,19 @@ impl App {
             light_dir_controller: CameraController::new(1.0, 0.003),
 
             light_color: Vec3::splat(1.0),
-            light_intensitiy: 1.0,
+            light_intensitiy: 10.0,
             max_shadow_distance: 200.0,
-            frustum_split_lambda: 0.5,
+            frustum_split_lambda: 0.8,
             selected_cascade: 0,
             view_mock_camera: false,
 
-            scene_editor_open: false,
-            profiler_open: false,
-            graph_debugger_open: false,
+            use_mock_camera: false,
+            show_cascade_view_frustum: false,
+            show_cascade_light_frustum: false,
+            open_scene_editor_open: false,
+            open_profiler: false,
+            open_graph_debugger: false,
+            open_shadow_debugger: false,
         }
     }
 
@@ -412,7 +447,7 @@ impl App {
 
         let delta_time = time.delta().as_secs_f32();
 
-        self.view_mock_camera = input.key_held(KeyCode::M);
+        self.view_mock_camera = input.key_held(KeyCode::V);
 
         if self.view_mock_camera {
             if input.mouse_held(MouseButton::Right) {
@@ -432,13 +467,16 @@ impl App {
         }
 
         if input.key_pressed(KeyCode::F1) {
-            self.scene_editor_open = !self.scene_editor_open;
+            self.open_scene_editor_open = !self.open_scene_editor_open;
         }
         if input.key_pressed(KeyCode::F2) {
-            self.graph_debugger_open = !self.graph_debugger_open;
+            self.open_graph_debugger = !self.open_graph_debugger;
         }
         if input.key_pressed(KeyCode::F3) {
-            self.profiler_open = !self.profiler_open;
+            self.open_profiler = !self.open_profiler;
+        }
+        if input.key_pressed(KeyCode::F4) {
+            self.open_shadow_debugger = !self.open_shadow_debugger;
         }
 
         fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
@@ -477,8 +515,8 @@ impl App {
             });
         }
 
-        if self.scene_editor_open {
-            egui::Window::new("scene").open(&mut self.scene_editor_open).show(egui_ctx, |ui| {
+        if self.open_scene_editor_open {
+            egui::Window::new("scene").open(&mut self.open_scene_editor_open).vscroll(true).show(egui_ctx, |ui| {
                 for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
                     let header = entity.name.as_ref().map_or(
                         format!("entity_{entity_index}"),
@@ -524,9 +562,9 @@ impl App {
             }
         }
 
-        if self.graph_debugger_open {
+        if self.open_graph_debugger {
             // temporary
-            egui::Window::new("rendergraph debugger").open(&mut self.graph_debugger_open).show(egui_ctx, |ui| {
+            egui::Window::new("rendergraph debugger").open(&mut self.open_graph_debugger).show(egui_ctx, |ui| {
                 for (i, batch) in context.compiled_graph.iter_batches().enumerate() {
                     ui.collapsing(format!("batch {i}"), |ui| {
                         ui.collapsing("memory barrier", |ui| {
@@ -572,8 +610,8 @@ impl App {
             });
         }
 
-        if self.profiler_open {
-            self.profiler_open = puffin_egui::profiler_window(&egui_ctx);
+        if self.open_profiler {
+            self.open_profiler = puffin_egui::profiler_window(&egui_ctx);
         }
 
         if input.close_requested() | input.key_pressed(KeyCode::Escape) {
@@ -589,13 +627,20 @@ impl App {
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
         let view_projection_matrix = self.camera.compute_matrix(aspect_ratio);
-        let view_matrix = self.camera.transform.compute_matrix().inverse();
+        
+        let main_camera = if self.use_mock_camera {
+            &self.mock_camera
+        } else {
+            &self.camera
+        };
+
+        let view_matrix = main_camera.transform.compute_matrix().inverse();
 
         unsafe {
             let per_frame_data = self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut();
             per_frame_data.view_projection = view_projection_matrix;
             per_frame_data.view = view_matrix;
-            per_frame_data.view_pos = self.camera.transform.position;
+            per_frame_data.view_pos = main_camera.transform.position;
         }
         
         let swapchain_image = context.get_swapchain_image();
@@ -651,25 +696,40 @@ impl App {
             self.directional_light_buffer.mapped_ptr.unwrap().cast::<GpuDirectionalLight>().as_mut()
         };
 
+        
         let lambda = self.frustum_split_lambda;
         let shadow_maps: [render::GraphImageHandle; SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
-            let Projection::Perspective { fov, near_clip } = self.camera.projection else { todo!() };
+            
+            let Projection::Perspective { fov, near_clip } = main_camera.projection else { todo!() };
             let far_clip = self.max_shadow_distance;
-
+            
             let near = practical_frustum_split(i, near_clip, far_clip, SHADOW_CASCADE_COUNT, lambda);
-            let far = practical_frustum_split(i+1, near, far_clip, SHADOW_CASCADE_COUNT, lambda);
+            let far = practical_frustum_split(i+1, near_clip, far_clip, SHADOW_CASCADE_COUNT, lambda);
             let projection = Mat4::perspective_rh(fov, aspect_ratio, near, far);
             let view_projection = projection * view_matrix;
             let subfrustum_corners = frustum_corners_from_matrix(&view_projection);
-            let light_projection = cascaded_directional_light_projection(
+            
+            let light_projection = directional_light_projection_from_view_frustum(
                 &subfrustum_corners,
                 inv_light_direction,
+                SHADOW_RESOLUTION,
             );
+            
+            let cascade_frustum_corners = frustum_corners_from_matrix(&light_projection);
+            
+            
+            if self.show_cascade_view_frustum && self.selected_cascade == i {
+                self.debug_line_renderer.draw_frustum(&subfrustum_corners, Vec4::splat(1.0));
+            }
+            
+            if self.show_cascade_light_frustum && self.selected_cascade == i {
+                self.debug_line_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
+            }
 
             let shadow_map = self.shadow_map_renderer.render_shadow_map(
                 "sun_shadow_map".into(),
                 context,
-                [1024 * 4; 2],
+                [SHADOW_RESOLUTION; 2],
                 light_projection,
                 shadow_map_draw_commands,
                 vertex_buffer,
@@ -687,7 +747,11 @@ impl App {
             shadow_map
         });
 
-        egui::Window::new("shadow_debug").show(egui_ctx, |ui| {
+        egui::Window::new("shadow_debug").open(&mut self.open_shadow_debugger).show(egui_ctx, |ui| {
+            ui.checkbox(&mut self.use_mock_camera, "use mock camera");
+            ui.checkbox(&mut self.show_cascade_view_frustum, "use cascade view frustum");
+            ui.checkbox(&mut self.show_cascade_light_frustum, "use cascade light frustum");
+
             ui.horizontal(|ui| {
                 ui.label("light_color");
                 let mut array = self.light_color.to_array();
@@ -1169,7 +1233,7 @@ impl DebugLineRenderer {
             let dst_ptr = self.line_buffer.mapped_ptr.unwrap()
                 .as_ptr()
                 .cast::<DebugLineVertex>()
-                .add(self.vertex_cursor);
+                .add(Self::MAX_VERTEX_COUNT * self.frame_index + self.vertex_cursor);
             std::ptr::copy_nonoverlapping(vertices.as_ptr(), dst_ptr, vertices.len());
         }
         self.vertex_cursor += vertices.len();
@@ -1241,7 +1305,7 @@ impl DebugLineRenderer {
     ) {
         let line_buffer = frame_ctx.import_buffer("debug_line_buffer", &self.line_buffer, &Default::default());
         let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>();
-        let vertex_count = self.vertex_cursor;
+        let vertex_count = self.vertex_cursor as u32;
         let pipeline = self.pipeline;
         
         let mut dependencies = vec![
@@ -1263,7 +1327,6 @@ impl DebugLineRenderer {
                 let depth_image = graph.get_image(depth_image);
                 let line_buffer = graph.get_buffer(line_buffer);
 
-                
                 let mut color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(target_image.view)
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -1297,7 +1360,6 @@ impl DebugLineRenderer {
                 cmd.push_constants(bytemuck::bytes_of(&0.1f32), std::mem::size_of::<Mat4>() as u32);
                 cmd.set_depth_test_enable(false);
                 cmd.draw(0..vertex_count as u32, 0..1);
-
                 
                 cmd.push_constants(bytemuck::bytes_of(&1.0f32), std::mem::size_of::<Mat4>() as u32);
                 cmd.set_depth_test_enable(true);
@@ -1307,7 +1369,7 @@ impl DebugLineRenderer {
             });
 
         self.frame_index = (self.frame_index + 1) % render::FRAME_COUNT;
-        self.vertex_cursor = Self::MAX_VERTEX_COUNT * self.frame_index;
+        self.vertex_cursor = 0;
     }
 
     pub fn destroy(&self, context: &render::Context) {
@@ -1336,7 +1398,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::FIFO,
+            present_mode: vk::PresentModeKHR::IMMEDIATE,
         },
     );
 

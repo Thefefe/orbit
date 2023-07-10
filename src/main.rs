@@ -280,8 +280,6 @@ struct App {
     shadow_map_renderer: ShadowMapRenderer,
 
     basic_pipeline: render::RasterPipeline,
-    per_frame_buffer: render::Buffer,
-    directional_light_buffer: render::Buffer,
 
     camera: Camera,
     camera_controller: CameraController,
@@ -290,6 +288,7 @@ struct App {
     sun_light: Camera,
     light_dir_controller: CameraController,
 
+    render_mode: u32,
     light_color: Vec3,
     light_intensitiy: f32,
     max_shadow_distance: f32,
@@ -370,22 +369,6 @@ impl App {
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
 
-        let per_frame_buffer = context.create_buffer("per_frame_buffer", &render::BufferDesc {
-            size: std::mem::size_of::<PerFrameData>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            memory_location: MemoryLocation::CpuToGpu,
-        });
-        
-        let directional_light_buffer = context.create_buffer("directional_light_buffer", &render::BufferDesc {
-            size: std::mem::size_of::<GpuDirectionalLight>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            memory_location: MemoryLocation::CpuToGpu,
-        });
-
-        unsafe {
-            per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().render_mode = 0;
-        }
-
         let camera = Camera {
             transform: Transform {
                 position: vec3(0.0, 2.0, 0.0),
@@ -394,6 +377,7 @@ impl App {
             projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.001 },
             // projection: Projection::Orthographic { half_width: 32.0, near_clip: 0.0, far_clip: 1000.0 },
         };
+        scene.update_instances(context);
 
         Self {
             gpu_assets,
@@ -403,8 +387,6 @@ impl App {
             shadow_map_renderer: ShadowMapRenderer::new(&context),
 
             basic_pipeline: mesh_pipeline,
-            per_frame_buffer,
-            directional_light_buffer,
             
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
@@ -416,6 +398,7 @@ impl App {
             },
             light_dir_controller: CameraController::new(1.0, 0.003),
 
+            render_mode: 0,
             light_color: Vec3::splat(1.0),
             light_intensitiy: 10.0,
             max_shadow_distance: 200.0,
@@ -554,10 +537,8 @@ impl App {
             }
         }
 
-        if let Some(new_render_mode) = new_render_mode {   
-            unsafe {
-                self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut().render_mode = new_render_mode;
-            }
+        if let Some(new_render_mode) = new_render_mode {
+            self.render_mode = new_render_mode;
         }
 
         if self.open_graph_debugger {
@@ -619,7 +600,6 @@ impl App {
 
     fn render(&mut self, context: &mut render::Context, egui_ctx: &egui::Context) {
         puffin::profile_function!();
-        self.scene.update_instances(context);
 
         let screen_extent = context.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
@@ -634,12 +614,12 @@ impl App {
 
         let view_matrix = main_camera.transform.compute_matrix().inverse();
 
-        unsafe {
-            let per_frame_data = self.per_frame_buffer.mapped_ptr.unwrap().cast::<PerFrameData>().as_mut();
-            per_frame_data.view_projection = view_projection_matrix;
-            per_frame_data.view = view_matrix;
-            per_frame_data.view_pos = main_camera.transform.position;
-        }
+        let per_frame_data = context.transient_storage_data("per_frame_data", bytemuck::bytes_of(&PerFrameData {
+            view_projection: view_projection_matrix,
+            view: view_matrix,
+            view_pos: self.camera.transform.position,
+            render_mode: self.render_mode,
+        }));
         
         let swapchain_image = context.get_swapchain_image();
         let (target_image, resolve_image) = if Self::MULTISAMPLING == render::MultisampleCount::None {
@@ -666,8 +646,6 @@ impl App {
             aspect: vk::ImageAspectFlags::DEPTH,
         });
         
-        let globals_buffer = context.import_buffer("globals_buffer", &self.per_frame_buffer, &Default::default());
-        
         let vertex_buffer = context.import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
         let index_buffer = context.import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
         let material_buffer = context.import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
@@ -676,9 +654,6 @@ impl App {
         let submeshes = context.import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, &Default::default());
         let mesh_infos = context.import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
         let submesh_count = self.scene.submesh_data.len() as u32;
-
-        let directional_light_buffer = context
-            .import_buffer("directional_light_buffer", &self.directional_light_buffer, &Default::default());
 
         let draw_commands_buffer = self.scene_draw_gen
             .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
@@ -690,8 +665,12 @@ impl App {
 
         let inv_light_direction = self.sun_light.transform.orientation.inverse();
         
-        let directional_light_data = unsafe {
-            self.directional_light_buffer.mapped_ptr.unwrap().cast::<GpuDirectionalLight>().as_mut()
+        let mut directional_light_data = GpuDirectionalLight {
+            cascades: bytemuck::Zeroable::zeroed(),
+            color: self.light_color,
+            intensity: self.light_intensitiy,
+            direction: light_direction,
+            _padding: 0,
         };
 
         
@@ -744,6 +723,8 @@ impl App {
 
             shadow_map
         });
+
+        let directional_light_buffer = context.transient_storage_data("directional_light_data", bytemuck::bytes_of(&directional_light_data));
 
         egui::Window::new("shadow_debug").open(&mut self.open_shadow_debugger).show(egui_ctx, |ui| {
             ui.checkbox(&mut self.use_mock_camera, "use mock camera");
@@ -811,7 +792,7 @@ impl App {
                 let resolve_image = resolve_image.map(|handle| graph.get_image(handle));
                 let depth_image = graph.get_image(depth_image);
 
-                let globals_buffer = graph.get_buffer(globals_buffer);
+                let per_frame_data = graph.get_buffer(per_frame_data);
                 
                 let vertex_buffer = graph.get_buffer(vertex_buffer);
                 let index_buffer = graph.get_buffer(index_buffer);
@@ -860,7 +841,7 @@ impl App {
                 cmd.begin_rendering(&rendering_info);
                 
                 cmd.bind_raster_pipeline(pipeline);
-                cmd.bind_index_buffer(&index_buffer);
+                cmd.bind_index_buffer(&index_buffer, 0);
 
                 #[repr(C)]
                 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -874,7 +855,7 @@ impl App {
                 }
 
                 let constants = ShadowMapConstants {
-                    per_frame_buffer: globals_buffer.descriptor_index.unwrap(),
+                    per_frame_buffer: per_frame_data.descriptor_index.unwrap(),
                     vertex_buffer: vertex_buffer.descriptor_index.unwrap(),
                     entity_buffer: instance_buffer.descriptor_index.unwrap(),
                     draw_commands: draw_commands_buffer.descriptor_index.unwrap(),
@@ -906,8 +887,6 @@ impl App {
         self.scene_draw_gen.destroy(context);
         self.shadow_map_renderer.destroy(context);
         context.destroy_pipeline(&self.basic_pipeline);
-        context.destroy_buffer(&self.per_frame_buffer);
-        context.destroy_buffer(&self.directional_light_buffer);
     }
 }
 const MAX_DRAW_COUNT: usize = 1_000_000;
@@ -1083,7 +1062,7 @@ impl ShadowMapRenderer {
                 cmd.begin_rendering(&rendering_info);
                 
                 cmd.bind_raster_pipeline(pipeline);
-                cmd.bind_index_buffer(&index_buffer);
+                cmd.bind_index_buffer(&index_buffer, 0);
 
                 let [constant_factor, clamp, slope_factor] = depth_bias;
                 cmd.set_depth_bias(constant_factor, clamp, slope_factor);

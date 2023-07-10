@@ -61,6 +61,22 @@ pub enum AnyResource {
     Image(render::Image),
 }
 
+impl AnyResource {
+    pub fn get_buffer(&self) -> Option<&render::Buffer> {
+        match self {
+            AnyResource::Buffer(buffer) => Some(buffer),
+            AnyResource::Image(_) => None,
+        }
+    }
+
+    pub fn get_image(&self) -> Option<&render::Image> {
+        match self {
+            AnyResource::Buffer(_) => None,
+            AnyResource::Image(image) => Some(image),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum AnyResourceView {
     Buffer(render::BufferView),

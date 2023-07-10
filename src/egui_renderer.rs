@@ -23,6 +23,9 @@ impl EguiRenderer {
     const MAX_INDEX_COUNT: usize = 200_000;
     const IMAGE_FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
 
+    const PER_FRAME_VERTEX_BYTE_SIZE: usize = Self::MAX_VERTEX_COUNT * std::mem::size_of::<egui::epaint::Vertex>();
+    const PER_FRAME_INDEX_BYTE_SIZE: usize = Self::MAX_INDEX_COUNT * std::mem::size_of::<u32>();
+
     pub fn new(context: &render::Context) -> Self {
         let pipeline = {
             let (vertex_shader, fragment_shader) = {
@@ -108,16 +111,14 @@ impl EguiRenderer {
             pipeline
         };
 
-        let vertex_buffer_size = std::mem::size_of::<egui::epaint::Vertex>() * Self::MAX_VERTEX_COUNT;
         let vertex_buffer = context.create_buffer("egui_vertex_buffer", &render::BufferDesc {
-            size: vertex_buffer_size,
+            size: Self::PER_FRAME_VERTEX_BYTE_SIZE * render::FRAME_COUNT,
             usage: vk::BufferUsageFlags::VERTEX_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
 
-        let index_buffer_size = std::mem::size_of::<u32>() * Self::MAX_VERTEX_COUNT;
         let index_buffer = context.create_buffer("egui_index_buffer", &render::BufferDesc {
-            size: index_buffer_size,
+            size: Self::PER_FRAME_INDEX_BYTE_SIZE * render::FRAME_COUNT,
             usage: vk::BufferUsageFlags::INDEX_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
@@ -210,11 +211,13 @@ impl EguiRenderer {
                 context.immediate_write_buffer(
                     &self.vertex_buffer,
                     vertices,
+                    Self::PER_FRAME_VERTEX_BYTE_SIZE * context.frame_index() + 
                     vertex_cursor as usize * std::mem::size_of::<egui::epaint::Vertex>()
                 );
                 context.immediate_write_buffer(
                     &self.index_buffer,
                     bytemuck::cast_slice(&mesh.indices),
+                    Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index() +
                     index_cursor as usize * std::mem::size_of::<u32>(),
                 );
 
@@ -324,6 +327,9 @@ impl EguiRenderer {
             &render::GraphResourceImportDesc::default(),
         );
 
+        let index_offset = Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index();
+        let vertex_offset = Self::PER_FRAME_VERTEX_BYTE_SIZE * context.frame_index();
+
         context.add_pass("egui_draw")
             .with_dependency(target_image, render::AccessKind::ColorAttachmentWrite)
             .render(move |cmd, graph| {
@@ -346,8 +352,8 @@ impl EguiRenderer {
                 cmd.begin_rendering(&rendering_info);
 
                 cmd.bind_raster_pipeline(pipeline);
-                cmd.bind_index_buffer(index_buffer);
-                cmd.bind_vertex_buffer(0, vertex_buffer, 0);
+                cmd.bind_index_buffer(index_buffer, index_offset as u64);
+                cmd.bind_vertex_buffer(0, vertex_buffer, vertex_offset as u64);
 
                 for batch in clipped_batches.iter() {
                     cmd.set_scissor(0, &[batch.clip_rect]);

@@ -318,9 +318,9 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
-    pub fn bind_index_buffer(&self, buffer: &render::BufferView) {
+    pub fn bind_index_buffer(&self, buffer: &render::BufferView, offset: u64) {
         unsafe {
-            self.device.raw.cmd_bind_index_buffer(self.buffer(), buffer.handle, 0, vk::IndexType::UINT32);
+            self.device.raw.cmd_bind_index_buffer(self.buffer(), buffer.handle, offset, vk::IndexType::UINT32);
         }
     }
 

@@ -332,6 +332,10 @@ impl<'a> PassBuilder<'a> {
 }
 
 impl Context {
+    pub fn frame_index(&self) -> usize {
+        self.frame_index
+    }
+    
     pub fn swapchain_extent(&self) -> vk::Extent2D {
         self.frame_context.as_ref().unwrap().acquired_image.extent
     }
@@ -392,6 +396,49 @@ impl Context {
             target_access: desc.target_access,
             wait_semaphore: desc.wait_semaphore,
             finish_semaphore: desc.finish_semaphore,
+            versions: vec![],
+        });
+
+        GraphHandle { resource_index, _phantom: PhantomData }
+    }
+
+    pub fn transient_storage_data(
+        &mut self,
+        name: impl Into<Cow<'static, str>>,
+        data: &[u8], 
+    ) -> GraphHandle<render::Buffer> {
+        let name = name.into();
+        let buffer_desc = render::BufferDesc {
+            size: data.len(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
+        };
+        let desc = render::AnyResourceDesc::Buffer(buffer_desc);
+        let cache = self.transient_resource_cache
+            .get_by_descriptor(&desc)
+            .unwrap_or_else(|| render::AnyResource::Buffer(render::Buffer::create_impl(
+                &self.device,
+                &self.descriptors,
+                name.clone(),
+                &buffer_desc,
+                None
+            )));
+        let buffer = cache.get_buffer().unwrap();
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), buffer.mapped_ptr.unwrap().as_ptr(), data.len());
+        }
+        let descriptor_index = buffer.descriptor_index;
+
+        let resource_index = self.graph.add_resource(graph::GraphResourceData {
+            name,
+         
+            source: graph::ResourceSource::Create { desc, cache: Some(cache) },
+            descriptor_index,
+
+            initial_access: render::AccessKind::None,
+            target_access: render::AccessKind::None,
+            wait_semaphore: None,
+            finish_semaphore: None,
             versions: vec![],
         });
 

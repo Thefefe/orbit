@@ -1,21 +1,16 @@
 #include "common.glsl"
 
+#define MAX_SHADOW_CASCADE_COUNT 4
+
 struct GlobalData {
     ivec2 screen_size;
     uint elapsed_frames;
     float elapsed_time;
 };
 
-struct ShadowCascade {
-    mat4 light_projection;
-    uint shadow_map_index;
-    float near_view_distance;
-    float far_view_distance;
-    uint _padding1;
-};
-
 struct DirectionalLightData {
-    ShadowCascade cascades[4];
+    mat4 projection_matrices[MAX_SHADOW_CASCADE_COUNT];
+    uint shadow_maps[MAX_SHADOW_CASCADE_COUNT];
     vec3 color;
     float intensitiy;
     vec3 direction;

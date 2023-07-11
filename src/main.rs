@@ -165,8 +165,8 @@ const NDC_BOUNDS: [Vec4; 8] = [
     vec4(-1.0,  1.0, 1.0,  1.0),
 ];
 
-const SHADOW_CASCADE_COUNT: usize = 4;
-const SHADOW_RESOLUTION: u32 = 1024 * 4;
+const MAX_SHADOW_CASCADE_COUNT: usize = 4;
+const SHADOW_RESOLUTION: u32 = 1024;
 
 fn uniform_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32{
     near + (far - near) * (index as f32 / cascade_count as f32)
@@ -237,7 +237,7 @@ fn directional_light_projection_from_view_frustum(
     let light_projection = Mat4::orthographic_rh(
         left_top.x, right_bottom.x,
         left_top.y, right_bottom.y,
-        -min.z, -max.z
+        -min.z + 250.0, -max.z - 250.0,
     );
 
     light_projection * light_view
@@ -245,18 +245,9 @@ fn directional_light_projection_from_view_frustum(
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct GpuShadowCascade {
-    light_projection: Mat4,
-    shadow_map_index: u32,
-    near_view_distance: f32,
-    far_view_distance: f32,
-    _padding: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct GpuDirectionalLight {
-    cascades: [GpuShadowCascade; SHADOW_CASCADE_COUNT],
+    projection_matrices: [Mat4; MAX_SHADOW_CASCADE_COUNT],
+    shadow_maps: [u32; MAX_SHADOW_CASCADE_COUNT],
     color: Vec3,
     intensity: f32,
     direction: Vec3,
@@ -676,7 +667,8 @@ impl App {
         let inv_light_direction = self.sun_light.transform.orientation.inverse();
         
         let mut directional_light_data = GpuDirectionalLight {
-            cascades: bytemuck::Zeroable::zeroed(),
+            projection_matrices: bytemuck::Zeroable::zeroed(),
+            shadow_maps: bytemuck::Zeroable::zeroed(),
             color: self.light_color,
             intensity: self.light_intensitiy,
             direction: light_direction,
@@ -685,13 +677,13 @@ impl App {
 
         
         let lambda = self.frustum_split_lambda;
-        let shadow_maps: [render::GraphImageHandle; SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
+        let shadow_maps: [render::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
             
             let Projection::Perspective { fov, near_clip } = main_camera.projection else { todo!() };
             let far_clip = self.max_shadow_distance;
             
-            let near = practical_frustum_split(i, near_clip, far_clip, SHADOW_CASCADE_COUNT, lambda);
-            let far = practical_frustum_split(i+1, near_clip, far_clip, SHADOW_CASCADE_COUNT, lambda);
+            let near = practical_frustum_split(i, near_clip, far_clip, MAX_SHADOW_CASCADE_COUNT, lambda);
+            let far = practical_frustum_split(i+1, near_clip, far_clip, MAX_SHADOW_CASCADE_COUNT, lambda);
             let projection = Mat4::perspective_rh(fov, aspect_ratio, near, far);
             let view_projection = projection * view_matrix;
             let subfrustum_corners = frustum_corners_from_matrix(&view_projection);
@@ -724,10 +716,8 @@ impl App {
                 entity_buffer
             );
             
-            directional_light_data.cascades[i].near_view_distance = near;
-            directional_light_data.cascades[i].far_view_distance = far;
-            directional_light_data.cascades[i].light_projection = light_projection;
-            directional_light_data.cascades[i].shadow_map_index = context
+            directional_light_data.projection_matrices[i] = light_projection;
+            directional_light_data.shadow_maps[i] = context
                 .get_transient_resource_descriptor_index(shadow_map)
                 .unwrap();
 
@@ -780,7 +770,7 @@ impl App {
 
             ui.horizontal(|ui| {
                 ui.label("selected_cascade");
-                ui.add(egui::Slider::new(&mut self.selected_cascade, 0..=SHADOW_CASCADE_COUNT - 1));
+                ui.add(egui::Slider::new(&mut self.selected_cascade, 0..=MAX_SHADOW_CASCADE_COUNT - 1));
             });
 
             ui.image(shadow_maps[self.selected_cascade], egui::Vec2::new(250.0, 250.0));

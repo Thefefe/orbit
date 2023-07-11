@@ -18,6 +18,7 @@ layout(location = 0) in VertexOutput {
     vec2 uv;
     mat3 TBN;
     flat uint material_index;
+    vec4 cascade_map_coords[MAX_SHADOW_CASCADE_COUNT];
 } vout;
 
 layout(location = 0) out vec4 out_color;
@@ -128,8 +129,9 @@ vec3 calculate_light(
     return (kD * albedo / PI + specular) * radiance * n_dot_l;
 }
 
-const int CASCADE_COUNT = 4;
-const float MAX_SHADOW_DISTANCE = 200.0;
+bool check_ndc_bounds(vec2 v) {
+    return all(bvec4(lessThanEqual(vec2(-1.0), v), lessThanEqual(v, vec2(1.0))));
+}
 
 const vec3 CASCADE_COLORS[6] = vec3[](
     vec3(1.0, 0.25, 0.25),
@@ -190,21 +192,18 @@ void main() {
         discard;
     }
 
-    vec4 cascade_far_view_distances = vec4(
-        directional_light_buffer.data.cascades[0].far_view_distance,
-        directional_light_buffer.data.cascades[1].far_view_distance,
-        directional_light_buffer.data.cascades[2].far_view_distance,
-        directional_light_buffer.data.cascades[3].far_view_distance
-    );
-    bvec4 cascade_comparison = greaterThan(vec4(vout.view_pos.z), cascade_far_view_distances);
-    vec4 cascade_index_vec = mix(vec4(0.0), vec4(1.0), cascade_comparison);
-    uint cascade_index = uint(dot(cascade_index_vec, cascade_index_vec));
+    uint cascade_bound_checks = 
+        uint(check_ndc_bounds(vout.cascade_map_coords[0].xy)) +
+        uint(check_ndc_bounds(vout.cascade_map_coords[1].xy)) +
+        uint(check_ndc_bounds(vout.cascade_map_coords[2].xy)) +
+        uint(check_ndc_bounds(vout.cascade_map_coords[3].xy));
+    uint cascade_index = 4 - cascade_bound_checks;
 
-    vec4 light_space_frag_pos = directional_light_buffer.data.cascades[cascade_index].light_projection * vout.world_pos;
-    uint shadow_map = directional_light_buffer.data.cascades[cascade_index].shadow_map_index;
+    vec4 light_space_frag_pos = vout.cascade_map_coords[cascade_index];
+    uint shadow_map = directional_light_buffer.data.shadow_maps[cascade_index];
 
     float shadow = 1.0;
-    if (cascade_index < CASCADE_COUNT) shadow = compute_shadow(light_space_frag_pos, shadow_map);
+    if (cascade_index < MAX_SHADOW_CASCADE_COUNT) shadow = compute_shadow(light_space_frag_pos, shadow_map);
 
     switch (render_mode) {
         case 0:
@@ -229,11 +228,7 @@ void main() {
             // out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
             float shadow = max(shadow, 0.3);
             vec3 cascade_color = vec3(0.25);
-            bvec4 outside_shadow_map = bvec4(
-                lessThan(light_space_frag_pos.xy, vec2(-1.0)),
-                greaterThan(light_space_frag_pos.xy, vec2(1.0))
-            );
-            if (cascade_index < CASCADE_COUNT && !any(outside_shadow_map))
+            if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
                 cascade_color = CASCADE_COLORS[cascade_index];
             out_color = vec4(cascade_color * albedo * shadow, 1.0);
             break;

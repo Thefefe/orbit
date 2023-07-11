@@ -1,27 +1,15 @@
 #version 460
 
-#include "common1.glsl"
-#include "types.glsl"
-
-RegisterBuffer(PerFrameBuffer, std430, readonly, {
-    PerFrameData data;
-});
-
-RegisterBuffer(DirectionalLightBuffer, std430, readonly, {
-    DirectionalLightData data;
-});
-
-RegisterBuffer(Materials, std430, readonly, {
-    MaterialData materials[];
-});
+#include "include/common.glsl"
+#include "include/types.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
-    uint per_frame_buffer;
-    uint vertex_buffer;
-    uint entity_buffer;
-    uint draw_commands;
-    uint materials;
-    uint directional_light_buffer;
+    PerFrameBuffer per_frame_buffer;
+    VertexBuffer vertex_buffer;
+    EntityBuffer entity_buffer;
+    DrawCommandsBuffer draw_commands;
+    MaterialsBuffer materials_buffer;
+    DirectionalLightBuffer directional_light_buffer;
 };
 
 layout(location = 0) in VertexOutput {
@@ -153,8 +141,8 @@ const vec3 CASCADE_COLORS[6] = vec3[](
 );
 
 void main() {
-    MaterialData material = GetBuffer(Materials, materials).materials[vout.material_index];
-    uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).data.render_mode;
+    MaterialData material = materials_buffer.materials[vout.material_index];
+    uint render_mode = per_frame_buffer.data.render_mode;
 
     vec4  base_color = material.base_color;
     vec3  albedo     = base_color.rgb;
@@ -195,7 +183,7 @@ void main() {
     vec3 base_reflectivity = mix(vec3(0.04), albedo, metallic);
 
     vec3 N = normalize(normal);
-    vec3 V = normalize(GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_pos - vout.world_pos.xyz);
+    vec3 V = normalize(per_frame_buffer.data.view_pos - vout.world_pos.xyz);
 
     out_color.a = base_color.a;
     if (out_color.a < 0.5) {
@@ -203,26 +191,26 @@ void main() {
     }
 
     vec4 cascade_far_view_distances = vec4(
-        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[0].far_view_distance,
-        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[1].far_view_distance,
-        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[2].far_view_distance,
-        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[3].far_view_distance
+        directional_light_buffer.data.cascades[0].far_view_distance,
+        directional_light_buffer.data.cascades[1].far_view_distance,
+        directional_light_buffer.data.cascades[2].far_view_distance,
+        directional_light_buffer.data.cascades[3].far_view_distance
     );
     bvec4 cascade_comparison = greaterThan(vec4(vout.view_pos.z), cascade_far_view_distances);
     vec4 cascade_index_vec = mix(vec4(0.0), vec4(1.0), cascade_comparison);
     uint cascade_index = uint(dot(cascade_index_vec, cascade_index_vec));
 
-    vec4 light_space_frag_pos = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].light_projection * vout.world_pos;
-    uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascades[cascade_index].shadow_map_index;
+    vec4 light_space_frag_pos = directional_light_buffer.data.cascades[cascade_index].light_projection * vout.world_pos;
+    uint shadow_map = directional_light_buffer.data.cascades[cascade_index].shadow_map_index;
 
     float shadow = 1.0;
     if (cascade_index < CASCADE_COUNT) shadow = compute_shadow(light_space_frag_pos, shadow_map);
 
     switch (render_mode) {
         case 0:
-            vec3 light_direction =  GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
-            vec3 light_color = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.color;
-            light_color *= GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.intensitiy;
+            vec3 light_direction =  directional_light_buffer.data.direction;
+            vec3 light_color = directional_light_buffer.data.color;
+            light_color *= directional_light_buffer.data.intensitiy;
             vec3 Lo = calculate_light(
                 V,
                 light_direction,

@@ -1,43 +1,35 @@
 #version 460
 
-#include "common.glsl"
-#include "types.glsl"
+#include "include/common.glsl"
+#include "include/types.glsl"
 
-RegisterBuffer(SceneDraw, std430, readonly, {
-	uint submesh_count;
-    Submesh submeshes[];
-});
-
-RegisterBuffer(MeshInfos, std430, readonly, {
-    MeshInfo mesh_infos[];
-});
-
-RegisterBuffer(DrawCommands, std430, writeonly, {
-	uint draw_command_count;
-    DrawCommand draw_commands[];
-});
-
-BindSlot(SceneDraw, 0);
-BindSlot(MeshInfos, 1);
-BindSlot(DrawCommands, 2);
+layout(push_constant, std430) uniform PushConstants {
+    SubmeshBuffer submesh_buffer;
+	MeshInfoBuffer mesh_info_buffer;
+	DrawCommandsBuffer draw_commands_buffer;
+};
 
 layout (local_size_x = 256) in;
 
 void main() {
-    GetBuffer(DrawCommands).draw_command_count = 0;
+	draw_commands_buffer.count = 0;
     uint gID = gl_GlobalInvocationID.x;
-	if (gID < GetBuffer(SceneDraw).submesh_count) {
-		Submesh submesh = GetBuffer(SceneDraw).submeshes[gID];
-		MeshInfo mesh_info = GetBuffer(MeshInfos).mesh_infos[submesh.mesh_index];
+	if (gID < submesh_buffer.count) {
+		Submesh submesh = submesh_buffer.submeshes[gID];
+		MeshInfo mesh_info = mesh_info_buffer.mesh_infos[submesh.mesh_index];
 
 		// TODO: culling, subgroup ballot
-		uint draw_index = atomicAdd(GetBuffer(DrawCommands).draw_command_count, 1);
+		bool visible = true;
 
-		GetBuffer(DrawCommands).draw_commands[draw_index].index_count 	 = mesh_info.index_count;
-    	GetBuffer(DrawCommands).draw_commands[draw_index].instance_count = 1;
-    	GetBuffer(DrawCommands).draw_commands[draw_index].first_index    = mesh_info.index_offset;
-    	GetBuffer(DrawCommands).draw_commands[draw_index].vertex_offset  = mesh_info.vertex_offset;
-    	GetBuffer(DrawCommands).draw_commands[draw_index].first_instance = submesh.entity_index;
-    	GetBuffer(DrawCommands).draw_commands[draw_index].material_index = submesh.material_index;
+		if (visible) {
+			uint draw_index = atomicAdd(draw_commands_buffer.count, 1);
+
+			draw_commands_buffer.commands[gID].index_count 	 = mesh_info.index_count;
+			draw_commands_buffer.commands[gID].instance_count = 1;
+			draw_commands_buffer.commands[gID].first_index    = mesh_info.index_offset;
+			draw_commands_buffer.commands[gID].vertex_offset  = mesh_info.vertex_offset;
+			draw_commands_buffer.commands[gID].first_instance = submesh.entity_index;
+			draw_commands_buffer.commands[gID].material_index = submesh.material_index;
+		}
 	}
 }

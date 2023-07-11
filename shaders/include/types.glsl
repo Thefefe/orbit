@@ -1,3 +1,5 @@
+#include "common.glsl"
+
 struct GlobalData {
     ivec2 screen_size;
     uint elapsed_frames;
@@ -86,4 +88,38 @@ struct MeshInfo {
     uint index_count;
     int  vertex_offset;
     uint _padding;
+};
+
+Buffer(4) SubmeshBuffer {
+	uint count;
+	Submesh submeshes[];
+};
+
+Buffer(4) MeshInfoBuffer {
+	MeshInfo mesh_infos[];
+};
+
+Buffer(4) DrawCommandsBuffer {
+	uint count;
+	DrawCommand commands[];
+};
+
+Buffer(16) VertexBuffer {
+    MeshVertex vertices[];
+};
+
+Buffer(16) EntityBuffer {
+    EntityData entities[];
+};
+
+Buffer(16) PerFrameBuffer {
+    PerFrameData data;
+};
+
+Buffer(16) DirectionalLightBuffer {
+    DirectionalLightData data;
+};
+
+Buffer(16) MaterialsBuffer {
+    MaterialData materials[];
 };

@@ -6,7 +6,7 @@ use ash::vk;
 use glam::Vec3Swizzles;
 use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
-use assets::{GpuAssetStore};
+use assets::GpuAssetStore;
 use scene::{Transform, SceneBuffer, GpuDrawCommand};
 use time::Time;
 use winit::{
@@ -541,52 +541,56 @@ impl App {
             self.render_mode = new_render_mode;
         }
 
+        fn draw_graph_info(ui: &mut egui::Ui, graph: &render::CompiledRenderGraph) {
+            for (i, batch) in graph.iter_batches().enumerate() {
+                ui.collapsing(format!("batch {i}"), |ui| {
+                    ui.collapsing("memory barrier", |ui| {
+                        ui.label(format!("src_stage: {:?}", batch.memory_barrier.src_stage_mask));
+                        ui.label(format!("src_access: {:?}", batch.memory_barrier.src_access_mask));
+                        ui.label(format!("dst_stage: {:?}", batch.memory_barrier.dst_stage_mask));
+                        ui.label(format!("dst_access: {:?}", batch.memory_barrier.dst_access_mask));
+                    });
+
+                    ui.collapsing("begin image barriers", |ui| {
+                        for (i, image_barrier) in batch.begin_image_barriers.iter().enumerate() {
+                            ui.collapsing(&format!("image {i}"), |ui| {
+                                ui.label(format!("src_stage: {:?}", image_barrier.src_stage_mask));
+                                ui.label(format!("src_access: {:?}", image_barrier.src_access_mask));
+                                ui.label(format!("dst_stage: {:?}", image_barrier.dst_stage_mask));
+                                ui.label(format!("dst_access: {:?}", image_barrier.dst_access_mask));
+                                ui.label(format!("src_layout: {:?}", image_barrier.old_layout));
+                                ui.label(format!("dst_layout: {:?}", image_barrier.new_layout));
+                            });
+                        }
+                    });
+
+                    ui.collapsing("finish image barriers", |ui| {
+                        for (i, image_barrier) in batch.finish_image_barriers.iter().enumerate() {
+                            ui.collapsing(&format!("image {i}"), |ui| {
+                                ui.label(format!("src_stage: {:?}", image_barrier.src_stage_mask));
+                                ui.label(format!("src_access: {:?}", image_barrier.src_access_mask));
+                                ui.label(format!("dst_stage: {:?}", image_barrier.dst_stage_mask));
+                                ui.label(format!("dst_access: {:?}", image_barrier.dst_access_mask));
+                                ui.label(format!("src_layout: {:?}", image_barrier.old_layout));
+                                ui.label(format!("dst_layout: {:?}", image_barrier.new_layout));
+                            });
+                        }
+                    });
+
+                    ui.collapsing("passes", |ui| {
+                        for pass in batch.passes {
+                            ui.label(pass.name.as_ref());
+                        }
+                    });
+                });
+            }
+        }
+
         if self.open_graph_debugger {
             // temporary
-            egui::Window::new("rendergraph debugger").open(&mut self.open_graph_debugger).show(egui_ctx, |ui| {
-                for (i, batch) in context.compiled_graph.iter_batches().enumerate() {
-                    ui.collapsing(format!("batch {i}"), |ui| {
-                        ui.collapsing("memory barrier", |ui| {
-                            ui.label(format!("src_stage: {:?}", batch.memory_barrier.src_stage_mask));
-                            ui.label(format!("src_access: {:?}", batch.memory_barrier.src_access_mask));
-                            ui.label(format!("dst_stage: {:?}", batch.memory_barrier.dst_stage_mask));
-                            ui.label(format!("dst_access: {:?}", batch.memory_barrier.dst_access_mask));
-                        });
-
-                        ui.collapsing("begin image barriers", |ui| {
-                            for (i, image_barrier) in batch.begin_image_barriers.iter().enumerate() {
-                                ui.collapsing(&format!("image {i}"), |ui| {
-                                    ui.label(format!("src_stage: {:?}", image_barrier.src_stage_mask));
-                                    ui.label(format!("src_access: {:?}", image_barrier.src_access_mask));
-                                    ui.label(format!("dst_stage: {:?}", image_barrier.dst_stage_mask));
-                                    ui.label(format!("dst_access: {:?}", image_barrier.dst_access_mask));
-                                    ui.label(format!("src_layout: {:?}", image_barrier.old_layout));
-                                    ui.label(format!("dst_layout: {:?}", image_barrier.new_layout));
-                                });
-                            }
-                        });
-
-                        ui.collapsing("finish image barriers", |ui| {
-                            for (i, image_barrier) in batch.finish_image_barriers.iter().enumerate() {
-                                ui.collapsing(&format!("image {i}"), |ui| {
-                                    ui.label(format!("src_stage: {:?}", image_barrier.src_stage_mask));
-                                    ui.label(format!("src_access: {:?}", image_barrier.src_access_mask));
-                                    ui.label(format!("dst_stage: {:?}", image_barrier.dst_stage_mask));
-                                    ui.label(format!("dst_access: {:?}", image_barrier.dst_access_mask));
-                                    ui.label(format!("src_layout: {:?}", image_barrier.old_layout));
-                                    ui.label(format!("dst_layout: {:?}", image_barrier.new_layout));
-                                });
-                            }
-                        });
-
-                        ui.collapsing("passes", |ui| {
-                            for pass in batch.passes {
-                                ui.label(pass.name.as_ref());
-                            }
-                        });
-                    });
-                }
-            });
+            egui::Window::new("rendergraph debugger")
+                .open(&mut self.open_graph_debugger)
+                .show(egui_ctx, |ui| draw_graph_info(ui, &context.compiled_graph));
         }
 
         if self.open_profiler {
@@ -646,13 +650,19 @@ impl App {
             aspect: vk::ImageAspectFlags::DEPTH,
         });
         
-        let vertex_buffer = context.import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
-        let index_buffer = context.import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
-        let material_buffer = context.import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
-        let entity_buffer = context.import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
+        let vertex_buffer = context
+            .import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
+        let index_buffer = context
+            .import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
+        let material_buffer = context
+            .import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
+        let entity_buffer = context
+            .import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
 
-        let submeshes = context.import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, &Default::default());
-        let mesh_infos = context.import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
+        let submeshes = context
+            .import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, &Default::default());
+        let mesh_infos = context
+            .import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
         let submesh_count = self.scene.submesh_data.len() as u32;
 
         let draw_commands_buffer = self.scene_draw_gen
@@ -704,7 +714,7 @@ impl App {
             }
 
             let shadow_map = self.shadow_map_renderer.render_shadow_map(
-                "sun_shadow_map".into(),
+                format!("sun_cascade_{i}").into(),
                 context,
                 [SHADOW_RESOLUTION; 2],
                 light_projection,
@@ -724,7 +734,8 @@ impl App {
             shadow_map
         });
 
-        let directional_light_buffer = context.transient_storage_data("directional_light_data", bytemuck::bytes_of(&directional_light_data));
+        let directional_light_buffer = context
+            .transient_storage_data("directional_light_data", bytemuck::bytes_of(&directional_light_data));
 
         egui::Window::new("shadow_debug").open(&mut self.open_shadow_debugger).show(egui_ctx, |ui| {
             ui.checkbox(&mut self.use_mock_camera, "use mock camera");
@@ -846,21 +857,21 @@ impl App {
                 #[repr(C)]
                 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
                 struct ShadowMapConstants {
-                    per_frame_buffer: u32,
-                    vertex_buffer: u32,
-                    entity_buffer: u32,
-                    draw_commands: u32,
-                    materials: u32,
-                    directional_light_buffer: u32,
+                    per_frame_buffer: u64,
+                    vertex_buffer: u64,
+                    entity_buffer: u64,
+                    draw_commands: u64,
+                    materials: u64,
+                    directional_light_buffer: u64,
                 }
 
                 let constants = ShadowMapConstants {
-                    per_frame_buffer: per_frame_data.descriptor_index.unwrap(),
-                    vertex_buffer: vertex_buffer.descriptor_index.unwrap(),
-                    entity_buffer: instance_buffer.descriptor_index.unwrap(),
-                    draw_commands: draw_commands_buffer.descriptor_index.unwrap(),
-                    materials: material_buffer.descriptor_index.unwrap(),
-                    directional_light_buffer: directional_light_buffer.descriptor_index.unwrap(),
+                    per_frame_buffer: per_frame_data.device_address,
+                    vertex_buffer: vertex_buffer.device_address,
+                    entity_buffer: instance_buffer.device_address,
+                    draw_commands: draw_commands_buffer.device_address,
+                    materials: material_buffer.device_address,
+                    directional_light_buffer: directional_light_buffer.device_address,
                 };
 
                 cmd.push_constants(bytemuck::bytes_of(&constants), 0);
@@ -945,6 +956,13 @@ impl SceneDrawGen {
                     mesh_infos.descriptor_index.unwrap(),
                     draw_commands.descriptor_index.unwrap(),
                 ]);
+
+                let device_addresses = [
+                    scene_submeshes.device_address,
+                    mesh_infos.device_address,
+                    draw_commands.device_address
+                ];
+                cmd.push_constants(bytemuck::cast_slice(&device_addresses), 0);
                 cmd.dispatch([scene_submesh_count / 256 + 1, 1, 1]);
             });
         
@@ -980,7 +998,7 @@ impl ShadowMapRenderer {
                     polygon_mode: vk::PolygonMode::FILL,
                     line_width: 1.0,
                     front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
+                    cull_mode: vk::CullModeFlags::BACK,
                     depth_bias: Some(render::DepthBias::default()),
                     depth_clamp: true,
                 },
@@ -1071,16 +1089,14 @@ impl ShadowMapRenderer {
                 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
                 struct ShadowMapConstants {
                     view_projection: Mat4,
-                    vertex_buffer: u32,
-                    entity_buffer: u32,
-                    _padding: [u32; 2],
+                    vertex_buffer: u64,
+                    entity_buffer: u64,
                 }
 
                 let constants = ShadowMapConstants {
                     view_projection,
-                    vertex_buffer: vertex_buffer.descriptor_index.unwrap(),
-                    entity_buffer: entity_buffer.descriptor_index.unwrap(),
-                    _padding: [0; 2],
+                    vertex_buffer: vertex_buffer.device_address,
+                    entity_buffer: entity_buffer.device_address,
                 };
 
                 cmd.push_constants(bytemuck::bytes_of(&constants), 0);
@@ -1356,7 +1372,6 @@ impl DebugLineRenderer {
 }
 
 fn main() {
-    puffin::GlobalProfiler::lock().new_frame();
     utils::init_logger(false);
     puffin::set_scopes_on(true);
 

@@ -7,7 +7,7 @@ use std::{
     collections::HashSet,
     ffi::{c_void, CStr, CString},
     mem::ManuallyDrop,
-    sync::{Mutex}, ptr::NonNull,
+    sync::Mutex, ptr::NonNull,
 };
 
 use gpu_allocator::{
@@ -485,6 +485,7 @@ impl Device {
             .sampler_anisotropy(true)
             .depth_bias_clamp(true)
             .depth_clamp(true)
+            .shader_int64(true)
             .build();
 
         let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()

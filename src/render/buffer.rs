@@ -7,6 +7,7 @@ use crate::render;
 #[derive(Debug, Clone, Copy)]
 pub struct BufferView {
     pub handle: vk::Buffer,
+    pub device_address: u64,
     pub descriptor_index: Option<render::DescriptorIndex>,
     pub size: u64
 }
@@ -46,7 +47,7 @@ impl Buffer {
         puffin::profile_function!(&name);
         let create_info = vk::BufferCreateInfo::builder()
             .size(desc.size as u64)
-            .usage(desc.usage)
+            .usage(desc.usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let handle = unsafe { device.raw.create_buffer(&create_info, None).unwrap() };
@@ -78,10 +79,13 @@ impl Buffer {
 
         device.set_debug_name(handle, &name);
 
+        let device_address = device.get_buffer_address(handle);
+
         Buffer {
             name,
             buffer_view: render::BufferView {
                 handle,
+                device_address,
                 descriptor_index,
                 size: desc.size as u64,
             },

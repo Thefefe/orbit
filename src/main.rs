@@ -269,6 +269,7 @@ struct App {
     debug_line_renderer: DebugLineRenderer,
     scene_draw_gen: SceneDrawGen,
     shadow_map_renderer: ShadowMapRenderer,
+    scree_blitter: ScreenPostProcess,
 
     basic_pipeline: render::RasterPipeline,
 
@@ -278,8 +279,9 @@ struct App {
     mock_camera_controller: CameraController,
     sun_light: Camera,
     light_dir_controller: CameraController,
-
+    
     render_mode: u32,
+    camera_exposure: f32,
     light_color: Vec3,
     light_intensitiy: f32,
     max_shadow_distance: f32,
@@ -293,12 +295,13 @@ struct App {
     open_scene_editor_open: bool,
     open_graph_debugger: bool,
     open_profiler: bool,
-    open_shadow_debugger: bool,
+    open_camera_light_editor: bool,
 }
 
 impl App {
+    pub const COLOR_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X4;
+    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::None;
 
     fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
         let mesh_pipeline = {
@@ -310,7 +313,7 @@ impl App {
 
             let entry = cstr::cstr!("main");
 
-            let pipeline = context.create_raster_pipeline("basic_pipeline", &render::RasterPipelineDesc {
+            let pipeline = context.create_raster_pipeline("forward_pipeline", &render::RasterPipelineDesc {
                 vertex_stage: render::ShaderStage {
                     module: vertex_module,
                     entry,
@@ -330,7 +333,7 @@ impl App {
                     depth_clamp: false,
                 },
                 color_attachments: &[render::PipelineColorAttachment {
-                    format: context.swapchain.format(),
+                    format: Self::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
                 }],
@@ -375,7 +378,8 @@ impl App {
             scene,
             debug_line_renderer: DebugLineRenderer::new(context),
             scene_draw_gen: SceneDrawGen::new(context),
-            shadow_map_renderer: ShadowMapRenderer::new(&context),
+            shadow_map_renderer: ShadowMapRenderer::new(context),
+            scree_blitter: ScreenPostProcess::new(context),
 
             basic_pipeline: mesh_pipeline,
             
@@ -390,6 +394,7 @@ impl App {
             light_dir_controller: CameraController::new(1.0, 0.003),
 
             render_mode: 0,
+            camera_exposure: 1.0,
             light_color: Vec3::splat(1.0),
             light_intensitiy: 10.0,
             max_shadow_distance: 200.0,
@@ -403,7 +408,7 @@ impl App {
             open_scene_editor_open: false,
             open_profiler: false,
             open_graph_debugger: false,
-            open_shadow_debugger: false,
+            open_camera_light_editor: false,
         }
     }
 
@@ -448,7 +453,7 @@ impl App {
             self.open_profiler = !self.open_profiler;
         }
         if input.key_pressed(KeyCode::F4) {
-            self.open_shadow_debugger = !self.open_shadow_debugger;
+            self.open_camera_light_editor = !self.open_camera_light_editor;
         }
 
         fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
@@ -616,21 +621,16 @@ impl App {
             render_mode: self.render_mode,
         }));
         
-        let swapchain_image = context.get_swapchain_image();
-        let (target_image, resolve_image) = if Self::MULTISAMPLING == render::MultisampleCount::None {
-            (swapchain_image, None)
-        } else {
-            let msaa_image = context.create_transient_image("msaa_image", render::ImageDesc {
-                format: context.swapchain_format(),
-                width: screen_extent.width,
-                height: screen_extent.height,
-                mip_levels: 1,
-                samples: Self::MULTISAMPLING,
-                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                aspect: vk::ImageAspectFlags::COLOR,
-            });
-            (msaa_image, Some(swapchain_image))
-        };
+        let target_image = context.create_transient_image("target_image", render::ImageDesc {
+            format: Self::COLOR_FORMAT,
+            width: screen_extent.width,
+            height: screen_extent.height,
+            mip_levels: 1,
+            samples: Self::MULTISAMPLING,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::COLOR,
+        });
+
         let depth_image = context.create_transient_image("depth_image", render::ImageDesc {
             format: Self::DEPTH_FORMAT,
             width: screen_extent.width,
@@ -727,10 +727,15 @@ impl App {
         let directional_light_buffer = context
             .transient_storage_data("directional_light_data", bytemuck::bytes_of(&directional_light_data));
 
-        egui::Window::new("shadow_debug").open(&mut self.open_shadow_debugger).show(egui_ctx, |ui| {
+        egui::Window::new("camera_and_lighting").open(&mut self.open_camera_light_editor).show(egui_ctx, |ui| {
             ui.checkbox(&mut self.use_mock_camera, "use mock camera");
             ui.checkbox(&mut self.show_cascade_view_frustum, "use cascade view frustum");
             ui.checkbox(&mut self.show_cascade_light_frustum, "use cascade light frustum");
+
+            ui.horizontal(|ui| {
+                ui.label("camera_exposure");
+                ui.add(egui::DragValue::new(&mut self.camera_exposure).speed(0.05).clamp_range(0.1..=20.0));
+            });
 
             ui.horizontal(|ui| {
                 ui.label("light_color");
@@ -787,10 +792,8 @@ impl App {
             .with_dependency(depth_image, render::AccessKind::DepthAttachmentWrite)
             .with_dependency(draw_commands_buffer, render::AccessKind::IndirectBuffer)
             .with_dependencies(shadow_maps.map(|h| (h, render::AccessKind::FragmentShaderRead)))
-            .with_dependencies(resolve_image.map(|h| (h, render::AccessKind::ColorAttachmentWrite)))
             .render(move |cmd, graph| {
                 let target_image = graph.get_image(target_image);
-                let resolve_image = resolve_image.map(|handle| graph.get_image(handle));
                 let depth_image = graph.get_image(depth_image);
 
                 let per_frame_data = graph.get_buffer(per_frame_data);
@@ -803,7 +806,7 @@ impl App {
                 let draw_commands_buffer = graph.get_buffer(shadow_map_draw_commands);
                 let directional_light_buffer = graph.get_buffer(directional_light_buffer);
 
-                let mut color_attachment = vk::RenderingAttachmentInfo::builder()
+                let color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(target_image.view)
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
@@ -814,12 +817,12 @@ impl App {
                     })
                     .store_op(vk::AttachmentStoreOp::STORE);
 
-                if let Some(resolve_image) = resolve_image {
-                    color_attachment = color_attachment
-                        .resolve_image_view(resolve_image.view)
-                        .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
-                }
+                // if let Some(resolve_image) = resolve_image {
+                //     color_attachment = color_attachment
+                //         .resolve_image_view(resolve_image.view)
+                //         .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                //         .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+                // }
 
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
                     .image_view(depth_image.view)
@@ -877,8 +880,8 @@ impl App {
 
                 cmd.end_rendering();
             });
-
-        self.debug_line_renderer.render(context, target_image, resolve_image, depth_image, view_projection_matrix);
+        self.scree_blitter.render(context, target_image, self.camera_exposure);
+        self.debug_line_renderer.render(context, context.get_swapchain_image(), None, depth_image, view_projection_matrix);
     }
 
     fn destroy(&self, context: &render::Context) {
@@ -887,9 +890,117 @@ impl App {
         self.debug_line_renderer.destroy(context);
         self.scene_draw_gen.destroy(context);
         self.shadow_map_renderer.destroy(context);
+        self.scree_blitter.destroy(context);
         context.destroy_pipeline(&self.basic_pipeline);
     }
 }
+
+pub struct ScreenPostProcess {
+    pipeline: render::RasterPipeline,
+}
+
+impl ScreenPostProcess {
+    pub fn new(context: &render::Context) -> Self {
+        let pipeline = {
+            let vertex_shader = utils::load_spv("shaders/blit.vert.spv").unwrap();
+            let fragment_shader = utils::load_spv("shaders/blit.frag.spv").unwrap();
+
+            let vertex_module = context.create_shader_module(&vertex_shader, "blit_vertex_shader");
+            let fragment_module = context.create_shader_module(&fragment_shader, "blit_fragment_shader");
+
+            let entry = cstr::cstr!("main");
+
+            let pipeline = context.create_raster_pipeline("blit_pipeline", &render::RasterPipelineDesc {
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: Some(render::ShaderStage {
+                    module: fragment_module,
+                    entry,
+                }),
+                vertex_input: render::VertexInput::default(),
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_bias: None,
+                    depth_clamp: false,
+                },
+                color_attachments: &[render::PipelineColorAttachment {
+                    format: context.swapchain.format(),
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }],
+                depth_state: None,
+                multisample: render::MultisampleCount::None,
+                dynamic_states: &[],
+            });
+
+            context.destroy_shader_module(vertex_module);
+            context.destroy_shader_module(fragment_module);
+
+            pipeline
+        };
+
+        Self { pipeline }
+    }
+
+    pub fn render(
+        &self,
+        context: &mut render::Context,
+        src_image: render::GraphImageHandle,
+        exposure: f32,
+    ) {
+        let swapchain_image = context.get_swapchain_image();
+        let pipeline = self.pipeline;
+
+        context.add_pass("blit_present_pass")
+            .with_dependency(swapchain_image, render::AccessKind::ColorAttachmentWrite)
+            .with_dependency(src_image, render::AccessKind::FragmentShaderRead)
+            .render(move |cmd, graph| {
+                let swapchain_image = graph.get_image(swapchain_image);
+                let src_image = graph.get_image(src_image);
+
+                let color_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(swapchain_image.view)
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .store_op(vk::AttachmentStoreOp::STORE);
+
+                let rendering_info = vk::RenderingInfo::builder()
+                    .render_area(swapchain_image.full_rect())
+                    .layer_count(1)
+                    .color_attachments(std::slice::from_ref(&color_attachment));
+            
+                cmd.begin_rendering(&rendering_info);
+
+                cmd.bind_raster_pipeline(pipeline);
+
+                #[repr(C)]
+                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+                struct PushConstants {
+                    src_image: render::DescriptorIndex,
+                    exposure: f32,
+                }
+
+                cmd.push_constants(bytemuck::bytes_of(&PushConstants {
+                    src_image: src_image.descriptor_index.unwrap(),
+                    exposure,
+                }), 0);
+                cmd.draw(0..6, 0..1);
+
+                cmd.end_rendering();
+            });
+    }
+
+    pub fn destroy(&self, context: &render::Context) {
+        context.destroy_pipeline(&self.pipeline);
+    }
+}
+
 const MAX_DRAW_COUNT: usize = 1_000_000;
 
 pub struct SceneDrawGen {
@@ -1380,7 +1491,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::IMMEDIATE,
+            present_mode: vk::PresentModeKHR::FIFO,
         },
     );
 

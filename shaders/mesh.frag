@@ -192,12 +192,12 @@ void main() {
         discard;
     }
 
-    uint cascade_bound_checks = 
-        uint(check_ndc_bounds(vout.cascade_map_coords[0].xy)) +
-        uint(check_ndc_bounds(vout.cascade_map_coords[1].xy)) +
-        uint(check_ndc_bounds(vout.cascade_map_coords[2].xy)) +
-        uint(check_ndc_bounds(vout.cascade_map_coords[3].xy));
-    uint cascade_index = 4 - cascade_bound_checks;
+    uint cascade_index = 4 ;
+    for (int i = 3; i >= 0; i -= 1) {
+        if (check_ndc_bounds(vout.cascade_map_coords[i].xy)) {
+            cascade_index = i;
+        }
+    }
 
     vec4 light_space_frag_pos = vout.cascade_map_coords[cascade_index];
     uint shadow_map = directional_light_buffer.data.shadow_maps[cascade_index];
@@ -222,11 +222,11 @@ void main() {
             ) * shadow;
 
             vec3 ambient = vec3(0.03) * albedo.rgb * ao;
-            out_color.rgb = ambient + Lo + emissive;
+            out_color.rgb = ambient + Lo + emissive * 4.0;
             break;
         case 1: 
             // out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
-            float shadow = max(shadow, 0.3);
+            float shadow = max(shadow, 0.7);
             vec3 cascade_color = vec3(0.25);
             if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
                 cascade_color = CASCADE_COLORS[cascade_index];

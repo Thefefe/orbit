@@ -59,12 +59,18 @@ impl SwapchainInner {
 
                 let view = unsafe { device.raw.create_image_view(&image_view_create_info, None) }.unwrap();
 
+                let extent = vk::Extent3D {
+                    width: config.extent.width,
+                    height: config.extent.height,
+                    depth: 1,
+                };
+
                 render::ImageView {
                     handle: image,
                     descriptor_index: None,
                     format: config.surface_format.format,
                     view,
-                    extent: config.extent,
+                    extent,
                     subresource_range,
                 }
             })

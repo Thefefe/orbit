@@ -237,7 +237,7 @@ fn directional_light_projection_from_view_frustum(
     let light_projection = Mat4::orthographic_rh(
         left_top.x, right_bottom.x,
         left_top.y, right_bottom.y,
-        -min.z + 250.0, -max.z - 250.0,
+        -min.z + 150.0, -max.z - 150.0,
     );
 
     light_projection * light_view
@@ -270,8 +270,13 @@ struct App {
     scene_draw_gen: SceneDrawGen,
     shadow_map_renderer: ShadowMapRenderer,
     scree_blitter: ScreenPostProcess,
+    equirectangular_cube_map_loader: EquirectangularCubeMapLoader,
+    
+    forward_pipeline: render::RasterPipeline,
+    skybox_pipeline: render::RasterPipeline,
 
-    basic_pipeline: render::RasterPipeline,
+    skybox_image: render::Image,
+    irradiance_image: render::Image,
 
     camera: Camera,
     camera_controller: CameraController,
@@ -299,12 +304,12 @@ struct App {
 }
 
 impl App {
-    pub const COLOR_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
+    pub const COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
     pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::None;
 
     fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
-        let mesh_pipeline = {
+        let forward_pipeline = {
             let vertex_shader = utils::load_spv("shaders/mesh.vert.spv").unwrap();
             let fragment_shader = utils::load_spv("shaders/mesh.frag.spv").unwrap();
 
@@ -353,6 +358,58 @@ impl App {
             pipeline
         };
 
+        
+        let skybox_pipeline = {
+            let vertex_shader = utils::load_spv("shaders/unit_cube.vert.spv").unwrap();
+            let fragment_shader = utils::load_spv("shaders/skybox.frag.spv").unwrap();
+
+            let vertex_module = context
+                .create_shader_module(&vertex_shader, "unit_cube_vertex_shader");
+            let fragment_module = context
+                .create_shader_module(&fragment_shader, "skybox_fragment_shader");
+
+            let entry = cstr::cstr!("main");
+
+            let pipeline = context.create_raster_pipeline("skybox_pipeline", &render::RasterPipelineDesc {
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: Some(render::ShaderStage {
+                    module: fragment_module,
+                    entry,
+                }),
+                vertex_input: render::VertexInput::default(),
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::FRONT,
+                    depth_bias: None,
+                    depth_clamp: false,
+                },
+                color_attachments: &[render::PipelineColorAttachment {
+                    format: Self::COLOR_FORMAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }],
+                depth_state: Some(render::DepthState {
+                    format: Self::DEPTH_FORMAT,
+                    test: false,
+                    write: false,
+                    compare: vk::CompareOp::GREATER,
+                }),
+                multisample: render::MultisampleCount::None,
+                dynamic_states: &[],
+            });
+
+            context.destroy_shader_module(vertex_module);
+            context.destroy_shader_module(fragment_module);
+
+            pipeline
+        };
+
         let mut gpu_assets = GpuAssetStore::new(context);
         let mut scene = SceneBuffer::new(context);
         
@@ -373,6 +430,24 @@ impl App {
         };
         scene.update_instances(context);
 
+        let equirectangular_cube_map_loader = EquirectangularCubeMapLoader::new(context);
+
+        let environment_map = {
+            let (image_binary, image_format) = gltf_loader::load_image_data("C:\\Users\\thefe\\Downloads\\spree_bank_4k.dds")
+                .unwrap();
+            let mut image =
+                gltf_loader::load_image(context, "environment_map".into(), &image_binary, image_format, true, true);
+            
+            image.set_sampler_flags(render::SamplerKind::LinearRepeat);
+
+            image
+        };
+
+        let (skybox_image, irradiance_image) = equirectangular_cube_map_loader
+            .create_cube_map(&context, "skybox".into(), 1024, &environment_map);
+
+        context.destroy_image(&environment_map);
+
         Self {
             gpu_assets,
             scene,
@@ -380,9 +455,14 @@ impl App {
             scene_draw_gen: SceneDrawGen::new(context),
             shadow_map_renderer: ShadowMapRenderer::new(context),
             scree_blitter: ScreenPostProcess::new(context),
+            equirectangular_cube_map_loader,
 
-            basic_pipeline: mesh_pipeline,
-            
+            forward_pipeline,
+            skybox_pipeline,
+
+            skybox_image,
+            irradiance_image,
+
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
             mock_camera: camera,
@@ -605,6 +685,8 @@ impl App {
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
         let view_projection_matrix = self.camera.compute_matrix(aspect_ratio);
+        let skybox_view_projection_matrix = self.camera.projection.compute_matrix(aspect_ratio) *
+            Mat4::from_quat(self.camera.transform.orientation).inverse();
         
         let main_camera = if self.use_mock_camera {
             &self.mock_camera
@@ -622,9 +704,9 @@ impl App {
         }));
         
         let target_image = context.create_transient_image("target_image", render::ImageDesc {
+            ty: render::ImageType::Single2D,
             format: Self::COLOR_FORMAT,
-            width: screen_extent.width,
-            height: screen_extent.height,
+            dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
@@ -632,9 +714,9 @@ impl App {
         });
 
         let depth_image = context.create_transient_image("depth_image", render::ImageDesc {
+            ty: render::ImageType::Single2D,
             format: Self::DEPTH_FORMAT,
-            width: screen_extent.width,
-            height: screen_extent.height,
+            dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -656,6 +738,9 @@ impl App {
             .import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
         let submesh_count = self.scene.submesh_data.len() as u32;
 
+        let skybox_image = context.import_image("skybox", &self.skybox_image, &Default::default());
+        let irradiance_image = context.import_image("irradiance_image", &self.irradiance_image, &Default::default());
+
         let draw_commands_buffer = self.scene_draw_gen
             .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
 
@@ -674,7 +759,6 @@ impl App {
             direction: light_direction,
             _padding: 0,
         };
-
         
         let lambda = self.frustum_split_lambda;
         let shadow_maps: [render::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
@@ -708,7 +792,7 @@ impl App {
             let shadow_map = self.shadow_map_renderer.render_shadow_map(
                 format!("sun_cascade_{i}").into(),
                 context,
-                [SHADOW_RESOLUTION; 2],
+                SHADOW_RESOLUTION,
                 light_projection,
                 shadow_map_draw_commands,
                 vertex_buffer,
@@ -785,8 +869,9 @@ impl App {
         directional_light_data.color = self.light_color;
         directional_light_data.intensity = self.light_intensitiy;
 
-        let pipeline = self.basic_pipeline;
-        
+        let forward_pipeline = self.forward_pipeline;
+        let skybox_pipeline = self.skybox_pipeline;
+
         context.add_pass("forward_pass")
             .with_dependency(target_image, render::AccessKind::ColorAttachmentWrite)
             .with_dependency(depth_image, render::AccessKind::DepthAttachmentWrite)
@@ -795,6 +880,9 @@ impl App {
             .render(move |cmd, graph| {
                 let target_image = graph.get_image(target_image);
                 let depth_image = graph.get_image(depth_image);
+
+                let skybox_image = graph.get_image(skybox_image);
+                let irradiance_image = graph.get_image(irradiance_image);
 
                 let per_frame_data = graph.get_buffer(per_frame_data);
                 
@@ -809,12 +897,7 @@ impl App {
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(target_image.view)
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .clear_value(vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            float32: [0.0, 0.0, 0.0, 1.0],
-                        },
-                    })
+                    .load_op(vk::AttachmentLoadOp::DONT_CARE)
                     .store_op(vk::AttachmentStoreOp::STORE);
 
                 // if let Some(resolve_image) = resolve_image {
@@ -844,27 +927,47 @@ impl App {
 
                 cmd.begin_rendering(&rendering_info);
                 
-                cmd.bind_raster_pipeline(pipeline);
+                cmd.bind_raster_pipeline(skybox_pipeline);
+                #[repr(C)]
+                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+                struct SkyboxConstants {
+                    matrix: Mat4,
+                    image_index: u32,
+                    _padding: [u32; 3],
+                }
+                cmd.push_constants(bytemuck::bytes_of(&SkyboxConstants {
+                    matrix: skybox_view_projection_matrix,
+                    image_index: skybox_image.descriptor_index.unwrap(),
+                    _padding: [0; 3],
+                }), 0);
+
+                cmd.draw(0..36, 0..1);
+
+                cmd.bind_raster_pipeline(forward_pipeline);
                 cmd.bind_index_buffer(&index_buffer, 0);
 
                 #[repr(C)]
                 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-                struct ShadowMapConstants {
+                struct ForwardConstants {
                     per_frame_buffer: u64,
                     vertex_buffer: u64,
                     entity_buffer: u64,
                     draw_commands: u64,
                     materials: u64,
                     directional_light_buffer: u64,
+                    irradiance_map_index: u32,
+                    _padding: u32,
                 }
 
-                let constants = ShadowMapConstants {
+                let constants = ForwardConstants {
                     per_frame_buffer: per_frame_data.device_address,
                     vertex_buffer: vertex_buffer.device_address,
                     entity_buffer: instance_buffer.device_address,
                     draw_commands: draw_commands_buffer.device_address,
                     materials: material_buffer.device_address,
                     directional_light_buffer: directional_light_buffer.device_address,
+                    irradiance_map_index: irradiance_image.descriptor_index.unwrap(),
+                    _padding: 0,
                 };
 
                 cmd.push_constants(bytemuck::bytes_of(&constants), 0);
@@ -880,6 +983,7 @@ impl App {
 
                 cmd.end_rendering();
             });
+
         self.scree_blitter.render(context, target_image, self.camera_exposure);
         self.debug_line_renderer.render(context, context.get_swapchain_image(), None, depth_image, view_projection_matrix);
     }
@@ -891,7 +995,11 @@ impl App {
         self.scene_draw_gen.destroy(context);
         self.shadow_map_renderer.destroy(context);
         self.scree_blitter.destroy(context);
-        context.destroy_pipeline(&self.basic_pipeline);
+        self.equirectangular_cube_map_loader.destroy(context);
+        context.destroy_pipeline(&self.forward_pipeline);
+        context.destroy_pipeline(&self.skybox_pipeline);
+        context.destroy_image(&self.skybox_image);
+        context.destroy_image(&self.irradiance_image);
     }
 }
 
@@ -1127,7 +1235,7 @@ impl ShadowMapRenderer {
         name: Cow<'static, str>,
         frame_ctx: &mut render::Context,
 
-        [width, height]: [u32; 2],
+        resolution: u32,
         view_projection: Mat4,
         draw_commands: render::GraphBufferHandle,
 
@@ -1137,9 +1245,9 @@ impl ShadowMapRenderer {
     ) -> render::GraphImageHandle {
         let pass_name = format!("shadow_pass_for_{name}");
         let shadow_map = frame_ctx.create_transient_image(name, render::ImageDesc {
+            ty: render::ImageType::Single2D,
             format: App::DEPTH_FORMAT,
-            width,
-            height,
+            dimensions: [resolution, resolution, 1],
             mip_levels: 1,
             samples: render::MultisampleCount::None,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
@@ -1472,6 +1580,255 @@ impl DebugLineRenderer {
     }
 }
 
+pub struct EquirectangularCubeMapLoader {
+    equirectangular_to_cube_pipeline: render::RasterPipeline,
+    cube_map_convolution_pipeline: render::RasterPipeline,
+}
+
+impl EquirectangularCubeMapLoader {
+    pub const FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
+
+    pub fn new(context: &render::Context) -> Self {
+        let vertex_shader = utils::load_spv("shaders/unit_cube.vert.spv").unwrap();
+        let vertex_module = context
+            .create_shader_module(&vertex_shader, "equirectangular_cube_map_vertex_shader");
+
+        let equirectangular_to_cube_pipeline = {
+            let fragment_shader = utils::load_spv("shaders/equirectangular_cube_map.frag.spv").unwrap();
+
+            let fragment_module = context
+                .create_shader_module(&fragment_shader, "equirectangular_cube_map_fragment_shader");
+
+            let entry = cstr::cstr!("main");
+
+            let pipeline = context.create_raster_pipeline("equirectangular_to_cube_pipeline", &render::RasterPipelineDesc {
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: Some(render::ShaderStage {
+                    module: fragment_module,
+                    entry,
+                }),
+                vertex_input: render::VertexInput::default(),
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_bias: None,
+                    depth_clamp: false,
+                },
+                color_attachments: &[render::PipelineColorAttachment {
+                    format: Self::FORMAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }],
+                depth_state: None,
+                multisample: render::MultisampleCount::None,
+                dynamic_states: &[],
+            });
+
+            context.destroy_shader_module(fragment_module);
+
+            pipeline
+        };
+
+        let cube_map_convolution_pipeline = {
+            let fragment_shader = utils::load_spv("shaders/cubemap_convolution.frag.spv").unwrap();
+
+            let fragment_module = context
+                .create_shader_module(&fragment_shader, "cubemap_convolution_fragment_shader");
+
+            let entry = cstr::cstr!("main");
+
+            let pipeline = context.create_raster_pipeline("cubemap_convolution_pipeline", &render::RasterPipelineDesc {
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: Some(render::ShaderStage {
+                    module: fragment_module,
+                    entry,
+                }),
+                vertex_input: render::VertexInput::default(),
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_bias: None,
+                    depth_clamp: false,
+                },
+                color_attachments: &[render::PipelineColorAttachment {
+                    format: Self::FORMAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }],
+                depth_state: None,
+                multisample: render::MultisampleCount::None,
+                dynamic_states: &[],
+            });
+
+            context.destroy_shader_module(fragment_module);
+
+            pipeline
+        };
+
+        context.destroy_shader_module(vertex_module);
+
+        Self { equirectangular_to_cube_pipeline, cube_map_convolution_pipeline  }
+    }
+
+    pub fn create_cube_map(
+        &self,
+        context: &render::Context,
+        name: Cow<'static, str>,
+        resolution: u32,
+        equirectangular_image: &render::ImageView
+    ) -> (render::Image, render::Image) {
+        let conv_name = format!("{name}_convoluted");
+        let cube_map = context.create_image(name, &render::ImageDesc {
+            ty: render::ImageType::Cube,
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            dimensions: [resolution, resolution, 1],
+            mip_levels: 1,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            aspect: vk::ImageAspectFlags::COLOR,
+        });
+
+        let convoluted_cube_map = context.create_image(conv_name, &render::ImageDesc {
+            ty: render::ImageType::Cube,
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            dimensions: [32, 32, 1],
+            mip_levels: 1,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            aspect: vk::ImageAspectFlags::COLOR,
+        });
+
+        let view_matrices = [
+            Mat4::look_at_rh(vec3(0.0, 0.0, 0.0), vec3( 1.0,  0.0,  0.0), vec3(0.0,  1.0,  0.0)),
+            Mat4::look_at_rh(vec3(0.0, 0.0, 0.0), vec3(-1.0,  0.0,  0.0), vec3(0.0,  1.0,  0.0)),
+            Mat4::look_at_rh(vec3(0.0, 0.0, 0.0), vec3( 0.0, -1.0,  0.0), vec3(0.0,  0.0,  1.0)),
+            Mat4::look_at_rh(vec3(0.0, 0.0, 0.0), vec3( 0.0,  1.0,  0.0), vec3(0.0,  0.0, -1.0)),
+            Mat4::look_at_rh(vec3(0.0, 0.0, 0.0), vec3( 0.0,  0.0,  1.0), vec3(0.0,  1.0,  0.0)),
+            Mat4::look_at_rh(vec3(0.0, 0.0, 0.0), vec3( 0.0,  0.0, -1.0), vec3(0.0,  1.0,  0.0)),
+        ];
+
+        context.record_and_submit(|cmd| {
+            cmd.barrier(&[], &[
+                render::image_barrier(&cube_map, render::AccessKind::None, render::AccessKind::ColorAttachmentWrite)
+            ], &[]);
+
+            for i in 0..6 {
+                let color_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(cube_map.layer_views[i])
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .clear_value(vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.1, 0.5, 0.9, 1.0],
+                        }
+                    })
+                    .store_op(vk::AttachmentStoreOp::STORE);
+
+                let rendering_info = vk::RenderingInfo::builder()
+                    .color_attachments(std::slice::from_ref(&color_attachment))
+                    .render_area(cube_map.full_rect())
+                    .layer_count(1);
+
+                cmd.begin_rendering(&rendering_info);
+
+                #[repr(C)]
+                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+                struct PushConstants {
+                    matrix: Mat4,
+                    image_index: u32,
+                    _padding: [u32; 3],
+                }
+                cmd.bind_raster_pipeline(self.equirectangular_to_cube_pipeline);
+                cmd.push_constants(bytemuck::bytes_of(&PushConstants {
+                    matrix: view_matrices[i],
+                    image_index: equirectangular_image.descriptor_index.unwrap(),
+                    _padding: [0; 3],
+                }), 0);
+                cmd.draw(0..36, 0..1);
+
+                cmd.end_rendering()
+            }
+            
+            cmd.barrier(&[], &[
+                render::image_barrier(
+                    &cube_map,
+                    render::AccessKind::ColorAttachmentWrite,
+                    render::AccessKind::AllGraphicsRead,
+                ),
+                render::image_barrier(
+                    &convoluted_cube_map,
+                    render::AccessKind::None,
+                    render::AccessKind::ColorAttachmentWrite,
+                ),
+            ], &[]);
+
+            for i in 0..6 {
+                let color_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(convoluted_cube_map.layer_views[i])
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .clear_value(vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.1, 0.5, 0.9, 1.0],
+                        }
+                    })
+                    .store_op(vk::AttachmentStoreOp::STORE);
+
+                let rendering_info = vk::RenderingInfo::builder()
+                    .color_attachments(std::slice::from_ref(&color_attachment))
+                    .render_area(convoluted_cube_map.full_rect())
+                    .layer_count(1);
+
+                cmd.begin_rendering(&rendering_info);
+
+                #[repr(C)]
+                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+                struct PushConstants {
+                    matrix: Mat4,
+                    image_index: u32,
+                    _padding: [u32; 3],
+                }
+                cmd.bind_raster_pipeline(self.cube_map_convolution_pipeline);
+                cmd.push_constants(bytemuck::bytes_of(&PushConstants {
+                    matrix: view_matrices[i],
+                    image_index: cube_map.descriptor_index.unwrap(),
+                    _padding: [0; 3],
+                }), 0);
+                cmd.draw(0..36, 0..1);
+
+                cmd.end_rendering()
+            }
+            
+            cmd.barrier(&[], &[
+                render::image_barrier(
+                    &convoluted_cube_map,
+                    render::AccessKind::ColorAttachmentWrite,
+                    render::AccessKind::AllGraphicsRead,
+                )
+            ], &[]);
+        });
+
+        (cube_map, convoluted_cube_map)
+    }
+
+    pub fn destroy(&self, context: &render::Context) {
+        context.destroy_pipeline(&self.equirectangular_to_cube_pipeline);
+        context.destroy_pipeline(&self.cube_map_convolution_pipeline);
+    }
+}
+
 fn main() {
     utils::init_logger(false);
     puffin::set_scopes_on(true);
@@ -1491,7 +1848,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::FIFO,
+            present_mode: vk::PresentModeKHR::IMMEDIATE,
         },
     );
 

@@ -161,7 +161,11 @@ impl Context {
         let mut record_submit_stuff = self.record_submit_stuff.lock().unwrap();
         record_submit_stuff.command_pool.reset(&self.device);
         let buffer = record_submit_stuff.command_pool.begin_new(&self.device, vk::CommandBufferUsageFlags::empty());
-        f(&buffer.record(&self.device, &self.descriptors));
+        let recorder = buffer.record(&self.device, &self.descriptors);
+        self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
+        self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
+        f(&recorder);
+        drop(recorder);
         unsafe {
             self.device.raw.reset_fences(&[record_submit_stuff.fence]).unwrap();
         }
@@ -336,7 +340,7 @@ impl Context {
         self.frame_index
     }
     
-    pub fn swapchain_extent(&self) -> vk::Extent2D {
+    pub fn swapchain_extent(&self) -> vk::Extent3D {
         self.frame_context.as_ref().unwrap().acquired_image.extent
     }
 

@@ -47,7 +47,7 @@ impl RenderResource for render::Image {
     type Desc = render::ImageDesc;
 
     fn view(&self) -> Self::View {
-        self.image_view
+        self.full_view
     }
 
     fn descriptor_index(&self) -> Option<render::DescriptorIndex> {

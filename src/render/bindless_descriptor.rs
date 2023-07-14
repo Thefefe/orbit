@@ -340,7 +340,7 @@ impl BindlessDescriptors {
     }
 
     pub fn free_descriptor_index(&self, index: DescriptorIndex) {
-        self.global_index_allocator.free(index);
+        self.global_index_allocator.free(strip_sampler(index));
     }
 
     pub fn destroy(&self, device: &render::Device) {
@@ -444,6 +444,10 @@ impl SamplerKind {
                 .build(),
         }
     }
+}
+
+pub fn strip_sampler(index: DescriptorIndex) -> DescriptorIndex {
+    index << 8 >> 8
 }
 
 pub fn descriptor_index_with_sampler(index: DescriptorIndex, sampler: SamplerKind) -> DescriptorIndex {

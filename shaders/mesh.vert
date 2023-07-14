@@ -10,6 +10,7 @@ layout(push_constant, std430) uniform PushConstants {
     DrawCommandsBuffer draw_commands;
     MaterialsBuffer materials_buffer;
     DirectionalLightBuffer directional_light_buffer;
+    uint irradiance_image_index;
 };
 
 layout(location = 0) out VertexOutput {

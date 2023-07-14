@@ -250,18 +250,18 @@ impl EguiRenderer {
         };
 
         let (image, is_new) = if let Some(image) = self.textures.get(&id) {
-            (image.image_view, false)
+            (image.full_view, false)
         } else {
             let image = context.create_image(format!("egui_image_{id}"), &render::ImageDesc {
+                ty: render::ImageType::Single2D,
                 format: Self::IMAGE_FORMAT,
-                width: width as u32,
-                height: height as u32,
+                dimensions: [width as u32, height as u32, 1],
                 mip_levels: 1,
                 samples: render::MultisampleCount::None,
                 usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
             });
-            let image_view = image.image_view;
+            let image_view = image.full_view;
             self.textures.insert(id, image);
             (image_view, true)
         };

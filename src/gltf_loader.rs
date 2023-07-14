@@ -109,7 +109,7 @@ fn tex_level_size(width: usize, height: usize, min_mip_size: usize) -> usize {
     usize::max(1, (width + 3) / 4 ) * usize::max(1, (height + 3) / 4 ) * min_mip_size
 }
 
-fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin: &[u8]) -> render::Image {
+pub fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin: &[u8]) -> render::Image {
     let dds = ddsfile::Dds::read(bin).unwrap();
 
     let dxgi_format = dds.get_dxgi_format().unwrap();
@@ -120,9 +120,9 @@ fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin: &[u
     assert!(mip_levels >= 1);
 
     let image = context.create_image(name, &render::ImageDesc {
+        ty: render::ImageType::Single2D,
         format,
-        width,
-        height,
+        dimensions: [width, height, 1],
         mip_levels,
         samples: render::MultisampleCount::None,
         usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
@@ -171,11 +171,17 @@ fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin: &[u
     image
 }
 
-fn load_image_data<'a>(
+pub fn load_image_data(path: &str) -> image::ImageResult<(Vec<u8>, image::ImageFormat)> {
+    let data = std::fs::read(&path)?;
+    let format = image::ImageFormat::from_path(&path)?;
+    Ok((data, format))
+}
+
+fn image_data_from_gltf<'a>(
     base_path: &Path,
     source: gltf::image::Source,
     buffers: &'a [Vec<u8>],
-) -> Result<(Cow<'a, [u8]>, image::ImageFormat), image::ImageError> {
+) -> image::ImageResult<(Cow<'a, [u8]>, image::ImageFormat)> {
     match source {
         gltf::image::Source::View { view, mime_type } => {
             let buffer = &buffers[view.buffer().index()];
@@ -201,24 +207,25 @@ fn load_image_data<'a>(
     }
 }
 
-fn upload_rgba_image_and_generate_mipmaps(
+pub fn upload_image_and_generate_mipmaps(
     context: &render::Context,
     name: Cow<'static, str>,
     image_data: &image::RgbaImage,
     srgb: bool,
+    hdr: bool,
 ) -> render::Image {
     let (width, height) = image_data.dimensions();
     let max_size = u32::max(width, height);
     let mip_levels = u32::max(1, f32::floor(f32::log2(max_size as f32)) as u32 + 1);
     
     let image = context.create_image(name, &render::ImageDesc {
-        format: if srgb {
-            vk::Format::R8G8B8A8_SRGB
-        } else {
-            vk::Format::R8G8B8A8_UNORM
+        ty: render::ImageType::Single2D,
+        format: match (srgb, hdr) {
+            (true, false)  => vk::Format::R8G8B8A8_SRGB,
+            (false, false) => vk::Format::R8G8B8A8_UNORM,
+            (_, true)      => vk::Format::R16G16B16A16_SFLOAT,
         },
-        width,
-        height,
+        dimensions: [width, height, 1],
         mip_levels,
         samples: render::MultisampleCount::None,
         usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -342,41 +349,23 @@ fn upload_rgba_image_and_generate_mipmaps(
     image
 }
 
-fn load_texture(
-    texture: gltf::Texture,
-    base_path: &Path,
-    buffers: &[Vec<u8>],
+pub fn load_image(
     context: &render::Context,
+    name: Cow<'static, str>,
+    image_binary: &[u8],
+    image_format: image::ImageFormat,
     srgb: bool,
+    hdr: bool,
 ) -> render::Image {
-    let gltf_image = texture.source();
-    let image_index = gltf_image.index();
-    let (image_data, image_format) = load_image_data(base_path, gltf_image.source(), &buffers).unwrap();
-
-    let name = Cow::from(format!("gltf_image_{image_index}"));
-
-    let mut image = match image_format {
+    match image_format {
         image::ImageFormat::Dds => {
-            upload_dds_image(context, name, &image_data)
+            upload_dds_image(context, name, &image_binary)
         },
         format => {
-            let image_data = image::load_from_memory_with_format(&image_data, format).unwrap().to_rgba8();
-            upload_rgba_image_and_generate_mipmaps(context, name, &image_data, srgb)
+            let image_data = image::load_from_memory_with_format(&image_binary, format).unwrap().to_rgba8();
+            upload_image_and_generate_mipmaps(context, name, &image_data, srgb, hdr)
         },
-    };
-
-    use gltf::texture::{MagFilter, WrappingMode};
-    let sampler_flags = match (texture.sampler().mag_filter().unwrap_or(MagFilter::Linear), texture.sampler().wrap_s()) {
-        (MagFilter::Nearest, WrappingMode::ClampToEdge      ) => render::SamplerKind::NearestClamp,
-        (MagFilter::Nearest, WrappingMode::MirroredRepeat   ) => render::SamplerKind::NearestRepeat,
-        (MagFilter::Nearest, WrappingMode::Repeat           ) => render::SamplerKind::NearestRepeat,
-        (MagFilter::Linear,  WrappingMode::ClampToEdge      ) => render::SamplerKind::LinearClamp,
-        (MagFilter::Linear,  WrappingMode::MirroredRepeat   ) => render::SamplerKind::LinearRepeat,
-        (MagFilter::Linear,  WrappingMode::Repeat           ) => render::SamplerKind::LinearRepeat,
-    };
-    image.set_sampler_flags(sampler_flags);
-
-    image
+    }
 }
 
 pub fn load_gltf(
@@ -409,17 +398,33 @@ pub fn load_gltf(
     }
 
     let mut texture_lookup_table: HashMap<usize, TextureHandle> = HashMap::new();
-    let mut get_texture = |assets: &mut GpuAssetStore, texture: gltf::Texture, srgb: bool| -> TextureHandle {
-        let index = texture.index();
+    let mut get_texture = |assets: &mut GpuAssetStore, gltf_texture: gltf::Texture, srgb: bool| -> TextureHandle {
+        let index = gltf_texture.index();
         if let Some(texture_id) = texture_lookup_table.get(&index) {
             return *texture_id;
         }
 
-        let texture = load_texture(texture, base_path, &buffers, context, srgb);
-        let handle = assets.import_texture(texture);
-        texture_lookup_table.insert(index, handle);
-        handle
-    };
+        let (image_binary, image_format) = image_data_from_gltf(base_path, gltf_texture.source().source(), &buffers)
+            .unwrap();
+        let mut texture =
+            load_image(context, format!("gltf_image_{index}").into(), &image_binary, image_format, srgb, false);
+        
+        use gltf::texture::{MagFilter, WrappingMode};
+        let mag_filter = gltf_texture.sampler().mag_filter().unwrap_or(MagFilter::Linear);
+        let wrapping_mode = gltf_texture.sampler().wrap_s();
+        let sampler_flags = match (mag_filter, wrapping_mode) {
+            (MagFilter::Nearest, WrappingMode::ClampToEdge      ) => render::SamplerKind::NearestClamp,
+            (MagFilter::Nearest, WrappingMode::MirroredRepeat   ) => render::SamplerKind::NearestRepeat,
+            (MagFilter::Nearest, WrappingMode::Repeat           ) => render::SamplerKind::NearestRepeat,
+            (MagFilter::Linear,  WrappingMode::ClampToEdge      ) => render::SamplerKind::LinearClamp,
+            (MagFilter::Linear,  WrappingMode::MirroredRepeat   ) => render::SamplerKind::LinearRepeat,
+            (MagFilter::Linear,  WrappingMode::Repeat           ) => render::SamplerKind::LinearRepeat,
+        };
+        texture.set_sampler_flags(sampler_flags);
+            let handle = assets.import_texture(texture);
+            texture_lookup_table.insert(index, handle);
+            handle
+        };
 
     let mut material_lookup_table = Vec::new();
     for material in document.materials() {

@@ -501,6 +501,7 @@ impl Device {
             .descriptor_binding_partially_bound(true)
             .descriptor_binding_variable_descriptor_count(true)
             .buffer_device_address(true)
+            .buffer_device_address_capture_replay(true)
             .shader_int8(true)
             .uniform_and_storage_buffer8_bit_access(true)
             .draw_indirect_count(true)

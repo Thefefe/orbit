@@ -10,6 +10,7 @@ layout(push_constant, std430) uniform PushConstants {
     DrawCommandsBuffer draw_commands;
     MaterialsBuffer materials_buffer;
     DirectionalLightBuffer directional_light_buffer;
+    uint irradiance_image_index;
 };
 
 layout(location = 0) in VertexOutput {
@@ -60,6 +61,12 @@ float geometry_smith(float n_dot_v, float n_dot_l, float roughness) {
 vec3 fresnel_schlick(float h_dot_v, vec3 base_reflectivity) {
     return base_reflectivity + (1.0 - base_reflectivity) * pow(1.0 - h_dot_v, 5.0);
 }
+
+vec3 fresnel_schlick_roughness(float cos_theta, vec3 base_reflectivity, float roughness)
+{
+    return base_reflectivity + (max(vec3(1.0 - roughness), base_reflectivity) - base_reflectivity)
+     * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+}   
 
 float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
     vec3 proj_coords = light_space_frag_pos.xyz / light_space_frag_pos.w;
@@ -221,7 +228,16 @@ void main() {
                 roughness
             ) * shadow;
 
-            vec3 ambient = vec3(0.03) * albedo.rgb * ao;
+            vec3 kS = fresnel_schlick_roughness(
+                max(dot(normal, light_direction), 0.0),
+                base_reflectivity,
+                roughness
+            ); 
+            vec3 kD = 1.0 - kS;
+            vec3 irradiance = texture(GetSampledTextureCube(irradiance_image_index), normal).rgb;
+            vec3 diffuse    = irradiance * albedo;
+            vec3 ambient    = (kD * diffuse) * ao; 
+
             out_color.rgb = ambient + Lo + emissive * 4.0;
             break;
         case 1: 

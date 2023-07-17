@@ -79,9 +79,10 @@ float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
 
     float shadow = 0.0;
     vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    for(int x = -1; x <= 1; ++x)
+    const int SAMPLES = 2;
+    for(int x = -SAMPLES; x <= SAMPLES; ++x)
     {
-        for(int y = -1; y <= 1; ++y)
+        for(int y = -SAMPLES; y <= SAMPLES; ++y)
         {
             shadow += texture(
                 sampler2DShadow(GetTexture2D(shadow_map), _uComparisonSamplers[SHADOW_SAMPLER]),
@@ -89,7 +90,7 @@ float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
             );
         }    
     }
-    shadow /= 9.0;
+    shadow /= (SAMPLES * 2 + 1) * (SAMPLES * 2 + 1);
 
     return shadow;
 }
@@ -171,7 +172,7 @@ void main() {
         vec4 normal_tex = texture(GetSampledTexture2D(material.normal_texture_index), vout.uv);
         vec3 normal_tang = normal_tex.xyz * 2.0 - 1.0;
         normal_tang.z = sqrt(abs(1 - normal_tang.x*normal_tang.x - normal_tang.y * normal_tang.y));
-        normal = vout.TBN * normal_tang;
+        normal = normalize(vout.TBN * normal_tang);
     }
     
     if (material.metallic_roughness_texture_index != TEXTURE_NONE) {
@@ -191,8 +192,7 @@ void main() {
 
     vec3 base_reflectivity = mix(vec3(0.04), albedo, metallic);
 
-    vec3 N = normalize(normal);
-    vec3 V = normalize(per_frame_buffer.data.view_pos - vout.world_pos.xyz);
+    vec3 view_direction = normalize(per_frame_buffer.data.view_pos - vout.world_pos.xyz);
 
     out_color.a = base_color.a;
     if (out_color.a < 0.5) {
@@ -218,7 +218,7 @@ void main() {
             vec3 light_color = directional_light_buffer.data.color;
             light_color *= directional_light_buffer.data.intensitiy;
             vec3 Lo = calculate_light(
-                V,
+                view_direction,
                 light_direction,
                 light_color,
                 base_reflectivity,
@@ -229,7 +229,7 @@ void main() {
             ) * shadow;
 
             vec3 kS = fresnel_schlick_roughness(
-                max(dot(normal, light_direction), 0.0),
+                max(dot(normal, view_direction), 0.0),
                 base_reflectivity,
                 roughness
             ); 
@@ -241,12 +241,12 @@ void main() {
             out_color.rgb = ambient + Lo + emissive * 4.0;
             break;
         case 1: 
-            // out_color = vec4(mod(vout.uv, 1.0), 0.0, 1.0);
             float shadow = max(shadow, 0.7);
             vec3 cascade_color = vec3(0.25);
             if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
                 cascade_color = CASCADE_COLORS[cascade_index];
             out_color = vec4(cascade_color * albedo * shadow, 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 2: 
             out_color = vec4(normal * 0.5 + 0.5, 1.0);
@@ -269,13 +269,8 @@ void main() {
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 7: 
-            // uint ihash = hash(in_material_index);
-            // vec3 icolor = vec3(float(ihash & 255), float((ihash >> 8) & 255), float((ihash >> 16) & 255)) / 255.0;
             out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
-    }
-
-    if (render_mode != 0) {
-        out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
     }
 }

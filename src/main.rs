@@ -3,7 +3,6 @@
 use std::{f32::consts::PI, borrow::Cow};
 
 use ash::vk;
-use glam::Vec3Swizzles;
 use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
 use assets::GpuAssetStore;
@@ -166,19 +165,26 @@ const NDC_BOUNDS: [Vec4; 8] = [
 ];
 
 const MAX_SHADOW_CASCADE_COUNT: usize = 4;
-const SHADOW_RESOLUTION: u32 = 1024;
+const SHADOW_RESOLUTION: u32 = 1024 * 1;
 
-fn uniform_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32{
-    near + (far - near) * (index as f32 / cascade_count as f32)
-}
+// fn uniform_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32{
+//     near + (far - near) * (index as f32 / cascade_count as f32)
+// }
 
-fn logarithmic_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32 {
-    near * (far / near).powf(index as f32 / cascade_count as f32)
-}
+// fn logarithmic_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32 {
+//     near * (far / near).powf(index as f32 / cascade_count as f32)
+// }
 
-fn practical_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize, lambda: f32) -> f32 {
-    logarithmic_frustum_split(index, near, far, cascade_count) * lambda +
-    uniform_frustum_split(index, near, far, cascade_count) * (1.0 - lambda)
+// fn practical_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize, lambda: f32) -> f32 {
+//     logarithmic_frustum_split(index, near, far, cascade_count) * lambda +
+//     uniform_frustum_split(index, near, far, cascade_count) * (1.0 - lambda)
+// }
+
+fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
+    let uniform = near + (far - near) * ratio;
+    let log = near * (far / near).powf(ratio);
+    
+    log * lambda + (1.0 - lambda) * uniform
 }
 
 fn frustum_planes_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
@@ -200,47 +206,25 @@ fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec4; 8] {
     })
 }
 
-fn directional_light_projection_from_view_frustum(
-    frustum_corners_world_space: &[Vec4; 8],
-    light_direction: Quat,
-    resolution: u32,
-) -> Mat4 {
-    let mut min = Vec3A::splat(f32::MAX);
-    let mut max = Vec3A::splat(f32::MIN);
-    for corner_world_space in frustum_corners_world_space.iter().copied() {
-        let corner_light_space = light_direction * Vec3A::from(corner_world_space);
-        
-        min = min.min(corner_light_space);
-        max = max.max(corner_light_space);
-    }
+fn perspective_corners(fovy: f32, aspect_ratio: f32, near: f32, far: f32) -> [Vec4; 8] {
+    let tan_half_h = f32::tan(fovy / 2.0) * aspect_ratio;
+    let tan_half_v = f32::tan(fovy / 2.0);
 
-    let mut left_top = min.xy();
-    let mut right_bottom = max.xy();
+    let xn = near * tan_half_h;
+    let yn = near * tan_half_v;
+    let xf = far * tan_half_h;
+    let yf = far * tan_half_v;
 
-    //make constant size
-    let far_diagonal = Vec3A::distance(frustum_corners_world_space[6].into(), frustum_corners_world_space[4].into());
-    let forward_diagonal = Vec3A::distance(frustum_corners_world_space[6].into(), frustum_corners_world_space[0].into());
-    let max_size = f32::max(far_diagonal, forward_diagonal);
-
-    // make the cascade square
-    let size = right_bottom - left_top;
-    let half_diff = (Vec2::splat(max_size) - size) / 2.0;
-    left_top -= half_diff;
-    right_bottom += half_diff;
-
-    // align to texels
-    let pixel_size = max_size / resolution as f32;
-    left_top = (left_top / pixel_size).floor() * pixel_size;
-    right_bottom = (right_bottom / pixel_size).floor() * pixel_size;
-
-    let light_view = Mat4::from_quat(light_direction);
-    let light_projection = Mat4::orthographic_rh(
-        left_top.x, right_bottom.x,
-        left_top.y, right_bottom.y,
-        -min.z + 150.0, -max.z - 150.0,
-    );
-
-    light_projection * light_view
+    [
+        vec4(-xn, -yn, -near,  1.0),
+        vec4( xn, -yn, -near,  1.0),
+        vec4( xn,  yn, -near,  1.0),
+        vec4(-xn,  yn, -near,  1.0),
+        vec4(-xf, -yf, -far,   1.0),
+        vec4( xf, -yf, -far,   1.0),
+        vec4( xf,  yf, -far,   1.0),
+        vec4(-xf,  yf, -far,   1.0),
+    ]
 }
 
 #[repr(C)]
@@ -425,7 +409,7 @@ impl App {
                 position: vec3(0.0, 2.0, 0.0),
                 ..Default::default()
             },
-            projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.001 },
+            projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.03 },
             // projection: Projection::Orthographic { half_width: 32.0, near_clip: 0.0, far_clip: 1000.0 },
         };
         scene.update_instances(context);
@@ -476,8 +460,8 @@ impl App {
             render_mode: 0,
             camera_exposure: 1.0,
             light_color: Vec3::splat(1.0),
-            light_intensitiy: 10.0,
-            max_shadow_distance: 200.0,
+            light_intensitiy: 32.0,
+            max_shadow_distance: 80.0,
             frustum_split_lambda: 0.8,
             selected_cascade: 0,
             view_mock_camera: false,
@@ -761,52 +745,85 @@ impl App {
         };
         
         let lambda = self.frustum_split_lambda;
-        let shadow_maps: [render::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
-            
+
+        let shadow_projections: [Mat4; MAX_SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
             let Projection::Perspective { fov, near_clip } = main_camera.projection else { todo!() };
             let far_clip = self.max_shadow_distance;
             
-            let near = practical_frustum_split(i, near_clip, far_clip, MAX_SHADOW_CASCADE_COUNT, lambda);
-            let far = practical_frustum_split(i+1, near_clip, far_clip, MAX_SHADOW_CASCADE_COUNT, lambda);
-            let projection = Mat4::perspective_rh(fov, aspect_ratio, near, far);
-            let view_projection = projection * view_matrix;
-            let subfrustum_corners = frustum_corners_from_matrix(&view_projection);
+            let near = frustum_split(near_clip, far_clip, lambda, i as f32 / MAX_SHADOW_CASCADE_COUNT as f32);
+            let far = frustum_split(near_clip, far_clip, lambda, (i+1) as f32 / MAX_SHADOW_CASCADE_COUNT as f32);
+
+            let light_matrix = Mat4::from_quat(inv_light_direction);
+            let view_to_world_matrix = main_camera.transform.compute_matrix();
+
+            let subfrustum_corners_view_space = perspective_corners(fov, aspect_ratio, near, far);
             
-            let light_projection = directional_light_projection_from_view_frustum(
-                &subfrustum_corners,
-                inv_light_direction,
-                SHADOW_RESOLUTION,
+            let mut subfrustum_center_view_space = Vec4::ZERO;
+            for corner in subfrustum_corners_view_space.iter().copied() {
+                subfrustum_center_view_space += corner;
+            }
+            subfrustum_center_view_space /= 8.0;
+            
+            let mut radius_sqr = 0.0;
+            for corner in subfrustum_corners_view_space.iter().copied() {
+                let corner = Vec3A::from(corner);
+                radius_sqr = f32::max(radius_sqr, corner.distance_squared(subfrustum_center_view_space.into()));
+            }
+            let radius = radius_sqr.sqrt();
+
+            let view_to_light_matrix = light_matrix * view_to_world_matrix;
+            let subfrustum_center_light_space = view_to_light_matrix * subfrustum_center_view_space;
+            let subfrustum_center_light_space = Vec3A::from(subfrustum_center_light_space)
+                / subfrustum_center_light_space.w;
+
+            let texel_size_vs = radius * 2.0 / SHADOW_RESOLUTION as f32;
+            
+            // texel alignment
+            let subfrustum_center_light_space = (subfrustum_center_light_space / texel_size_vs).floor() * texel_size_vs;
+
+            let mut max_extent = Vec3A::splat(radius);
+            let mut min_extent = -max_extent;
+
+            max_extent += subfrustum_center_light_space;
+            min_extent += subfrustum_center_light_space;
+
+            let light_projection = Mat4::orthographic_rh(
+                min_extent.x, max_extent.x,
+                min_extent.y, max_extent.y,
+                150.0, -150.0,
             );
-            
-            let cascade_frustum_corners = frustum_corners_from_matrix(&light_projection);
-            
-            
+
             if self.show_cascade_view_frustum && self.selected_cascade == i {
-                self.debug_line_renderer.draw_frustum(&subfrustum_corners, Vec4::splat(1.0));
+                let subfrustum_corners_w = subfrustum_corners_view_space.map(|v| view_to_world_matrix * v);
+                self.debug_line_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
             }
             
             if self.show_cascade_light_frustum && self.selected_cascade == i {
+                let cascade_frustum_corners = frustum_corners_from_matrix(&light_projection);
                 self.debug_line_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
             }
+            
+            light_projection * light_matrix
+        });
 
-            let shadow_map = self.shadow_map_renderer.render_shadow_map(
+        let shadow_maps: [render::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
+            self.shadow_map_renderer.render_shadow_map(
                 format!("sun_cascade_{i}").into(),
                 context,
                 SHADOW_RESOLUTION,
-                light_projection,
+                shadow_projections[i],
                 shadow_map_draw_commands,
                 vertex_buffer,
                 index_buffer,
                 entity_buffer
-            );
-            
-            directional_light_data.projection_matrices[i] = light_projection;
-            directional_light_data.shadow_maps[i] = context
-                .get_transient_resource_descriptor_index(shadow_map)
-                .unwrap();
-
-            shadow_map
+            )
         });
+
+        directional_light_data.projection_matrices = shadow_projections;
+        directional_light_data.shadow_maps = shadow_maps.map(|map| context
+            .get_transient_resource_descriptor_index(map)
+            .unwrap()
+        );
 
         let directional_light_buffer = context
             .transient_storage_data("directional_light_data", bytemuck::bytes_of(&directional_light_data));
@@ -1227,7 +1244,7 @@ impl ShadowMapRenderer {
             pipeline
         };
 
-        Self { pipeline, depth_bias: [-4.0, 0.0, -1.5] }
+        Self { pipeline, depth_bias: [-4.0, 0.0, -4.0] }
     }
 
     pub fn render_shadow_map(
@@ -1345,6 +1362,7 @@ pub struct DebugLineRenderer {
 
 impl DebugLineRenderer {
     pub const MAX_VERTEX_COUNT: usize = 1_000_000;
+    const CIRCLE_LINE_SEGMENTS: usize = 24;
 
     pub fn new(context: &render::Context) -> Self {
         let pipeline = {
@@ -1495,6 +1513,41 @@ impl DebugLineRenderer {
             DebugLineVertex { position: pos - vec3(-1.0, -1.0, 1.0) * 0.01, color },
             DebugLineVertex { position: pos + vec3(-1.0, -1.0, 1.0) * 0.01, color },
         ]);
+    }
+
+    pub fn draw_sphere(&mut self, pos: Vec3, radius: f32, color: Vec4) {
+        self.draw_cross(pos, color);
+        let color = color.to_array().map(|f| (f * 255.0) as u8);
+
+        let mut circle_vertices = [
+            DebugLineVertex { position: Vec3::ZERO, color };
+            Self::CIRCLE_LINE_SEGMENTS * 2
+        ];
+
+        for (vertex_index, vertex) in circle_vertices.iter_mut().enumerate() {
+            let point = vertex_index / 2 + (vertex_index % 2);
+            let ratio = point as f32 / Self::CIRCLE_LINE_SEGMENTS as f32;
+            let theta = ratio * 2.0 * PI;
+            vertex.position = pos + vec3(theta.sin() * radius, theta.cos() * radius, 0.0);
+        }
+        self.add_vertices(&circle_vertices);
+
+        for (vertex_index, vertex) in circle_vertices.iter_mut().enumerate() {
+            let point = vertex_index / 2 + (vertex_index % 2);
+            let ratio = point as f32 / Self::CIRCLE_LINE_SEGMENTS as f32;
+            let theta = ratio * 2.0 * PI;
+            vertex.position = pos + vec3(theta.sin() * radius, 0.0, theta.cos() * radius);
+        }
+        self.add_vertices(&circle_vertices);
+
+        for (vertex_index, vertex) in circle_vertices.iter_mut().enumerate() {
+            let point = vertex_index / 2 + (vertex_index % 2);
+            let ratio = point as f32 / Self::CIRCLE_LINE_SEGMENTS as f32;
+            let theta = ratio * 2.0 * PI;
+            vertex.position = pos + vec3(0.0, theta.sin() * radius, theta.cos() * radius);
+        }
+        self.add_vertices(&circle_vertices);
+    
     }
 
     pub fn render(
@@ -1848,7 +1901,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::IMMEDIATE,
+            present_mode: vk::PresentModeKHR::FIFO,
         },
     );
 

@@ -47,6 +47,7 @@ void main() {
     vout.material_index = draw_commands.commands[gl_DrawID].material_index;
 
     for (uint i = 0; i < MAX_SHADOW_CASCADE_COUNT; ++i) {
-        vout.cascade_map_coords[i] = directional_light_buffer.data.projection_matrices[i] * vec4(vout.world_pos.xyz, 1.0);
+        mat4 light_proj_matrix = directional_light_buffer.data.projection_matrices[i] * model_matrix;
+        vout.cascade_map_coords[i] = light_proj_matrix * vec4(vertex.pos, 1.0);
     }
 }

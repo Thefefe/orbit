@@ -254,13 +254,12 @@ struct App {
     scene_draw_gen: SceneDrawGen,
     shadow_map_renderer: ShadowMapRenderer,
     scree_blitter: ScreenPostProcess,
-    equirectangular_cube_map_loader: EquirectangularCubeMapLoader,
+    equirectangular_cube_map_loader: EnvironmentMapLoader,
     
     forward_pipeline: render::RasterPipeline,
     skybox_pipeline: render::RasterPipeline,
 
-    skybox_image: render::Image,
-    irradiance_image: render::Image,
+    environment_map: EnvironmentMap,
 
     camera: Camera,
     camera_controller: CameraController,
@@ -414,9 +413,9 @@ impl App {
         };
         scene.update_instances(context);
 
-        let equirectangular_cube_map_loader = EquirectangularCubeMapLoader::new(context);
+        let equirectangular_cube_map_loader = EnvironmentMapLoader::new(context);
 
-        let environment_map = {
+        let equirectangular_environment_image = {
             let (image_binary, image_format) = gltf_loader::load_image_data("C:\\Users\\thefe\\Downloads\\spree_bank_4k.dds")
                 .unwrap();
             let mut image =
@@ -427,10 +426,10 @@ impl App {
             image
         };
 
-        let (skybox_image, irradiance_image) = equirectangular_cube_map_loader
-            .create_cube_map(&context, "skybox".into(), 1024, &environment_map);
+        let environment_map = equirectangular_cube_map_loader
+            .create_from_equirectangular_image(&context, "environment_map".into(), 1024, &equirectangular_environment_image);
 
-        context.destroy_image(&environment_map);
+        context.destroy_image(&equirectangular_environment_image);
 
         Self {
             gpu_assets,
@@ -444,8 +443,7 @@ impl App {
             forward_pipeline,
             skybox_pipeline,
 
-            skybox_image,
-            irradiance_image,
+            environment_map,
 
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
@@ -722,8 +720,8 @@ impl App {
             .import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
         let submesh_count = self.scene.submesh_data.len() as u32;
 
-        let skybox_image = context.import_image("skybox", &self.skybox_image, &Default::default());
-        let irradiance_image = context.import_image("irradiance_image", &self.irradiance_image, &Default::default());
+        let skybox_image = context.import_image("skybox", &self.environment_map.skybox, &Default::default());
+        let irradiance_image = context.import_image("irradiance_image", &self.environment_map.irradiance, &Default::default());
 
         let draw_commands_buffer = self.scene_draw_gen
             .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
@@ -1013,10 +1011,9 @@ impl App {
         self.shadow_map_renderer.destroy(context);
         self.scree_blitter.destroy(context);
         self.equirectangular_cube_map_loader.destroy(context);
+        self.environment_map.destroy(context);
         context.destroy_pipeline(&self.forward_pipeline);
         context.destroy_pipeline(&self.skybox_pipeline);
-        context.destroy_image(&self.skybox_image);
-        context.destroy_image(&self.irradiance_image);
     }
 }
 
@@ -1633,13 +1630,31 @@ impl DebugLineRenderer {
     }
 }
 
-pub struct EquirectangularCubeMapLoader {
-    equirectangular_to_cube_pipeline: render::RasterPipeline,
-    cube_map_convolution_pipeline: render::RasterPipeline,
+pub struct EnvironmentMap {
+    pub skybox: render::Image,
+    pub irradiance: render::Image,
+    pub prefiltered: render::Image,
 }
 
-impl EquirectangularCubeMapLoader {
+impl EnvironmentMap {
+    pub fn destroy(&self, context: &render::Context) {
+        context.destroy_image(&self.skybox);
+        context.destroy_image(&self.irradiance);
+        context.destroy_image(&self.prefiltered);
+    }
+}
+
+pub struct EnvironmentMapLoader {
+    equirectangular_to_cube_pipeline: render::RasterPipeline,
+    cube_map_convolution_pipeline: render::RasterPipeline,
+    cube_map_prefilter_pipeline: render::RasterPipeline,
+}
+
+impl EnvironmentMapLoader {
     pub const FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
+    const IRRADIANCE_SIZE: u32 = 32;
+    const PREFILTERD_SIZE: u32 = 128;
+    const PREFILTERED_MIP_LEVELS: u32 = 5;
 
     pub fn new(context: &render::Context) -> Self {
         let vertex_shader = utils::load_spv("shaders/unit_cube.vert.spv").unwrap();
@@ -1724,6 +1739,48 @@ impl EquirectangularCubeMapLoader {
                 multisample: render::MultisampleCount::None,
                 dynamic_states: &[],
             });
+            
+            context.destroy_shader_module(fragment_module);
+            
+            pipeline
+        };
+
+        let cube_map_prefilter_pipeline = {
+            let fragment_shader = utils::load_spv("shaders/environmental_map_prefilter.frag.spv").unwrap();
+
+            let fragment_module = context
+                .create_shader_module(&fragment_shader, "cubemap_convolution_fragment_shader");
+
+            let entry = cstr::cstr!("main");
+
+            let pipeline = context.create_raster_pipeline("cubemap_convolution_pipeline", &render::RasterPipelineDesc {
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: Some(render::ShaderStage {
+                    module: fragment_module,
+                    entry,
+                }),
+                vertex_input: render::VertexInput::default(),
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_bias: None,
+                    depth_clamp: false,
+                },
+                color_attachments: &[render::PipelineColorAttachment {
+                    format: Self::FORMAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }],
+                depth_state: None,
+                multisample: render::MultisampleCount::None,
+                dynamic_states: &[],
+            });
 
             context.destroy_shader_module(fragment_module);
 
@@ -1732,18 +1789,17 @@ impl EquirectangularCubeMapLoader {
 
         context.destroy_shader_module(vertex_module);
 
-        Self { equirectangular_to_cube_pipeline, cube_map_convolution_pipeline  }
+        Self { equirectangular_to_cube_pipeline, cube_map_convolution_pipeline, cube_map_prefilter_pipeline  }
     }
 
-    pub fn create_cube_map(
+    pub fn create_from_equirectangular_image(
         &self,
         context: &render::Context,
         name: Cow<'static, str>,
         resolution: u32,
-        equirectangular_image: &render::ImageView
-    ) -> (render::Image, render::Image) {
-        let conv_name = format!("{name}_convoluted");
-        let cube_map = context.create_image(name, &render::ImageDesc {
+        equirectangular_image: &render::ImageView,
+    ) -> EnvironmentMap {
+        let skybox = context.create_image(format!("{name}_skybox"), &render::ImageDesc {
             ty: render::ImageType::Cube,
             format: vk::Format::R16G16B16A16_SFLOAT,
             dimensions: [resolution, resolution, 1],
@@ -1753,13 +1809,23 @@ impl EquirectangularCubeMapLoader {
             aspect: vk::ImageAspectFlags::COLOR,
         });
 
-        let convoluted_cube_map = context.create_image(conv_name, &render::ImageDesc {
+        let irradiance = context.create_image(format!("{name}_convoluted"), &render::ImageDesc {
             ty: render::ImageType::Cube,
             format: vk::Format::R16G16B16A16_SFLOAT,
-            dimensions: [32, 32, 1],
+            dimensions: [Self::IRRADIANCE_SIZE, Self::IRRADIANCE_SIZE, 1],
             mip_levels: 1,
             samples: render::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            aspect: vk::ImageAspectFlags::COLOR,
+        });
+
+        let prefiltered = context.create_image(format!("{name}_prefilterd"), &render::ImageDesc {
+            ty: render::ImageType::Cube,
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            dimensions: [Self::PREFILTERD_SIZE, Self::PREFILTERD_SIZE, 1],
+            mip_levels: Self::PREFILTERED_MIP_LEVELS,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
         });
 
@@ -1772,18 +1838,28 @@ impl EquirectangularCubeMapLoader {
             Mat4::look_at_rh(vec3(0.0, 0.0, 0.0), vec3( 0.0,  0.0, -1.0), vec3(0.0,  1.0,  0.0)),
         ];
 
+        let scratch_image = context.create_image("scratch_image", &render::ImageDesc {
+            ty: render::ImageType::Single2D,
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            dimensions: [Self::PREFILTERD_SIZE, Self::PREFILTERD_SIZE, 1],
+            mip_levels: 1,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
+            aspect: vk::ImageAspectFlags::COLOR,
+        });
+
         context.record_and_submit(|cmd| {
             cmd.barrier(&[], &[
-                render::image_barrier(&cube_map, render::AccessKind::None, render::AccessKind::ColorAttachmentWrite)
+                render::image_barrier(&skybox, render::AccessKind::None, render::AccessKind::ColorAttachmentWrite)
             ], &[]);
 
             for i in 0..6 {
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(cube_map.layer_views[i])
+                    .image_view(skybox.layer_views[i])
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .clear_value(vk::ClearValue {
-                        color: vk::ClearColorValue {
+                    .clear_value(vk::ClearValue {                    
+                            color: vk::ClearColorValue {
                             float32: [0.1, 0.5, 0.9, 1.0],
                         }
                     })
@@ -1791,45 +1867,44 @@ impl EquirectangularCubeMapLoader {
 
                 let rendering_info = vk::RenderingInfo::builder()
                     .color_attachments(std::slice::from_ref(&color_attachment))
-                    .render_area(cube_map.full_rect())
+                    .render_area(skybox.full_rect())
                     .layer_count(1);
 
                 cmd.begin_rendering(&rendering_info);
 
-                #[repr(C)]
-                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-                struct PushConstants {
-                    matrix: Mat4,
-                    image_index: u32,
-                    _padding: [u32; 3],
-                }
                 cmd.bind_raster_pipeline(self.equirectangular_to_cube_pipeline);
-                cmd.push_constants(bytemuck::bytes_of(&PushConstants {
-                    matrix: view_matrices[i],
-                    image_index: equirectangular_image.descriptor_index.unwrap(),
-                    _padding: [0; 3],
-                }), 0);
+
+                cmd.build_constants()
+                    .mat4(&view_matrices[i])
+                    .image(&equirectangular_image)
+                    .push();
+
                 cmd.draw(0..36, 0..1);
 
-                cmd.end_rendering()
+                cmd.end_rendering();
             }
             
             cmd.barrier(&[], &[
                 render::image_barrier(
-                    &cube_map,
+                    &skybox,
                     render::AccessKind::ColorAttachmentWrite,
                     render::AccessKind::AllGraphicsRead,
                 ),
                 render::image_barrier(
-                    &convoluted_cube_map,
+                    &irradiance,
                     render::AccessKind::None,
                     render::AccessKind::ColorAttachmentWrite,
                 ),
+                render::image_barrier(
+                    &prefiltered,
+                    render::AccessKind::None,
+                    render::AccessKind::TransferWrite,
+                ),
             ], &[]);
 
             for i in 0..6 {
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(convoluted_cube_map.layer_views[i])
+                    .image_view(irradiance.layer_views[i])
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
@@ -1841,44 +1916,119 @@ impl EquirectangularCubeMapLoader {
 
                 let rendering_info = vk::RenderingInfo::builder()
                     .color_attachments(std::slice::from_ref(&color_attachment))
-                    .render_area(convoluted_cube_map.full_rect())
+                    .render_area(irradiance.full_rect())
                     .layer_count(1);
 
                 cmd.begin_rendering(&rendering_info);
 
-                #[repr(C)]
-                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-                struct PushConstants {
-                    matrix: Mat4,
-                    image_index: u32,
-                    _padding: [u32; 3],
-                }
                 cmd.bind_raster_pipeline(self.cube_map_convolution_pipeline);
-                cmd.push_constants(bytemuck::bytes_of(&PushConstants {
-                    matrix: view_matrices[i],
-                    image_index: cube_map.descriptor_index.unwrap(),
-                    _padding: [0; 3],
-                }), 0);
+                
+                cmd.build_constants()
+                    .mat4(&view_matrices[i])
+                    .image(&skybox)
+                    .push();
+
                 cmd.draw(0..36, 0..1);
 
-                cmd.end_rendering()
+                cmd.end_rendering();
+            }
+
+            for face in 0..6u32 {
+                let mut extent = [Self::PREFILTERD_SIZE; 2];
+                for mip_level in 0..Self::PREFILTERED_MIP_LEVELS {
+                    cmd.barrier(&[], &[render::image_barrier(
+                        &scratch_image,
+                        render::AccessKind::None,
+                        render::AccessKind::ColorAttachmentWrite
+                    )], &[]);
+                    let color_attachment = vk::RenderingAttachmentInfo::builder()
+                        .image_view(scratch_image.view)
+                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .load_op(vk::AttachmentLoadOp::CLEAR)
+                        .clear_value(vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                float32: [0.1, 0.5, 0.9, 1.0],
+                            }
+                        })
+                        .store_op(vk::AttachmentStoreOp::STORE);
+    
+                    let rendering_info = vk::RenderingInfo::builder()
+                        .color_attachments(std::slice::from_ref(&color_attachment))
+                        .render_area(vk::Rect2D {
+                            offset: vk::Offset2D::default(),
+                            extent: vk::Extent2D { width: extent[0], height: extent[1] }
+                        })
+                        .layer_count(1);
+    
+                    cmd.begin_rendering(&rendering_info);
+    
+                    cmd.bind_raster_pipeline(self.cube_map_prefilter_pipeline);
+                    
+                    let roughness = mip_level as f32 / (Self::PREFILTERED_MIP_LEVELS - 1) as f32;
+
+                    cmd.build_constants()
+                        .mat4(&view_matrices[face as usize])
+                        .image(&skybox)
+                        .float(roughness)
+                        .push();
+    
+                    cmd.draw(0..36, 0..1);
+    
+                    cmd.end_rendering();
+                    
+                    cmd.barrier(&[], &[render::image_barrier(
+                        &scratch_image,
+                        render::AccessKind::ColorAttachmentWrite,
+                        render::AccessKind::TransferRead,
+                    )], &[]);
+
+                    cmd.copy_image(
+                        &scratch_image, vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                        &prefiltered,   vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &[vk::ImageCopy {
+                            src_subresource: scratch_image.subresource_layers(0, ..),
+                            src_offset: vk::Offset3D::default(),
+                            dst_subresource: prefiltered.subresource_layers(mip_level, face..face+1),
+                            dst_offset: vk::Offset3D::default(),
+                            extent: vk::Extent3D {
+                                width: extent[0],
+                                height: extent[1],
+                                depth: 1,
+                            },
+                        }],
+                    );
+
+                    extent = extent.map(gltf_loader::next_mip_size);
+                }
             }
             
             cmd.barrier(&[], &[
                 render::image_barrier(
-                    &convoluted_cube_map,
+                    &irradiance,
                     render::AccessKind::ColorAttachmentWrite,
                     render::AccessKind::AllGraphicsRead,
-                )
+                ),
+                render::image_barrier(
+                    &prefiltered,
+                    render::AccessKind::TransferWrite,
+                    render::AccessKind::AllGraphicsRead,
+                ),
             ], &[]);
         });
 
-        (cube_map, convoluted_cube_map)
+        context.destroy_image(&scratch_image);
+
+        EnvironmentMap {
+            skybox,
+            irradiance,
+            prefiltered,
+        }
     }
 
     pub fn destroy(&self, context: &render::Context) {
         context.destroy_pipeline(&self.equirectangular_to_cube_pipeline);
         context.destroy_pipeline(&self.cube_map_convolution_pipeline);
+        context.destroy_pipeline(&self.cube_map_prefilter_pipeline);
     }
 }
 
@@ -1901,7 +2051,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::FIFO,
+            present_mode: vk::PresentModeKHR::IMMEDIATE,
         },
     );
 

@@ -6,39 +6,17 @@ use std::sync::{
 };
 use ash::vk;
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct GpuBindingContants {
-    indices: [DescriptorIndex; 32],
-}
-
-impl GpuBindingContants {
-    pub fn new() -> Self {
-        Self {
-            indices: [0; 32],
-        }
-    }
-
-    pub fn set(&mut self, bindings: impl IntoIterator<Item = DescriptorIndex>) -> &[DescriptorIndex] {
-        let mut len = 0;
-        for binding in bindings {
-            self.indices[len] = binding;
-            len += 1;
-        }
-
-        &self.indices[0..len]
-    }
-}
-
+#[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DescriptorTableType {
-    Buffer,
-    Image,
+    StorageBuffer = 0,
+    SampledImage  = 1,
+    StorageImage  = 2,
 }
 
 impl DescriptorTableType {
     fn all_types() -> impl Iterator<Item = Self> {
-        [Self::Buffer, Self::Image].into_iter()
+        [Self::StorageBuffer, Self::SampledImage].into_iter()
     }
 
     fn set_index(self) -> u32 {
@@ -47,36 +25,42 @@ impl DescriptorTableType {
 
     fn from_set_index(set_index: u32) -> Self {
         match set_index {
-            0 => Self::Buffer,
-            1 => Self::Image,
+            0 => Self::StorageBuffer,
+            1 => Self::SampledImage,
             _ => panic!("invalid set index"),
         }
     }
 
     fn to_vk(self) -> vk::DescriptorType {
         match self {
-            DescriptorTableType::Buffer => vk::DescriptorType::STORAGE_BUFFER,
-            DescriptorTableType::Image => vk::DescriptorType::SAMPLED_IMAGE,
+            DescriptorTableType::StorageBuffer  => vk::DescriptorType::STORAGE_BUFFER,
+            DescriptorTableType::SampledImage   => vk::DescriptorType::SAMPLED_IMAGE,
+            DescriptorTableType::StorageImage   => vk::DescriptorType::STORAGE_IMAGE,
         }
     }
 
     fn name(self) -> &'static str {
         match self {
-            DescriptorTableType::Buffer => "buffer",
-            DescriptorTableType::Image => "sampled_image",
+            DescriptorTableType::StorageBuffer  => "storage_buffer",
+            DescriptorTableType::SampledImage   => "sampled_image",
+            DescriptorTableType::StorageImage   => "storage_image",
         }
     }
 
     fn max_count(self, device: &render::Device) -> u32 {
         let props = &device.gpu.properties.properties12;
         match self {
-            DescriptorTableType::Buffer => u32::min(
+            DescriptorTableType::StorageBuffer => u32::min(
                 props.max_descriptor_set_update_after_bind_storage_buffers,
                 props.max_per_stage_descriptor_update_after_bind_storage_buffers,
             ),
-            DescriptorTableType::Image => u32::min(
+            DescriptorTableType::SampledImage => u32::min(
                 props.max_descriptor_set_update_after_bind_sampled_images,
                 props.max_per_stage_descriptor_update_after_bind_sampled_images,
+            ),
+            DescriptorTableType::StorageImage => u32::min(
+                props.max_descriptor_set_update_after_bind_storage_images,
+                props.max_per_stage_descriptor_update_after_bind_storage_images,
             ),
         }
     }
@@ -144,7 +128,7 @@ impl BindlessDescriptors {
                     p_immutable_samplers: std::ptr::null(),
                 }];
 
-                if desc_type == DescriptorTableType::Image && !immutable_samplers.is_empty() {
+                if desc_type == DescriptorTableType::SampledImage && !immutable_samplers.is_empty() {
                     descriptor_binding_flags.push(vk::DescriptorBindingFlags::empty());
 
                     // Set texture binding start at the end of the immutable samplers.
@@ -177,7 +161,7 @@ impl BindlessDescriptors {
         let push_constant_range = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::ALL,
             offset: 0,
-            size: std::mem::size_of::<GpuBindingContants>() as u32,
+            size: 128,
         };
 
         let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::builder()
@@ -255,31 +239,37 @@ impl BindlessDescriptors {
         }
     }
 
-    pub fn alloc_buffer_index(&self) -> DescriptorIndex {
+    pub fn alloc_index(&self) -> DescriptorIndex {
         self.global_index_allocator.alloc()
     }
 
-    pub fn alloc_image_index(&self) -> DescriptorIndex {
-        self.global_index_allocator.alloc()
-    }
-
-    pub fn write_buffer_resource(&self, device: &render::Device, index: DescriptorIndex, handle: vk::Buffer) {
+    pub fn write_storage_buffer_resource(
+        &self,
+        device: &render::Device,
+        index: DescriptorIndex,
+        handle: vk::Buffer
+    ) {
         unsafe {
             let buffer_info =
                 vk::DescriptorBufferInfo::builder().buffer(handle).offset(0).range(vk::WHOLE_SIZE).build();
 
             let write_info = vk::WriteDescriptorSet::builder()
-                .dst_set(self.descriptor_sets[DescriptorTableType::Buffer.set_index() as usize])
+                .dst_set(self.descriptor_sets[DescriptorTableType::StorageBuffer.set_index() as usize])
                 .dst_binding(0)
                 .dst_array_element(index)
-                .descriptor_type(DescriptorTableType::Buffer.to_vk())
+                .descriptor_type(DescriptorTableType::StorageBuffer.to_vk())
                 .buffer_info(std::slice::from_ref(&buffer_info));
 
             device.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
         }
     }
 
-    pub fn write_image_resource(&self, device: &render::Device, index: DescriptorIndex, handle: vk::ImageView) {
+    pub fn write_sampled_image(
+        &self,
+        device: &render::Device,
+        index: DescriptorIndex,
+        handle: vk::ImageView
+    ) {
         unsafe {
             let image_info = vk::DescriptorImageInfo::builder()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -287,56 +277,37 @@ impl BindlessDescriptors {
                 .build();
 
             let write_info = vk::WriteDescriptorSet::builder()
-                .dst_set(self.descriptor_sets[DescriptorTableType::Image.set_index() as usize])
+                .dst_set(self.descriptor_sets[DescriptorTableType::SampledImage.set_index() as usize])
                 .dst_binding(self.immutable_samplers.len() as u32)
                 .dst_array_element(index)
-                .descriptor_type(DescriptorTableType::Image.to_vk())
+                .descriptor_type(DescriptorTableType::SampledImage.to_vk())
                 .image_info(std::slice::from_ref(&image_info));
 
             device.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
         }
     }
 
-    pub fn alloc_buffer_resource(&self, device: &render::Device, handle: vk::Buffer) -> DescriptorIndex {
-        let index = self.global_index_allocator.alloc();
-
-        unsafe {
-            let buffer_info =
-                vk::DescriptorBufferInfo::builder().buffer(handle).offset(0).range(vk::WHOLE_SIZE).build();
-
-            let write_info = vk::WriteDescriptorSet::builder()
-                .dst_set(self.descriptor_sets[DescriptorTableType::Buffer.set_index() as usize])
-                .dst_binding(0)
-                .dst_array_element(index)
-                .descriptor_type(DescriptorTableType::Buffer.to_vk())
-                .buffer_info(std::slice::from_ref(&buffer_info));
-
-            device.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
-        }
-
-        index
-    }
-
-    pub fn alloc_image_resource(&self, device: &render::Device, view_handle: vk::ImageView) -> DescriptorIndex {
-        let index = self.global_index_allocator.alloc();
-
+    pub fn write_storage_image(
+        &self,
+        device: &render::Device,
+        index: DescriptorIndex,
+        handle: vk::ImageView,
+    ) {
         unsafe {
             let image_info = vk::DescriptorImageInfo::builder()
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(view_handle)
+                .image_view(handle)
                 .build();
 
             let write_info = vk::WriteDescriptorSet::builder()
-                .dst_set(self.descriptor_sets[DescriptorTableType::Image.set_index() as usize])
-                .dst_binding(self.immutable_samplers.len() as u32)
+                .dst_set(self.descriptor_sets[DescriptorTableType::StorageImage.set_index() as usize])
+                .dst_binding(0)
                 .dst_array_element(index)
-                .descriptor_type(DescriptorTableType::Image.to_vk())
+                .descriptor_type(DescriptorTableType::StorageImage.to_vk())
                 .image_info(std::slice::from_ref(&image_info));
 
             device.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
         }
-
-        index
     }
 
     pub fn free_descriptor_index(&self, index: DescriptorIndex) {

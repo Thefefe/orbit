@@ -13,6 +13,7 @@ layout (local_size_x = 256) in;
 
 void main() {
 	draw_commands_buffer.count = 0;
+	memoryBarrier();
     uint gID = gl_GlobalInvocationID.x;
 	if (gID < submesh_buffer.count) {
 		Submesh submesh = submesh_buffer.submeshes[gID];

@@ -79,22 +79,6 @@ impl ImageView {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Image {
-    pub name: Cow<'static, str>,
-    pub full_view: render::ImageView,
-    pub layer_views: Vec<vk::ImageView>,
-    alloc_index: render::AllocIndex,
-}
-
-impl std::ops::Deref for Image {
-    type Target = render::ImageView;
-
-    fn deref(&self) -> &Self::Target {
-        &self.full_view
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageType {
     Single1D,
@@ -185,6 +169,22 @@ pub struct ImageDesc {
     pub aspect: vk::ImageAspectFlags,
 }
 
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub name: Cow<'static, str>,
+    pub full_view: render::ImageView,
+    pub layer_views: Vec<vk::ImageView>,
+    alloc_index: render::AllocIndex,
+}
+
+impl std::ops::Deref for Image {
+    type Target = render::ImageView;
+
+    fn deref(&self) -> &Self::Target {
+        &self.full_view
+    }
+}
+
 impl Image {
     pub(super) fn create_impl(
         device: &render::Device,
@@ -254,13 +254,10 @@ impl Image {
         device.set_debug_name(view, &format!("{}_full_view", name));
 
         let descriptor_index = if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
-            if let Some(descriptor_index) = preallocated_descriptor_index {
-                descriptors.write_image_resource(device, descriptor_index, view);
-                Some(descriptor_index)
-            } else {
-                let index = descriptors.alloc_image_resource(device, view);
-                Some(index)
-            }
+            let index = preallocated_descriptor_index
+                .unwrap_or_else(|| descriptors.alloc_index());
+            descriptors.write_sampled_image(device, index, view);
+            Some(index)
         } else {
             None
         };

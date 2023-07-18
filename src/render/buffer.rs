@@ -67,12 +67,10 @@ impl Buffer {
         }
 
         let descriptor_index = if desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) {
-            if let Some(descriptor_index) = preallocated_descriptor_index {
-                descriptors.write_buffer_resource(device, descriptor_index, handle);
-                Some(descriptor_index)
-            } else {
-                Some(descriptors.alloc_buffer_resource(device, handle))
-            }
+            let index = preallocated_descriptor_index
+                .unwrap_or_else(|| descriptors.alloc_index());
+            descriptors.write_storage_buffer_resource(device, index, handle);
+            Some(index)
         } else {
             None
         };

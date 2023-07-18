@@ -459,7 +459,7 @@ impl Context {
         let cache = self.transient_resource_cache.get_by_descriptor(&desc);
         let descriptor_index = match &cache {
             Some(cache) => cache.descriptor_index(),
-            None if buffer_desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) => Some(self.descriptors.alloc_buffer_index()),
+            None if buffer_desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) => Some(self.descriptors.alloc_index()),
             _ => None
         };
 
@@ -489,7 +489,7 @@ impl Context {
         let cache = self.transient_resource_cache.get_by_descriptor(&desc);
         let descriptor_index = match &cache {
             Some(cache) => cache.descriptor_index(),
-            None if image_desc.usage.contains(vk::ImageUsageFlags::SAMPLED) => Some(self.descriptors.alloc_buffer_index()),
+            None if image_desc.usage.contains(vk::ImageUsageFlags::SAMPLED) => Some(self.descriptors.alloc_index()),
             _ => None
         };
 

@@ -211,6 +211,26 @@ impl<'a> CommandRecorder<'a> {
         }
     }
 
+    pub fn copy_image(
+        &self,
+        src_image: &render::ImageView,
+        src_layout: vk::ImageLayout,
+        dst_image: &render::ImageView,
+        dst_layout: vk::ImageLayout,
+        regions: &[vk::ImageCopy],
+    ) {
+        unsafe {
+            self.device.raw.cmd_copy_image(
+                self.buffer(),
+                src_image.handle,
+                src_layout,
+                dst_image.handle,
+                dst_layout,
+                regions,
+            );
+        }
+    }
+
     #[inline(always)]
     pub fn blit_image(
         &self,
@@ -262,14 +282,16 @@ impl<'a> CommandRecorder<'a> {
             self.device.raw.cmd_set_viewport(
                 self.buffer(),
                 0,
-                &[vk::Viewport {
-                    x: offset.x as f32,
-                    y: offset.y as f32 + extent.height as f32,
-                    width: extent.width as f32,
-                    height: -(extent.height as f32),
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                }],
+                &[
+                    vk::Viewport {
+                        x: offset.x as f32,
+                        y: offset.y as f32 + extent.height as f32,
+                        width: extent.width as f32,
+                        height: -(extent.height as f32),
+                        min_depth: 0.0,
+                        max_depth: 1.0,
+                    }
+                ],
             );
 
             self.device.raw.cmd_set_scissor(self.buffer(), 0, std::slice::from_ref(&rendering_info.render_area));
@@ -357,6 +379,10 @@ impl<'a> CommandRecorder<'a> {
         }
     }
 
+    pub fn build_constants(&self) -> PushConstantBuilder {
+        PushConstantBuilder::new(self)
+    }
+
     #[inline(always)]
     pub fn draw(&self, vertices: Range<u32>, instances: Range<u32>) {
         unsafe {
@@ -438,6 +464,71 @@ impl<'a> CommandRecorder<'a> {
         unsafe {
             self.device.raw.cmd_dispatch(self.buffer(), group_counts[0], group_counts[1], group_counts[2])
         }
+    }
+}
+
+pub struct PushConstantBuilder<'a> {
+    constants: [u8; 128],
+    byte_cursor: usize,
+    command_recorder: &'a CommandRecorder<'a>,
+}
+
+impl<'a> PushConstantBuilder<'a> {
+    pub fn new(command_recorder: &'a CommandRecorder<'a>) -> Self {
+        Self {
+            constants: [0; 128],
+            byte_cursor: 0,
+            command_recorder,
+        }
+    }
+
+    #[inline(always)]
+    pub fn reamaining_byte(&self) -> usize {
+        128 - self.byte_cursor
+    }
+
+    #[inline(always)]
+    pub fn push_bytes_with_align(mut self, bytes: &[u8], align: usize) -> Self {
+        let padding = self.byte_cursor % align;
+        debug_assert!(padding + bytes.len() < self.reamaining_byte());
+
+        let offset = self.byte_cursor + padding;
+        self.constants[offset..offset + bytes.len()].copy_from_slice(bytes);
+        self.byte_cursor += padding + bytes.len();
+
+        self
+    }
+
+    #[inline(always)]
+    pub fn push(self) {
+        self.command_recorder.push_constants(&self.constants[0..self.byte_cursor], 0);
+    }
+
+    #[inline(always)]
+    pub fn uint(self, val: u32) -> Self {
+        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    }
+
+    #[inline(always)]
+    pub fn float(self, val: f32) -> Self {
+        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    }
+
+    #[inline(always)]
+    pub fn mat4(self, val: &glam::Mat4) -> Self {
+        self.push_bytes_with_align(bytemuck::bytes_of(val), std::mem::align_of_val(val))
+    }
+    
+    #[inline(always)]
+    pub fn image(self, image: &render::ImageView) -> Self {
+        let descriptor_index = image.descriptor_index.unwrap();
+        self.push_bytes_with_align(bytemuck::bytes_of(&descriptor_index), std::mem::align_of_val(&descriptor_index))
+    }
+    
+    #[inline(always)]
+    pub fn buffer(self, buffer: &render::Buffer) -> Self {
+        let address = buffer.device_address;
+        self.push_bytes_with_align(bytemuck::bytes_of(&address), std::mem::align_of_val(&address))
     }
 }
 

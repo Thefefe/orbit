@@ -125,6 +125,8 @@ impl render::Context {
     }
 
     pub fn immediate_write_buffer(&self, buffer: &render::Buffer, data: &[u8], offset: usize) {
+        puffin::profile_function!();
+        
         if data.is_empty() {
             return;
         }

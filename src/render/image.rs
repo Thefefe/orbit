@@ -340,6 +340,8 @@ impl render::Context {
         bytes: &[u8],
         subregion: Option<vk::Rect2D>
     ) {
+        puffin::profile_function!();
+
         let scratch_buffer = self.create_buffer_init("scratch_buffer", &render::BufferDesc {
             size: bytes.len(),
             usage: vk::BufferUsageFlags::TRANSFER_SRC,

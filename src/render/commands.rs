@@ -354,19 +354,6 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
-    pub fn push_bindings(&self, bindings: &[render::DescriptorIndex]) {
-        unsafe {
-            self.device.raw.cmd_push_constants(
-                self.buffer(),
-                self.descriptor.layout(),
-                vk::ShaderStageFlags::ALL,
-                0,
-                bytemuck::cast_slice(bindings),
-            )
-        }
-    }
-
-    #[inline(always)]
     pub fn push_constants(&self, constansts: &[u8], offset: u32) {
         unsafe {
             self.device.raw.cmd_push_constants(
@@ -467,6 +454,14 @@ impl<'a> CommandRecorder<'a> {
     }
 }
 
+impl Drop for CommandRecorder<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.raw.end_command_buffer(self.buffer()).unwrap();
+        }
+    }
+}
+
 pub struct PushConstantBuilder<'a> {
     constants: [u8; 128],
     byte_cursor: usize,
@@ -500,17 +495,31 @@ impl<'a> PushConstantBuilder<'a> {
     }
 
     #[inline(always)]
-    pub fn push(self) {
-        self.command_recorder.push_constants(&self.constants[0..self.byte_cursor], 0);
-    }
-
-    #[inline(always)]
     pub fn uint(self, val: u32) -> Self {
         self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
     }
 
     #[inline(always)]
-    pub fn float(self, val: f32) -> Self {
+    pub fn float(self, val: impl Into<f32>) -> Self {
+        let val = val.into();
+        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    }
+
+    #[inline(always)]
+    pub fn vec2(self, val: impl Into<glam::Vec2>) -> Self {
+        let val = val.into();
+        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    }
+
+    #[inline(always)]
+    pub fn vec3(self, val: impl Into<glam::Vec3>) -> Self {
+        let val = val.into();
+        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    }
+
+    #[inline(always)]
+    pub fn vec4(self, val: impl Into<glam::Vec4>) -> Self {
+        let val = val.into();
         self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
     }
 
@@ -532,10 +541,8 @@ impl<'a> PushConstantBuilder<'a> {
     }
 }
 
-impl Drop for CommandRecorder<'_> {
+impl Drop for PushConstantBuilder<'_> {
     fn drop(&mut self) {
-        unsafe {
-            self.device.raw.end_command_buffer(self.buffer()).unwrap();
-        }
+        self.command_recorder.push_constants(&self.constants[0..self.byte_cursor], 0);
     }
 }

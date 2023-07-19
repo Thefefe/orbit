@@ -1039,8 +1039,7 @@ impl App {
 
                 cmd.build_constants()
                     .mat4(&skybox_view_projection_matrix)
-                    .image(&skybox_image)
-                    .push();
+                    .image(&skybox_image);
 
                 cmd.draw(0..36, 0..1);
 
@@ -1056,8 +1055,7 @@ impl App {
                     .buffer(&directional_light_buffer)
                     .image(&irradiance_image)
                     .image(&prefiltered_env_map)
-                    .image(&brdf_integration_map)
-                    .push();
+                    .image(&brdf_integration_map);
 
                 cmd.draw_indexed_indirect_count(
                     draw_commands_buffer,
@@ -1175,17 +1173,10 @@ impl ScreenPostProcess {
 
                 cmd.bind_raster_pipeline(pipeline);
 
-                #[repr(C)]
-                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-                struct PushConstants {
-                    src_image: render::DescriptorIndex,
-                    exposure: f32,
-                }
+                cmd.build_constants()
+                    .image(&src_image)
+                    .float(exposure);
 
-                cmd.push_constants(bytemuck::bytes_of(&PushConstants {
-                    src_image: src_image.descriptor_index.unwrap(),
-                    exposure,
-                }), 0);
                 cmd.draw(0..6, 0..1);
 
                 cmd.end_rendering();
@@ -1248,18 +1239,11 @@ impl SceneDrawGen {
 
                 cmd.bind_compute_pipeline(pipeline);
 
-                cmd.push_bindings(&[
-                    scene_submeshes.descriptor_index.unwrap(),
-                    mesh_infos.descriptor_index.unwrap(),
-                    draw_commands.descriptor_index.unwrap(),
-                ]);
+                cmd.build_constants()
+                    .buffer(&scene_submeshes)
+                    .buffer(&mesh_infos)
+                    .buffer(&draw_commands);
 
-                let device_addresses = [
-                    scene_submeshes.device_address,
-                    mesh_infos.device_address,
-                    draw_commands.device_address
-                ];
-                cmd.push_constants(bytemuck::cast_slice(&device_addresses), 0);
                 cmd.dispatch([scene_submesh_count / 256 + 1, 1, 1]);
             });
         
@@ -1382,21 +1366,11 @@ impl ShadowMapRenderer {
                 let [constant_factor, clamp, slope_factor] = depth_bias;
                 cmd.set_depth_bias(constant_factor, clamp, slope_factor);
 
-                #[repr(C)]
-                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-                struct ShadowMapConstants {
-                    view_projection: Mat4,
-                    vertex_buffer: u64,
-                    entity_buffer: u64,
-                }
+                cmd.build_constants()
+                    .mat4(&view_projection)
+                    .buffer(&vertex_buffer)
+                    .buffer(&entity_buffer);
 
-                let constants = ShadowMapConstants {
-                    view_projection,
-                    vertex_buffer: vertex_buffer.device_address,
-                    entity_buffer: entity_buffer.device_address,
-                };
-
-                cmd.push_constants(bytemuck::bytes_of(&constants), 0);
                 cmd.draw_indexed_indirect_count(
                     draw_commands_buffer,
                     4,
@@ -1681,13 +1655,17 @@ impl DebugLineRenderer {
                 cmd.begin_rendering(&rendering_info);
                 cmd.bind_raster_pipeline(pipeline);
                 cmd.bind_vertex_buffer(0, &line_buffer, buffer_offset as u64);
-                cmd.push_constants(bytemuck::bytes_of(&view_projection), 0);
 
-                cmd.push_constants(bytemuck::bytes_of(&0.1f32), std::mem::size_of::<Mat4>() as u32);
+
+                cmd.build_constants()
+                    .mat4(&view_projection)
+                    .float(0.1);
                 cmd.set_depth_test_enable(false);
                 cmd.draw(0..vertex_count as u32, 0..1);
                 
-                cmd.push_constants(bytemuck::bytes_of(&1.0f32), std::mem::size_of::<Mat4>() as u32);
+                cmd.build_constants()
+                    .mat4(&view_projection)
+                    .float(1.0);
                 cmd.set_depth_test_enable(true);
                 cmd.draw(0..vertex_count as u32, 0..1);
 
@@ -1951,8 +1929,7 @@ impl EnvironmentMapLoader {
 
                 cmd.build_constants()
                     .mat4(&view_matrices[i])
-                    .image(&equirectangular_image)
-                    .push();
+                    .image(&equirectangular_image);
 
                 cmd.draw(0..36, 0..1);
 
@@ -2000,8 +1977,7 @@ impl EnvironmentMapLoader {
                 
                 cmd.build_constants()
                     .mat4(&view_matrices[i])
-                    .image(&skybox)
-                    .push();
+                    .image(&skybox);
 
                 cmd.draw(0..36, 0..1);
 
@@ -2044,8 +2020,7 @@ impl EnvironmentMapLoader {
                     cmd.build_constants()
                         .mat4(&view_matrices[face as usize])
                         .image(&skybox)
-                        .float(roughness)
-                        .push();
+                        .float(roughness);
     
                     cmd.draw(0..36, 0..1);
     
@@ -2126,7 +2101,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::FIFO,
+            present_mode: vk::PresentModeKHR::IMMEDIATE,
         },
     );
 

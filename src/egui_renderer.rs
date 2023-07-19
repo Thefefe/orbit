@@ -360,11 +360,10 @@ impl EguiRenderer {
 
                     let texture = graph.get_image(batch.texture);
 
-                    cmd.push_bindings(&[
-                        bytemuck::cast(screen_size[0]),
-                        bytemuck::cast(screen_size[1]),
-                        texture.descriptor_index.unwrap(),
-                    ]);
+                    cmd.build_constants()
+                        .vec2(screen_size)
+                        .image(&texture);
+
                     cmd.draw_indexed(batch.index_range.clone(), 0..1, batch.vertex_offset);                    
                 }
 

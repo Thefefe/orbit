@@ -526,7 +526,7 @@ impl<'a> PushConstantBuilder<'a> {
     }
     
     #[inline(always)]
-    pub fn buffer(self, buffer: &render::Buffer) -> Self {
+    pub fn buffer(self, buffer: &render::BufferView) -> Self {
         let address = buffer.device_address;
         self.push_bytes_with_align(bytemuck::bytes_of(&address), std::mem::align_of_val(&address))
     }

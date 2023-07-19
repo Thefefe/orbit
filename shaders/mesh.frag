@@ -11,6 +11,8 @@ layout(push_constant, std430) uniform PushConstants {
     MaterialsBuffer materials_buffer;
     DirectionalLightBuffer directional_light_buffer;
     uint irradiance_image_index;
+    uint prefiltered_env_map_index;
+    uint brdf_integration_map_index;
 };
 
 layout(location = 0) in VertexOutput {
@@ -85,7 +87,7 @@ float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
         for(int y = -SAMPLES; y <= SAMPLES; ++y)
         {
             shadow += texture(
-                sampler2DShadow(GetTexture2D(shadow_map), _uComparisonSamplers[SHADOW_SAMPLER]),
+                sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
                 vec3(tex_coord + vec2(x, y) * texel_size, current_depth)
             );
         }    
@@ -228,15 +230,31 @@ void main() {
                 roughness
             ) * shadow;
 
-            vec3 kS = fresnel_schlick_roughness(
+            vec3 R = reflect(view_direction, normal);
+            R.y *= -1.0;
+            vec3 F = fresnel_schlick_roughness(
                 max(dot(normal, view_direction), 0.0),
                 base_reflectivity,
                 roughness
-            ); 
+            );
+
+            vec3 kS = F;
             vec3 kD = 1.0 - kS;
+            kD *= 1.0 - metallic;	
+            
             vec3 irradiance = texture(GetSampledTextureCube(irradiance_image_index), normal).rgb;
             vec3 diffuse    = irradiance * albedo;
-            vec3 ambient    = (kD * diffuse) * ao; 
+
+            float max_reflection_lod = textureQueryLevels(GetSampledTextureCube(prefiltered_env_map_index)) - 1;
+            float reflection_lod = roughness * max_reflection_lod;
+            vec3 reflection_color = textureLod(GetSampledTextureCube(prefiltered_env_map_index), R, reflection_lod).rgb;
+            vec2 env_brdf = texture(
+                GetSampledTexture2D(brdf_integration_map_index),
+                vec2(max(dot(normal, view_direction), 0.0), roughness)
+            ).rg;
+            vec3 specular = reflection_color * (kS * env_brdf.x + env_brdf.y);
+
+            vec3 ambient    = (kD * diffuse + specular) * ao;
 
             out_color.rgb = ambient + Lo + emissive * 4.0;
             break;

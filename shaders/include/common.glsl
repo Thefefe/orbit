@@ -23,6 +23,9 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_textur
 #define GetSampler(Index) \
     _u_sampler_registry[nonuniformEXT(Index)]
 
+#define GetCompSampler(Index) \
+    _u_sampler_comparisson_registry[nonuniformEXT(Index)]
+
 #define GetTexture2D(Index) \
     _u_texture2d_registry[nonuniformEXT(Index & TEXTURE_INDEX_TEXTURE_MASK)]
 

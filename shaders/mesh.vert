@@ -11,6 +11,8 @@ layout(push_constant, std430) uniform PushConstants {
     MaterialsBuffer materials_buffer;
     DirectionalLightBuffer directional_light_buffer;
     uint irradiance_image_index;
+    uint prefiltered_env_map_index;
+    uint brdf_integration_map_index;
 };
 
 layout(location = 0) out VertexOutput {

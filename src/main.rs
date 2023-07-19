@@ -258,7 +258,9 @@ struct App {
     
     forward_pipeline: render::RasterPipeline,
     skybox_pipeline: render::RasterPipeline,
+    brdf_integration_pipeline: render::RasterPipeline,
 
+    brdf_integration_map: render::Image,
     environment_map: EnvironmentMap,
 
     camera: Camera,
@@ -393,6 +395,91 @@ impl App {
             pipeline
         };
 
+        
+        let brdf_integration_pipeline = {
+            let vertex_shader = utils::load_spv("shaders/blit.vert.spv").unwrap();
+            let fragment_shader = utils::load_spv("shaders/brdf_integration.frag.spv").unwrap();
+
+            let vertex_module = context.create_shader_module(&vertex_shader, "blit_vertex_shader");
+            let fragment_module = context.create_shader_module(&fragment_shader, "blit_fragment_shader");
+
+            let entry = cstr::cstr!("main");
+
+            let pipeline = context.create_raster_pipeline("brdf_integration_pipeline", &render::RasterPipelineDesc {
+                vertex_stage: render::ShaderStage {
+                    module: vertex_module,
+                    entry,
+                },
+                fragment_stage: Some(render::ShaderStage {
+                    module: fragment_module,
+                    entry,
+                }),
+                vertex_input: render::VertexInput::default(),
+                rasterizer: render::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    line_width: 1.0,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_bias: None,
+                    depth_clamp: false,
+                },
+                color_attachments: &[render::PipelineColorAttachment {
+                    format: vk::Format::R16G16B16A16_SFLOAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }],
+                depth_state: None,
+                multisample: render::MultisampleCount::None,
+                dynamic_states: &[],
+            });
+
+            context.destroy_shader_module(vertex_module);
+            context.destroy_shader_module(fragment_module);
+
+            pipeline
+        };
+
+        let brdf_integration_map = context.create_image("brdf_integration_map", &render::ImageDesc {
+            ty: render::ImageType::Single2D,
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            dimensions: [512, 512, 1],
+            mip_levels: 1,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            aspect: vk::ImageAspectFlags::COLOR,
+        });
+
+        context.record_and_submit(|cmd| {
+            cmd.barrier(&[], &[render::image_barrier(
+                &brdf_integration_map,
+                render::AccessKind::None,
+                render::AccessKind::ColorAttachmentWrite
+            )], &[]);
+
+            let color_attachment = vk::RenderingAttachmentInfo::builder()
+                .image_view(brdf_integration_map.view)
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .store_op(vk::AttachmentStoreOp::STORE);
+
+            let rendering_info = vk::RenderingInfo::builder()
+                .render_area(brdf_integration_map.full_rect())
+                .layer_count(1)
+                .color_attachments(std::slice::from_ref(&color_attachment));
+        
+            cmd.begin_rendering(&rendering_info);
+            cmd.bind_raster_pipeline(brdf_integration_pipeline);
+            cmd.draw(0..6, 0..1);
+            cmd.end_rendering();
+
+            cmd.barrier(&[], &[render::image_barrier(
+                &brdf_integration_map,
+                render::AccessKind::ColorAttachmentWrite,
+                render::AccessKind::AllGraphicsRead
+            )], &[]);
+        });
+
         let mut gpu_assets = GpuAssetStore::new(context);
         let mut scene = SceneBuffer::new(context);
         
@@ -442,8 +529,10 @@ impl App {
 
             forward_pipeline,
             skybox_pipeline,
+            brdf_integration_pipeline,
 
             environment_map,
+            brdf_integration_map,
 
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
@@ -722,6 +811,8 @@ impl App {
 
         let skybox_image = context.import_image("skybox", &self.environment_map.skybox, &Default::default());
         let irradiance_image = context.import_image("irradiance_image", &self.environment_map.irradiance, &Default::default());
+        let prefiltered_env_map = context.import_image("prefiltered_env_map", &self.environment_map.prefiltered, &Default::default());
+        let brdf_integration_map = context.import_image("brdf_integration_map", &self.brdf_integration_map, &Default::default());
 
         let draw_commands_buffer = self.scene_draw_gen
             .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
@@ -898,6 +989,8 @@ impl App {
 
                 let skybox_image = graph.get_image(skybox_image);
                 let irradiance_image = graph.get_image(irradiance_image);
+                let prefiltered_env_map = graph.get_image(prefiltered_env_map);
+                let brdf_integration_map = graph.get_image(brdf_integration_map);
 
                 let per_frame_data = graph.get_buffer(per_frame_data);
                 
@@ -943,49 +1036,28 @@ impl App {
                 cmd.begin_rendering(&rendering_info);
                 
                 cmd.bind_raster_pipeline(skybox_pipeline);
-                #[repr(C)]
-                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-                struct SkyboxConstants {
-                    matrix: Mat4,
-                    image_index: u32,
-                    _padding: [u32; 3],
-                }
-                cmd.push_constants(bytemuck::bytes_of(&SkyboxConstants {
-                    matrix: skybox_view_projection_matrix,
-                    image_index: skybox_image.descriptor_index.unwrap(),
-                    _padding: [0; 3],
-                }), 0);
+
+                cmd.build_constants()
+                    .mat4(&skybox_view_projection_matrix)
+                    .image(&skybox_image)
+                    .push();
 
                 cmd.draw(0..36, 0..1);
 
                 cmd.bind_raster_pipeline(forward_pipeline);
                 cmd.bind_index_buffer(&index_buffer, 0);
 
-                #[repr(C)]
-                #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-                struct ForwardConstants {
-                    per_frame_buffer: u64,
-                    vertex_buffer: u64,
-                    entity_buffer: u64,
-                    draw_commands: u64,
-                    materials: u64,
-                    directional_light_buffer: u64,
-                    irradiance_map_index: u32,
-                    _padding: u32,
-                }
-
-                let constants = ForwardConstants {
-                    per_frame_buffer: per_frame_data.device_address,
-                    vertex_buffer: vertex_buffer.device_address,
-                    entity_buffer: instance_buffer.device_address,
-                    draw_commands: draw_commands_buffer.device_address,
-                    materials: material_buffer.device_address,
-                    directional_light_buffer: directional_light_buffer.device_address,
-                    irradiance_map_index: irradiance_image.descriptor_index.unwrap(),
-                    _padding: 0,
-                };
-
-                cmd.push_constants(bytemuck::bytes_of(&constants), 0);
+                cmd.build_constants()
+                    .buffer(&per_frame_data)
+                    .buffer(&vertex_buffer)
+                    .buffer(&instance_buffer)
+                    .buffer(&draw_commands_buffer)
+                    .buffer(&material_buffer)
+                    .buffer(&directional_light_buffer)
+                    .image(&irradiance_image)
+                    .image(&prefiltered_env_map)
+                    .image(&brdf_integration_map)
+                    .push();
 
                 cmd.draw_indexed_indirect_count(
                     draw_commands_buffer,
@@ -1012,8 +1084,10 @@ impl App {
         self.scree_blitter.destroy(context);
         self.equirectangular_cube_map_loader.destroy(context);
         self.environment_map.destroy(context);
+        context.destroy_image(&self.brdf_integration_map);
         context.destroy_pipeline(&self.forward_pipeline);
         context.destroy_pipeline(&self.skybox_pipeline);
+        context.destroy_pipeline(&self.brdf_integration_pipeline);
     }
 }
 
@@ -1653,7 +1727,7 @@ pub struct EnvironmentMapLoader {
 impl EnvironmentMapLoader {
     pub const FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
     const IRRADIANCE_SIZE: u32 = 32;
-    const PREFILTERD_SIZE: u32 = 128;
+    const PREFILTERD_SIZE: u32 = 512;
     const PREFILTERED_MIP_LEVELS: u32 = 5;
 
     pub fn new(context: &render::Context) -> Self {
@@ -1672,6 +1746,7 @@ impl EnvironmentMapLoader {
             let pipeline = context.create_raster_pipeline("equirectangular_to_cube_pipeline", &render::RasterPipelineDesc {
                 vertex_stage: render::ShaderStage {
                     module: vertex_module,
+
                     entry,
                 },
                 fragment_stage: Some(render::ShaderStage {
@@ -2051,7 +2126,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::IMMEDIATE,
+            present_mode: vk::PresentModeKHR::FIFO,
         },
     );
 

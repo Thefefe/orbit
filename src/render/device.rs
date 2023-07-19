@@ -507,8 +507,11 @@ impl Device {
             .draw_indirect_count(true)
             .build();
 
-        let mut vulkan13_features =
-            vk::PhysicalDeviceVulkan13Features::builder().dynamic_rendering(true).synchronization2(true).build();
+        let mut vulkan13_features = vk::PhysicalDeviceVulkan13Features::builder()
+            .dynamic_rendering(true)
+            .synchronization2(true)
+            .maintenance4(true)
+            .build();
 
         let mut device_features = vk::PhysicalDeviceFeatures2::builder()
             .features(vulkan10_features)

@@ -691,42 +691,41 @@ impl App {
         fn draw_graph_info(ui: &mut egui::Ui, graph: &render::CompiledRenderGraph) {
             for (i, batch) in graph.iter_batches().enumerate() {
                 ui.collapsing(format!("batch {i}"), |ui| {
-                    ui.collapsing("memory barrier", |ui| {
-                        ui.label(format!("src_stage: {:?}", batch.memory_barrier.src_stage_mask));
-                        ui.label(format!("src_access: {:?}", batch.memory_barrier.src_access_mask));
-                        ui.label(format!("dst_stage: {:?}", batch.memory_barrier.dst_stage_mask));
-                        ui.label(format!("dst_access: {:?}", batch.memory_barrier.dst_access_mask));
+                    ui.collapsing(format!("wait_semaphores ({})", batch.wait_semaphores.len()), |ui| {
+                        for (semaphore, stage) in batch.wait_semaphores {
+                            ui.label(format!("{semaphore:?}, {stage:?}"));
+                        }
                     });
 
-                    ui.collapsing("begin image barriers", |ui| {
-                        for (i, image_barrier) in batch.begin_image_barriers.iter().enumerate() {
-                            ui.collapsing(&format!("image {i}"), |ui| {
-                                ui.label(format!("src_stage: {:?}", image_barrier.src_stage_mask));
-                                ui.label(format!("src_access: {:?}", image_barrier.src_access_mask));
-                                ui.label(format!("dst_stage: {:?}", image_barrier.dst_stage_mask));
-                                ui.label(format!("dst_access: {:?}", image_barrier.dst_access_mask));
-                                ui.label(format!("src_layout: {:?}", image_barrier.old_layout));
-                                ui.label(format!("dst_layout: {:?}", image_barrier.new_layout));
+                    ui.collapsing(format!("begin_dependencies ({})", batch.begin_dependencies.len()), |ui| {
+                        for dependency in batch.begin_dependencies {
+                            let resource = &graph.resources[dependency.resoure_index];
+                            ui.collapsing(resource.name.as_ref(), |ui| {
+                                ui.label(format!("src_access: {:?}", dependency.src_access));
+                                ui.label(format!("dst_access: {:?}", dependency.dst_access));
                             });
                         }
                     });
 
-                    ui.collapsing("finish image barriers", |ui| {
-                        for (i, image_barrier) in batch.finish_image_barriers.iter().enumerate() {
-                            ui.collapsing(&format!("image {i}"), |ui| {
-                                ui.label(format!("src_stage: {:?}", image_barrier.src_stage_mask));
-                                ui.label(format!("src_access: {:?}", image_barrier.src_access_mask));
-                                ui.label(format!("dst_stage: {:?}", image_barrier.dst_stage_mask));
-                                ui.label(format!("dst_access: {:?}", image_barrier.dst_access_mask));
-                                ui.label(format!("src_layout: {:?}", image_barrier.old_layout));
-                                ui.label(format!("dst_layout: {:?}", image_barrier.new_layout));
-                            });
-                        }
-                    });
-
-                    ui.collapsing("passes", |ui| {
+                    ui.collapsing(format!("passes ({})", batch.passes.len()), |ui| {
                         for pass in batch.passes {
                             ui.label(pass.name.as_ref());
+                        }
+                    });
+
+                    ui.collapsing(format!("finish_dependencies ({})", batch.finish_dependencies.len()), |ui| {
+                        for dependency in batch.finish_dependencies {
+                            let resource = &graph.resources[dependency.resoure_index];
+                            ui.collapsing(resource.name.as_ref(), |ui| {
+                                ui.label(format!("src_access: {:?}", dependency.src_access));
+                                ui.label(format!("dst_access: {:?}", dependency.dst_access));
+                            });
+                        }
+                    });
+
+                    ui.collapsing(format!("signal_semaphores ({})", batch.signal_semaphores.len()), |ui| {
+                        for (semaphore, stage) in batch.signal_semaphores {
+                            ui.label(format!("{semaphore:?}, {stage:?}"));
                         }
                     });
                 });
@@ -795,24 +794,24 @@ impl App {
         });
         
         let vertex_buffer = context
-            .import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, &Default::default());
+            .import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, Default::default());
         let index_buffer = context
-            .import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, &Default::default());
+            .import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, Default::default());
         let material_buffer = context
-            .import_buffer("material_buffer", &self.gpu_assets.material_buffer, &Default::default());
+            .import_buffer("material_buffer", &self.gpu_assets.material_buffer, Default::default());
         let entity_buffer = context
-            .import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, &Default::default());
+            .import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, Default::default());
 
         let submeshes = context
-            .import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, &Default::default());
+            .import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, Default::default());
         let mesh_infos = context
-            .import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, &Default::default());
+            .import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, Default::default());
         let submesh_count = self.scene.submesh_data.len() as u32;
 
-        let skybox_image = context.import_image("skybox", &self.environment_map.skybox, &Default::default());
-        let irradiance_image = context.import_image("irradiance_image", &self.environment_map.irradiance, &Default::default());
-        let prefiltered_env_map = context.import_image("prefiltered_env_map", &self.environment_map.prefiltered, &Default::default());
-        let brdf_integration_map = context.import_image("brdf_integration_map", &self.brdf_integration_map, &Default::default());
+        let skybox_image = context.import_image("skybox", &self.environment_map.skybox, Default::default());
+        let irradiance_image = context.import_image("irradiance_image", &self.environment_map.irradiance, Default::default());
+        let prefiltered_env_map = context.import_image("prefiltered_env_map", &self.environment_map.prefiltered, Default::default());
+        let brdf_integration_map = context.import_image("brdf_integration_map", &self.brdf_integration_map, Default::default());
 
         let draw_commands_buffer = self.scene_draw_gen
             .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
@@ -1229,8 +1228,8 @@ impl SceneDrawGen {
         use render::AccessKind;
 
         frame_ctx.add_pass(pass_name)
-            .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
-            .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
+            // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
+            // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
             .with_dependency(draw_commands, AccessKind::ComputeShaderWrite)
             .render(move |cmd, graph| {
                 let scene_submeshes = graph.get_buffer(scene_submeshes);
@@ -1603,7 +1602,7 @@ impl DebugLineRenderer {
         depth_image: render::GraphImageHandle,
         view_projection: Mat4,
     ) {
-        let line_buffer = frame_ctx.import_buffer("debug_line_buffer", &self.line_buffer, &Default::default());
+        let line_buffer = frame_ctx.import_buffer("debug_line_buffer", &self.line_buffer, Default::default());
         let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>();
         let vertex_count = self.vertex_cursor as u32;
         let pipeline = self.pipeline;

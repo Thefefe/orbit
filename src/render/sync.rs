@@ -1,4 +1,4 @@
-use std::ops::RangeBounds;
+use std::{ops::RangeBounds, borrow::Cow};
 
 use crate::render;
 use ash::vk;
@@ -145,25 +145,25 @@ impl AccessKind {
 
 }
 
-// #[inline]
-// pub fn buffer_barrier(
-//     buffer: &vulkan::Buffer,
-//     src_access: vulkan::AccessKind,
-//     dst_access: vulkan::AccessKind,
-// ) -> vk::BufferMemoryBarrier2 {
-//     vk::BufferMemoryBarrier2 {
-//         src_stage_mask: src_access.stage_mask(),
-//         src_access_mask: src_access.access_mask(),
-//         dst_stage_mask: dst_access.stage_mask(),
-//         dst_access_mask: dst_access.access_mask(),
-//         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-//         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-//         buffer: buffer.handle,
-//         offset: 0,
-//         size: vk::WHOLE_SIZE,
-//         ..Default::default()
-//     }
-// }
+#[inline]
+pub fn buffer_barrier(
+    buffer: &render::BufferView,
+    src_access: render::AccessKind,
+    dst_access: render::AccessKind,
+) -> vk::BufferMemoryBarrier2 {
+    vk::BufferMemoryBarrier2 {
+        src_stage_mask: src_access.stage_mask(),
+        src_access_mask: src_access.access_mask(),
+        dst_stage_mask: dst_access.stage_mask(),
+        dst_access_mask: dst_access.access_mask(),
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        buffer: buffer.handle,
+        offset: 0,
+        size: vk::WHOLE_SIZE,
+        ..Default::default()
+    }
+}
 
 #[inline]
 pub fn image_barrier(
@@ -206,5 +206,44 @@ pub fn image_subresource_barrier(
         image: image.handle,
         subresource_range: image.subresource_range(mip_level, layers),
         ..Default::default()
+    }
+}
+
+pub fn extend_memory_barrier(barrier: &mut vk::MemoryBarrier2, src_access: AccessKind, dst_access: AccessKind) {
+    barrier.src_stage_mask |= src_access.stage_mask();
+    if src_access.read_write_kind() == render::ReadWriteKind::Write {
+        barrier.src_access_mask |= src_access.access_mask();
+    }
+
+    barrier.dst_stage_mask |= dst_access.stage_mask();
+    if !barrier.src_access_mask.is_empty() {
+        barrier.dst_access_mask |= dst_access.access_mask();
+    }
+}
+
+pub fn is_memory_barrier_not_useless(barrier: &vk::MemoryBarrier2) -> bool {
+    barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE ||
+    barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE ||
+    barrier.src_access_mask | barrier.dst_access_mask != vk::AccessFlags2::NONE
+}
+
+#[derive(Clone)]
+pub struct Semaphore {
+    pub name: Cow<'static, str>,
+    pub handle: vk::Semaphore,
+}
+
+impl std::fmt::Debug for Semaphore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.name.as_ref())
+    }
+}
+
+impl render::Device {
+    pub fn create_semaphore(&self, name: impl Into<Cow<'static, str>>) -> render::Semaphore {
+        let name = name.into();
+        let handle =  unsafe { self.raw.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap() };
+        self.set_debug_name(handle, &name);
+        render::Semaphore { name, handle }
     }
 }

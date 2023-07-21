@@ -188,7 +188,7 @@ impl EguiRenderer {
                         context.import_image(
                             "egui_image",
                             image,
-                            &render::GraphResourceImportDesc {
+                            render::GraphResourceImportDesc {
                                 initial_access: render::AccessKind::FragmentShaderRead,
                                 target_access: render::AccessKind::FragmentShaderRead,
                                 ..Default::default()
@@ -318,13 +318,13 @@ impl EguiRenderer {
         let index_buffer = context.import_buffer(
             "egui_index_buffer",
             &self.index_buffer,
-            &render::GraphResourceImportDesc::default(),
+            render::GraphResourceImportDesc::default(),
         );
 
         let vertex_buffer = context.import_buffer(
             "egui_vertex_buffer",
             &self.vertex_buffer,
-            &render::GraphResourceImportDesc::default(),
+            render::GraphResourceImportDesc::default(),
         );
 
         let index_offset = Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index();

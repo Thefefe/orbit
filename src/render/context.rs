@@ -1,11 +1,11 @@
-use std::{sync::Mutex, borrow::Cow, time::Instant, marker::PhantomData};
+use std::{sync::Mutex, borrow::Cow, time::Instant, marker::PhantomData, ops::Range};
 
 use ash::vk;
 use winit::window::Window;
 
 use crate::render;
 
-use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, RenderResource};
+use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, RenderResource, ResourceKind, BatchDependecy};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -17,8 +17,8 @@ pub struct GpuGlobalData {
 
 pub struct Frame {
     in_flight_fence: vk::Fence,
-    image_available_semaphore: vk::Semaphore,
-    render_finished_semaphore: vk::Semaphore,
+    image_available_semaphore: render::Semaphore,
+    render_finished_semaphore: render::Semaphore,
     command_pool: render::CommandPool,
     global_buffer: render::Buffer,
 
@@ -56,6 +56,7 @@ pub struct Context {
     record_submit_stuff: Mutex<RecordSubmitStuff>,
 
     frame_context: Option<FrameContext>,
+    graph_debug_info: GraphDebugInfo,
 }
 
 pub struct ContextDesc {
@@ -153,6 +154,7 @@ impl Context {
             record_submit_stuff,
 
             frame_context: None,
+            graph_debug_info: GraphDebugInfo::new(),
         }
     }
 
@@ -199,8 +201,8 @@ impl Drop for Context {
         for frame in self.frames.iter() {
             unsafe {
                 self.device.raw.destroy_fence(frame.in_flight_fence, None);
-                self.device.raw.destroy_semaphore(frame.image_available_semaphore, None);
-                self.device.raw.destroy_semaphore(frame.render_finished_semaphore, None);
+                self.device.raw.destroy_semaphore(frame.image_available_semaphore.handle, None);
+                self.device.raw.destroy_semaphore(frame.render_finished_semaphore.handle, None);
             }
 
             frame.command_pool.destroy(&self.device);
@@ -241,7 +243,7 @@ impl Context {
 
         let acquired_image = self
             .swapchain
-            .acquire_image(&mut self.device, self.frame_index, frame.image_available_semaphore)
+            .acquire_image(&mut self.device, self.frame_index, frame.image_available_semaphore.handle)
             .unwrap();
 
         self.graph.clear();
@@ -257,8 +259,8 @@ impl Context {
 
             initial_access: render::AccessKind::None,
             target_access: render::AccessKind::Present,
-            wait_semaphore: Some(frame.image_available_semaphore),
-            finish_semaphore: Some(frame.render_finished_semaphore),
+            wait_semaphore: Some(frame.image_available_semaphore.clone()),
+            finish_semaphore: Some(frame.render_finished_semaphore.clone()),
             versions: vec![],
         });
 
@@ -364,7 +366,7 @@ impl Context {
         &mut self,
         name: impl Into<Cow<'static, str>>,
         buffer: &render::BufferView,
-        desc: &render::GraphResourceImportDesc,
+        desc: render::GraphResourceImportDesc,
     ) -> GraphHandle<render::Buffer> {
         let name = name.into();
         let view = render::AnyResourceView::Buffer(*buffer);
@@ -387,7 +389,7 @@ impl Context {
         &mut self,
         name: impl Into<Cow<'static, str>>,
         image: &render::ImageView,
-        desc: &render::GraphResourceImportDesc,
+        desc: render::GraphResourceImportDesc,
     ) -> GraphHandle<render::Image> {
         let name = name.into();
         let view = render::AnyResourceView::Image(*image);
@@ -519,6 +521,8 @@ impl Context {
     pub fn end_frame(&mut self) {
         puffin::profile_function!();
         let frame_context = self.frame_context.take().unwrap();
+
+        self.graph_debug_info.clear();
         
         unsafe {
             let screen_size = frame_context.acquired_image.extent;
@@ -543,17 +547,42 @@ impl Context {
 
         {
             puffin::profile_scope!("command_recording");
+            let mut image_barriers = Vec::new();
+            let mut memory_barrier;
             for (batch_index, batch) in self.compiled_graph.iter_batches().enumerate() {
                 puffin::profile_scope!("batch_record", format!("{batch_index}"));
+
+                memory_barrier = vk::MemoryBarrier2::default();
+                image_barriers.clear();
+                for BatchDependecy { resoure_index, src_access, dst_access } in batch.begin_dependencies.iter().copied() {
+                    let resource = &self.compiled_graph.resources[resoure_index].resource_view;
+
+                    if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
+                        memory_barrier.src_stage_mask |= src_access.stage_mask();
+                        if src_access.read_write_kind() == render::ReadWriteKind::Write {
+                            memory_barrier.src_access_mask |= src_access.access_mask();
+                        }
+
+                        memory_barrier.dst_stage_mask |= dst_access.stage_mask();
+                        if !memory_barrier.src_access_mask.is_empty() {
+                            memory_barrier.dst_access_mask |= dst_access.access_mask();
+                        }
+                    } else if let render::AnyResourceView::Image(image) = &resource {
+                        image_barriers.push(render::image_barrier(image, src_access, dst_access));
+                    } else {
+                        unimplemented!()
+                    }
+                }
+
                 let cmd_buffer = frame.command_pool
                     .begin_new(&self.device, vk::CommandBufferUsageFlags::empty());
 
-                for semaphore in batch.wait_semaphores {
-                    cmd_buffer.wait_semaphore(*semaphore, batch.memory_barrier.src_stage_mask);
+                for (semaphore, stage) in batch.wait_semaphores {
+                    cmd_buffer.wait_semaphore(semaphore.handle, *stage);
                 }
 
-                for semaphore in batch.finish_semaphores   {
-                    cmd_buffer.signal_semaphore(*semaphore, batch.memory_barrier.dst_stage_mask);
+                for (semaphore, stage) in batch.signal_semaphores {
+                    cmd_buffer.signal_semaphore(semaphore.handle, *stage);
                 }
                 
                 let recorder = cmd_buffer.record(&self.device, &self.descriptors);
@@ -561,14 +590,11 @@ impl Context {
                 self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
                 self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
 
-                if batch.memory_barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE
-                || batch.memory_barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE
-                || batch.memory_barrier.src_access_mask | batch.memory_barrier.dst_access_mask != vk::AccessFlags2::NONE
-                {
-                    recorder.barrier(&[], batch.begin_image_barriers, &[batch.memory_barrier]);
+                if render::is_memory_barrier_not_useless(&memory_barrier) {
+                    recorder.barrier(&[], &image_barriers, &[memory_barrier]);
                 } else {
-                    recorder.barrier(&[], batch.begin_image_barriers, &[]);
-                };
+                    recorder.barrier(&[], &image_barriers, &[]);
+                }
 
                 for pass in batch.passes {
                     recorder.begin_debug_label(&pass.name, None);
@@ -576,7 +602,13 @@ impl Context {
                     recorder.end_debug_label();
                 }
 
-                recorder.barrier(&[], batch.finish_image_barriers, &[]);
+                image_barriers.clear();
+                for BatchDependecy { resoure_index, src_access, dst_access } in batch.finish_dependencies.iter().copied() {
+                    if let render::AnyResourceView::Image(ref image) = self.compiled_graph.resources[resoure_index].resource_view {
+                        image_barriers.push(render::image_barrier(image, src_access, dst_access));
+                    }
+                }
+                recorder.barrier(&[], &image_barriers, &[]);
             }
         }
 
@@ -589,7 +621,7 @@ impl Context {
             self.swapchain.queue_present(
                 &self.device,
                 frame_context.acquired_image,
-                frame.render_finished_semaphore,
+                frame.render_finished_semaphore.handle,
             );
         }
 
@@ -603,5 +635,44 @@ impl Context {
 
         self.frame_index = (self.frame_index + 1) % FRAME_COUNT;
         self.elapsed_frames += 1;
+    }
+}
+
+pub struct GraphResourceInfo {
+    name: Cow<'static, str>,
+    kind: ResourceKind,
+    transient: bool,
+}
+
+pub struct GraphPassInfo {
+    name: Cow<'static, str>,
+}
+
+pub struct GraphBatchInfo {
+    passes: Range<usize>,
+    dependencies: Range<usize>,
+}
+
+pub struct GraphDebugInfo {
+    resources: Vec<GraphResourceInfo>,
+    passes: Vec<GraphPassInfo>,
+    dependecies: Vec<BatchDependecy>,
+    batches: Vec<GraphBatchInfo>,
+}
+
+impl GraphDebugInfo {
+    pub fn new() -> Self {
+        Self {
+            resources: Vec::new(),
+            passes: Vec::new(),
+            dependecies: Vec::new(),
+            batches: Vec::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.resources.clear();
+        self.passes.clear();
+        self.batches.clear();
     }
 }

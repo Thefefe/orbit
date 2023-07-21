@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Generation(NonZeroU32);
+pub struct Generation(NonZeroU32);
 
 impl Generation {
     fn new() -> Self {
@@ -13,8 +13,8 @@ impl Generation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct NonZeroSlot(NonZeroU32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NonZeroSlot(NonZeroU32);
 
 impl NonZeroSlot {
     #[track_caller]
@@ -70,8 +70,8 @@ impl<T> EntryValue<T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Index {
-    generation: Generation,
-    slot: NonZeroSlot,
+    pub generation: Generation,
+    pub slot: NonZeroSlot,
 }
 
 impl Index {
@@ -94,7 +94,7 @@ impl Index {
 #[derive(Debug, Clone)]
 pub struct Arena<T> {
     entries: Vec<Entry<T>>,
-    first_free: Option<NonZeroSlot>,
+    pub first_free: Option<NonZeroSlot>,
     len: u32,
 }
 
@@ -118,7 +118,7 @@ impl<T> Arena<T> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.len == 0
+        self.len == 0
     }
 
     pub fn with_capacity(capacity: u32) -> Self {
@@ -186,6 +186,33 @@ impl<T> Arena<T> {
                 }
                 return val;
             }
+        }
+        None
+    }
+
+    pub fn get_slot(&self, slot: u32) -> Option<(Index, &T)> {
+        if let Some(Entry { generation, value: EntryValue::Occupied { val } }) = self.entries.get(slot as usize) {
+            return Some((Index { generation: *generation, slot: NonZeroSlot::new(slot) }, val));
+        }
+        None
+    }
+
+    pub fn get_slot_mut(&mut self, slot: u32) -> Option<(Index, &mut T)> {
+        if let Some(Entry { generation, value: EntryValue::Occupied { val } }) = self.entries.get_mut(slot as usize) {
+            return Some((Index { generation: *generation, slot: NonZeroSlot::new(slot) }, val));
+        }
+        None
+    }
+
+    pub fn remove_slot(&mut self, slot: u32) -> Option<T> {
+        if let Some(Entry { value, .. }) = self.entries.get_mut(slot as usize) {
+            let next_free = self.first_free;
+            let val = value.take(next_free);
+            if val.is_some() {
+                self.len -= 1;
+                self.first_free = Some(NonZeroSlot::new(slot));
+            }
+            return val;
         }
         None
     }

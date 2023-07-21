@@ -599,12 +599,6 @@ impl Device {
         handle
     }
 
-    pub fn create_semaphore(&self, name: &str) -> vk::Semaphore {
-        let handle =  unsafe { self.raw.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap() };
-        self.set_debug_name(handle, name);
-        handle
-    }
-
     pub fn get_buffer_address(&self, buffer: vk::Buffer) -> u64 {
         unsafe { self.raw.get_buffer_device_address(&vk::BufferDeviceAddressInfo::builder().buffer(buffer)) }
     }

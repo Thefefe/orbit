@@ -9,17 +9,6 @@ pub type GraphDependencyIndex = usize;
 
 type PassFn = Box<dyn Fn(&render::CommandRecorder, &render::CompiledRenderGraph)>;
 
-pub struct Pass {
-    pub name: Cow<'static, str>,
-    pub func: PassFn,
-}
-
-impl std::fmt::Debug for Pass {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.name.fmt(f)
-    }
-}
-
 pub trait RenderResource {
     type View;
     type Desc;
@@ -247,11 +236,21 @@ impl GraphResourceData {
     }
 }
 
-#[derive(Debug)]
 pub struct PassData {
-    pass: Pass,
+    pub name: Cow<'static, str>,
+    pub func: PassFn,
     dependencies: Vec<GraphDependencyIndex>,
     alive: bool,
+}
+
+impl std::fmt::Debug for PassData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PassData")
+            .field("name", &self.name)
+            .field("dependencies", &self.dependencies)
+            .field("alive", &self.alive)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -300,7 +299,8 @@ impl RenderGraph {
 
     pub fn add_pass(&mut self, name: Cow<'static, str>, func: PassFn) -> GraphPassIndex {
         self.passes.insert(PassData {
-            pass: Pass { name, func },
+            name,
+            func,
             dependencies: Vec::new(),
             alive: false,
         })
@@ -422,33 +422,55 @@ pub struct BatchDependecy {
     pub dst_access: render::AccessKind,
 }
 
+pub struct CompiledPassData {
+    pub name: Cow<'static, str>,
+    pub func: PassFn,
+}
+
+impl From<PassData> for CompiledPassData {
+    fn from(value: PassData) -> Self {
+        Self {
+            name: value.name,
+            func: value.func,
+        }
+    }
+}
+
+impl std::fmt::Debug for CompiledPassData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompiledPassData")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct CompiledRenderGraph {
     pub resources: Vec<CompiledGraphResource>,
-    pub passes: Vec<Pass>,
+    pub passes: Vec<CompiledPassData>,
     pub dependencies: Vec<BatchDependecy>,
     pub semaphores: Vec<(render::Semaphore, vk::PipelineStageFlags2)>,
     pub batches: Vec<BatchData>,
 }
 
-pub struct Batch<'a> {
+pub struct BatchRef<'a> {
     pub wait_semaphores: &'a [(render::Semaphore, vk::PipelineStageFlags2)],
     pub begin_dependencies: &'a [BatchDependecy],
 
-    pub passes: &'a [Pass],
+    pub passes: &'a [CompiledPassData],
 
     pub finish_dependencies: &'a [BatchDependecy],
     pub signal_semaphores: &'a [(render::Semaphore, vk::PipelineStageFlags2)],
 }
 
 impl CompiledRenderGraph {
-    pub fn iter_batches(&self) -> impl Iterator<Item = Batch> {
-        self.batches.iter().map(|batch_data| Batch {
+    pub fn iter_batches(&self) -> impl Iterator<Item = BatchRef> {
+        self.batches.iter().map(|batch_data| BatchRef {
             wait_semaphores: &self.semaphores[batch_data.wait_semaphore_range.clone()], 
             begin_dependencies: &self.dependencies[batch_data.begin_dependency_range.clone()],
             passes: &self.passes[batch_data.pass_range.clone()],
             finish_dependencies: &self.dependencies[batch_data.finish_dependency_range.clone()],
-            signal_semaphores: &self.semaphores[batch_data.signal_semaphore_range.clone()], 
+            signal_semaphores: &self.semaphores[batch_data.signal_semaphore_range.clone()],
         })
     }
 }
@@ -544,7 +566,7 @@ impl RenderGraph {
                     let src_access = resource_data.last_access(dependency.resource_version);
                     let dst_access = dependency.access;
 
-                    // TODO: remove duplicate dependencies, handle seperate image 
+                    // TODO: remove duplicate dependencies, handle seperate image
                     // layouts for same image (rare, but can happen) 
                     compiled.dependencies.push(BatchDependecy {
                         resoure_index: dependency.resource_handle,
@@ -587,7 +609,7 @@ impl RenderGraph {
                     }
                 }
 
-                compiled.passes.push(pass.pass);
+                compiled.passes.push(pass.into());
             }
             let signal_semaphore_end = compiled.semaphores.len();
             let finish_dependency_end = compiled.dependencies.len();

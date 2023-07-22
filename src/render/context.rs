@@ -1,4 +1,4 @@
-use std::{sync::Mutex, borrow::Cow, time::Instant, marker::PhantomData, ops::Range};
+use std::{sync::Mutex, borrow::Cow, time::Instant, marker::PhantomData};
 
 use ash::vk;
 use winit::window::Window;
@@ -15,7 +15,12 @@ pub struct GpuGlobalData {
     elapsed_time: f32,
 }
 
+pub const FRAME_COUNT: usize = 2;
+const MAX_TIMESTAMP_COUNT: u32 = 128;
+
 pub struct Frame {
+    first_time_use: bool,
+
     in_flight_fence: vk::Fence,
     image_available_semaphore: render::Semaphore,
     render_finished_semaphore: render::Semaphore,
@@ -23,12 +28,13 @@ pub struct Frame {
     global_buffer: render::Buffer,
 
     in_use_transient_resources: TransientResourceCache,
+    compiled_graph: CompiledRenderGraph,
+    graph_debug_info: GraphDebugInfo,
+    timestamp_query_pool: vk::QueryPool,
 }
 
-pub const FRAME_COUNT: usize = 2;
-
 struct RecordSubmitStuff {
-    command_pool: render::CommandPool,
+    command_pool: render::CommandPool, 
     fence: vk::Fence,
 }
 
@@ -45,7 +51,6 @@ pub struct Context {
     pub swapchain: render::Swapchain,
 
     pub graph: RenderGraph,
-    pub compiled_graph: CompiledRenderGraph,
     transient_resource_cache: TransientResourceCache,
 
     pub frames: [Frame; FRAME_COUNT],
@@ -56,7 +61,6 @@ pub struct Context {
     record_submit_stuff: Mutex<RecordSubmitStuff>,
 
     frame_context: Option<FrameContext>,
-    graph_debug_info: GraphDebugInfo,
 }
 
 pub struct ContextDesc {
@@ -88,7 +92,6 @@ impl Context {
                 log::info!("selected present mode: {present_mode:?}");
             }
 
-
             let surface_format = surface_info.choose_surface_format();
 
             let image_count = surface_info.choose_image_count(FRAME_COUNT as u32);
@@ -117,7 +120,17 @@ impl Context {
                 memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
             }, None);
 
+            let timestamp_query_pool = unsafe {
+                let create_info = vk::QueryPoolCreateInfo::builder()
+                    .query_type(vk::QueryType::TIMESTAMP)
+                    .query_count(MAX_TIMESTAMP_COUNT);
+
+                device.raw.create_query_pool(&create_info, None).unwrap()
+            };
+
             Frame {
+                first_time_use: true,
+
                 in_flight_fence,
                 image_available_semaphore,
                 render_finished_semaphore,
@@ -125,6 +138,9 @@ impl Context {
                 global_buffer,
 
                 in_use_transient_resources: TransientResourceCache::new(),
+                compiled_graph: CompiledRenderGraph::new(),
+                graph_debug_info: GraphDebugInfo::new(),
+                timestamp_query_pool,
             }
         });
 
@@ -143,7 +159,6 @@ impl Context {
             swapchain,
             
             graph: RenderGraph::new(),
-            compiled_graph: CompiledRenderGraph::new(),
             transient_resource_cache: TransientResourceCache::new(),
             
             frames,
@@ -154,7 +169,6 @@ impl Context {
             record_submit_stuff,
 
             frame_context: None,
-            graph_debug_info: GraphDebugInfo::new(),
         }
     }
 
@@ -203,6 +217,8 @@ impl Drop for Context {
                 self.device.raw.destroy_fence(frame.in_flight_fence, None);
                 self.device.raw.destroy_semaphore(frame.image_available_semaphore.handle, None);
                 self.device.raw.destroy_semaphore(frame.render_finished_semaphore.handle, None);
+
+                self.device.raw.destroy_query_pool(frame.timestamp_query_pool, None);
             }
 
             frame.command_pool.destroy(&self.device);
@@ -235,6 +251,19 @@ impl Context {
             puffin::profile_scope!("fence_wait");
             self.device.raw.wait_for_fences(&[frame.in_flight_fence], false, u64::MAX).unwrap();
             self.device.raw.reset_fences(&[frame.in_flight_fence]).unwrap();
+            
+            if !frame.first_time_use {
+                let timestamp_count = frame.graph_debug_info.timestamp_count;
+                self.device.raw.get_query_pool_results::<u64>(
+                    frame.timestamp_query_pool,
+                    0,
+                    timestamp_count,
+                    &mut frame.graph_debug_info.timestamp_data,
+                    vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,    
+                ).unwrap();
+            } else {
+                frame.first_time_use = false;
+            }
         }
 
         frame.command_pool.reset(&self.device);
@@ -521,8 +550,6 @@ impl Context {
     pub fn end_frame(&mut self) {
         puffin::profile_function!();
         let frame_context = self.frame_context.take().unwrap();
-
-        self.graph_debug_info.clear();
         
         unsafe {
             let screen_size = frame_context.acquired_image.extent;
@@ -538,24 +565,31 @@ impl Context {
         };
         let frame = &mut self.frames[self.frame_index];
 
+        frame.graph_debug_info.clear();
+        
         self.graph.compile_and_flush(
             &self.device,
             &self.descriptors,
-            &mut self.compiled_graph,
+            &mut frame.compiled_graph,
             &mut frame.in_use_transient_resources,
         );
 
+        frame.graph_debug_info.batch_infos.resize(frame.compiled_graph.batches.len(), GraphBatchDebugInfo::default());
+
         {
             puffin::profile_scope!("command_recording");
+
+            let mut timestamp_cursor: u32 = 0;
+
             let mut image_barriers = Vec::new();
             let mut memory_barrier;
-            for (batch_index, batch) in self.compiled_graph.iter_batches().enumerate() {
+            for (batch_index, batch) in frame.compiled_graph.iter_batches().enumerate() {
                 puffin::profile_scope!("batch_record", format!("{batch_index}"));
 
                 memory_barrier = vk::MemoryBarrier2::default();
                 image_barriers.clear();
                 for BatchDependecy { resoure_index, src_access, dst_access } in batch.begin_dependencies.iter().copied() {
-                    let resource = &self.compiled_graph.resources[resoure_index].resource_view;
+                    let resource = &frame.compiled_graph.resources[resoure_index].resource_view;
 
                     if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
                         memory_barrier.src_stage_mask |= src_access.stage_mask();
@@ -586,6 +620,10 @@ impl Context {
                 }
                 
                 let recorder = cmd_buffer.record(&self.device, &self.descriptors);
+
+                if batch_index == 0 {
+                    recorder.reset_query_pool(frame.timestamp_query_pool, 0..MAX_TIMESTAMP_COUNT);
+                }
                     
                 self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
                 self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
@@ -595,21 +633,39 @@ impl Context {
                 } else {
                     recorder.barrier(&[], &image_barriers, &[]);
                 }
+                
+                frame.graph_debug_info.batch_infos[batch_index].timestamp_start_index = timestamp_cursor;
+                frame.graph_debug_info.batch_infos[batch_index].timestamp_end_index = timestamp_cursor + 1;
+                timestamp_cursor += 2;
+
+                recorder.write_query(
+                    vk::PipelineStageFlags2::TOP_OF_PIPE,
+                    frame.timestamp_query_pool,
+                    frame.graph_debug_info.batch_infos[batch_index].timestamp_start_index,
+                );
 
                 for pass in batch.passes {
                     recorder.begin_debug_label(&pass.name, None);
-                    (pass.func)(&recorder, &self.compiled_graph);
+                    (pass.func)(&recorder, &frame.compiled_graph);
                     recorder.end_debug_label();
                 }
 
+                recorder.write_query(
+                    vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+                    frame.timestamp_query_pool,
+                    frame.graph_debug_info.batch_infos[batch_index].timestamp_end_index,
+                );
+
                 image_barriers.clear();
                 for BatchDependecy { resoure_index, src_access, dst_access } in batch.finish_dependencies.iter().copied() {
-                    if let render::AnyResourceView::Image(ref image) = self.compiled_graph.resources[resoure_index].resource_view {
+                    if let render::AnyResourceView::Image(ref image) = frame.compiled_graph.resources[resoure_index].resource_view {
                         image_barriers.push(render::image_barrier(image, src_access, dst_access));
                     }
                 }
                 recorder.barrier(&[], &image_barriers, &[]);
             }
+
+            frame.graph_debug_info.timestamp_count = timestamp_cursor;
         }
 
         {
@@ -638,41 +694,104 @@ impl Context {
     }
 }
 
-pub struct GraphResourceInfo {
-    name: Cow<'static, str>,
-    kind: ResourceKind,
-    transient: bool,
+impl Context {
+    pub fn graph_debugger(&self, egui_ctx: &egui::Context) -> bool {
+        let mut open = true;
+        egui::Window::new("rendergraph debugger")
+            .open(&mut open)
+            .show(egui_ctx, |ui| self.draw_graph_info(ui));
+        open
+    }
+
+    fn draw_graph_info(&self, ui: &mut egui::Ui) {
+        let timestamp_period = self.device.gpu.properties.properties10.limits.timestamp_period;
+        let graph = &self.frames[self.frame_index].compiled_graph;
+        let debug_info = &self.frames[self.frame_index].graph_debug_info;
+        for (i, batch) in graph.iter_batches().enumerate() {
+            let delta_ns = debug_info.timestamp_delta(i, timestamp_period);
+            let delta_ms = delta_ns / 1_000_000.0;
+            egui::CollapsingHeader::new(format!("batch {i} ({delta_ms:.2} ms)")).id_source(i).show(ui, |ui| {
+                egui::CollapsingHeader::new(format!("wait_semaphores ({})", batch.wait_semaphores.len()))
+                    .id_source([i, 0])
+                    .show(ui, |ui| {
+                        for (semaphore, stage) in batch.wait_semaphores {
+                            ui.label(format!("{semaphore:?}, {stage:?}"));
+                        }
+                    });
+                
+                egui::CollapsingHeader::new(format!("begin_dependencies ({})", batch.begin_dependencies.len()))
+                    .id_source([i, 1])
+                    .show(ui, |ui| {
+                        for (j, dependency) in batch.begin_dependencies.iter().enumerate() {
+                            let resource = &graph.resources[dependency.resoure_index];
+                            egui::CollapsingHeader::new(resource.name.as_ref()).id_source([i, 1, j]).show(ui, |ui| {
+                                ui.label(format!("src_access: {:?}", dependency.src_access));
+                                ui.label(format!("dst_access: {:?}", dependency.dst_access));
+                            });
+                        }
+                    });
+
+                egui::CollapsingHeader::new(format!("passes ({})", batch.passes.len()))
+                    .id_source([i, 2])
+                    .show(ui, |ui| {
+                        for pass in batch.passes {
+                            ui.label(pass.name.as_ref());
+                        }
+                    });
+                
+                egui::CollapsingHeader::new(format!("finish_dependencies ({})", batch.finish_dependencies.len()))
+                    .id_source([i, 3])
+                    .show(ui, |ui| {
+                        for (j, dependency) in batch.finish_dependencies.iter().enumerate() {
+                            let resource = &graph.resources[dependency.resoure_index];
+                            egui::CollapsingHeader::new(resource.name.as_ref()).id_source([i, 3, j]).show(ui, |ui| {
+                                ui.label(format!("src_access: {:?}", dependency.src_access));
+                                ui.label(format!("dst_access: {:?}", dependency.dst_access));
+                            });
+                        }
+                    });
+
+                    
+                egui::CollapsingHeader::new(format!("signal_semaphores ({})", batch.signal_semaphores.len()))
+                    .id_source([i, 4])
+                    .show(ui, |ui| {
+                        for (semaphore, stage) in batch.signal_semaphores {
+                            ui.label(format!("{semaphore:?}, {stage:?}"));
+                        }
+                    });
+            });
+        }
+    }
 }
 
-pub struct GraphPassInfo {
-    name: Cow<'static, str>,
-}
-
-pub struct GraphBatchInfo {
-    passes: Range<usize>,
-    dependencies: Range<usize>,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GraphBatchDebugInfo {
+    pub timestamp_start_index: u32,
+    pub timestamp_end_index: u32,
 }
 
 pub struct GraphDebugInfo {
-    resources: Vec<GraphResourceInfo>,
-    passes: Vec<GraphPassInfo>,
-    dependecies: Vec<BatchDependecy>,
-    batches: Vec<GraphBatchInfo>,
+    pub batch_infos: Vec<GraphBatchDebugInfo>,
+    pub timestamp_data: [u64; MAX_TIMESTAMP_COUNT as usize],
+    pub timestamp_count: u32,
 }
 
 impl GraphDebugInfo {
     pub fn new() -> Self {
         Self {
-            resources: Vec::new(),
-            passes: Vec::new(),
-            dependecies: Vec::new(),
-            batches: Vec::new(),
-        }
+            batch_infos: Vec::new(),
+            timestamp_data: [0; MAX_TIMESTAMP_COUNT as usize],
+            timestamp_count: 0,
+        }       
     }
 
     pub fn clear(&mut self) {
-        self.resources.clear();
-        self.passes.clear();
-        self.batches.clear();
+        self.batch_infos.clear();
+    }
+    
+    pub fn timestamp_delta(&self, batch_index: usize, timestamp_period: f32) -> f32 {
+        let GraphBatchDebugInfo { timestamp_start_index, timestamp_end_index, ..} = self.batch_infos[batch_index];
+        let delta = self.timestamp_data[timestamp_end_index as usize] - self.timestamp_data[timestamp_start_index as usize];
+        delta as f32 * timestamp_period
     }
 }

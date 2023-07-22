@@ -688,59 +688,12 @@ impl App {
             self.render_mode = new_render_mode;
         }
 
-        fn draw_graph_info(ui: &mut egui::Ui, graph: &render::CompiledRenderGraph) {
-            for (i, batch) in graph.iter_batches().enumerate() {
-                ui.collapsing(format!("batch {i}"), |ui| {
-                    ui.collapsing(format!("wait_semaphores ({})", batch.wait_semaphores.len()), |ui| {
-                        for (semaphore, stage) in batch.wait_semaphores {
-                            ui.label(format!("{semaphore:?}, {stage:?}"));
-                        }
-                    });
-
-                    ui.collapsing(format!("begin_dependencies ({})", batch.begin_dependencies.len()), |ui| {
-                        for dependency in batch.begin_dependencies {
-                            let resource = &graph.resources[dependency.resoure_index];
-                            ui.collapsing(resource.name.as_ref(), |ui| {
-                                ui.label(format!("src_access: {:?}", dependency.src_access));
-                                ui.label(format!("dst_access: {:?}", dependency.dst_access));
-                            });
-                        }
-                    });
-
-                    ui.collapsing(format!("passes ({})", batch.passes.len()), |ui| {
-                        for pass in batch.passes {
-                            ui.label(pass.name.as_ref());
-                        }
-                    });
-
-                    ui.collapsing(format!("finish_dependencies ({})", batch.finish_dependencies.len()), |ui| {
-                        for dependency in batch.finish_dependencies {
-                            let resource = &graph.resources[dependency.resoure_index];
-                            ui.collapsing(resource.name.as_ref(), |ui| {
-                                ui.label(format!("src_access: {:?}", dependency.src_access));
-                                ui.label(format!("dst_access: {:?}", dependency.dst_access));
-                            });
-                        }
-                    });
-
-                    ui.collapsing(format!("signal_semaphores ({})", batch.signal_semaphores.len()), |ui| {
-                        for (semaphore, stage) in batch.signal_semaphores {
-                            ui.label(format!("{semaphore:?}, {stage:?}"));
-                        }
-                    });
-                });
-            }
-        }
-
         if self.open_graph_debugger {
-            // temporary
-            egui::Window::new("rendergraph debugger")
-                .open(&mut self.open_graph_debugger)
-                .show(egui_ctx, |ui| draw_graph_info(ui, &context.compiled_graph));
+            self.open_graph_debugger = context.graph_debugger(egui_ctx);
         }
 
         if self.open_profiler {
-            self.open_profiler = puffin_egui::profiler_window(&egui_ctx);
+            self.open_profiler = puffin_egui::profiler_window(egui_ctx);
         }
 
         if input.close_requested() | input.key_pressed(KeyCode::Escape) {

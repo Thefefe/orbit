@@ -182,6 +182,33 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
+    pub fn reset_query_pool(&self, pool: vk::QueryPool, range: Range<u32>) {
+        unsafe {
+            self.device.raw.cmd_reset_query_pool(self.buffer(), pool, range.start, range.len() as u32);
+        }
+    }
+
+    #[inline(always)]
+    pub fn begin_query(&self, pool: vk::QueryPool, query: u32, flags: vk::QueryControlFlags) {
+        unsafe {
+            self.device.raw.cmd_begin_query(self.buffer(), pool, query, flags);
+        }
+    }
+
+    #[inline(always)]
+    pub fn end_query(&self, pool: vk::QueryPool, query: u32) {
+        unsafe {
+            self.device.raw.cmd_end_query(self.buffer(), pool, query);
+        }
+    }
+
+    pub fn write_query(&self, stage: vk::PipelineStageFlags2, pool: vk::QueryPool, query: u32) {
+        unsafe {
+            self.device.raw.cmd_write_timestamp2(self.buffer(), stage, pool, query);
+        }
+    }
+
+    #[inline(always)]
     pub fn copy_buffer(&self, src: &render::BufferView, dst: &render::BufferView, regions: &[vk::BufferCopy]) {
         unsafe {
             self.device.raw.cmd_copy_buffer(

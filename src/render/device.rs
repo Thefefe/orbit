@@ -505,6 +505,7 @@ impl Device {
             .shader_int8(true)
             .uniform_and_storage_buffer8_bit_access(true)
             .draw_indirect_count(true)
+            .host_query_reset(true)
             .build();
 
         let mut vulkan13_features = vk::PhysicalDeviceVulkan13Features::builder()

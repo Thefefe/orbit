@@ -19,6 +19,37 @@ pub fn load_spv(path: &str) -> std::io::Result<Vec<u32>> {
     ash::util::read_spv(&mut file)
 }
 
+pub struct OptionDefaultIterator<I, T> {
+    iter: Option<I>,
+    default: T,
+}
+
+impl<I> OptionDefaultIterator<I, I::Item>
+where
+    I: Iterator,
+    I::Item: Clone,
+{
+    pub fn new(iter: Option<I>, default: I::Item) -> Self {
+        Self { iter, default }
+    }
+}
+
+impl<I> Iterator for OptionDefaultIterator<I, I::Item>
+where
+    I: Iterator,
+    I::Item: Clone,
+{
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(iter) = &mut self.iter {
+            iter.next()
+        } else {
+            Some(self.default.clone())
+        }
+    }
+} 
+
 // workaround for unstable `impl !Sync`/`Send`
 // should be used with `PhantomData`
 pub type Unsync = Cell<()>;

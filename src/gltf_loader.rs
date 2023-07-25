@@ -8,7 +8,7 @@ use image::EncodableLayout;
 use crate::{
     assets::{sep_vertex_merge, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle, Aabb},
     render,
-    scene::{EntityData, SceneBuffer, Transform},
+    scene::{EntityData, SceneBuffer, Transform}, utils::OptionDefaultIterator,
 };
 
 fn dxgi_format_to_vk(format : ddsfile::DxgiFormat) -> Option<vk::Format> {
@@ -457,11 +457,26 @@ pub fn load_gltf(
                 log::warn!("model '{name}' primitive {prim_index} has no tangents");
             }
 
+            let tex_coords = OptionDefaultIterator::new(
+                reader.read_tex_coords(0).map(|i| i.into_f32()),
+                [0.0, 0.0],
+            );
+
+            let normals = OptionDefaultIterator::new(
+                reader.read_normals(),
+                [0.0, 0.0, 0.0],
+            );
+
+            let tangents = OptionDefaultIterator::new(
+                reader.read_tangents(),
+                [0.0, 0.0, 0.0, 0.0],
+            );
+
             let vertices = sep_vertex_merge(
                 reader.read_positions().unwrap(),
-                reader.read_tex_coords(0).unwrap().into_f32(),
-                reader.read_normals().unwrap(),
-                reader.read_tangents().into_iter().flatten(),
+                tex_coords,
+                normals,
+                tangents,
             );
             let indices = reader.read_indices().unwrap().into_u32();
 

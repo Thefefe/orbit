@@ -167,19 +167,6 @@ const NDC_BOUNDS: [Vec4; 8] = [
 const MAX_SHADOW_CASCADE_COUNT: usize = 4;
 const SHADOW_RESOLUTION: u32 = 1024 * 1;
 
-// fn uniform_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32{
-//     near + (far - near) * (index as f32 / cascade_count as f32)
-// }
-
-// fn logarithmic_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize) -> f32 {
-//     near * (far / near).powf(index as f32 / cascade_count as f32)
-// }
-
-// fn practical_frustum_split(index: usize, near: f32, far: f32, cascade_count: usize, lambda: f32) -> f32 {
-//     logarithmic_frustum_split(index, near, far, cascade_count) * lambda +
-//     uniform_frustum_split(index, near, far, cascade_count) * (1.0 - lambda)
-// }
-
 fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
     let uniform = near + (far - near) * ratio;
     let log = near * (far / near).powf(ratio);
@@ -189,12 +176,19 @@ fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
 
 fn frustum_planes_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
     let mut planes = [matrix.row(3); 6];
+    
     planes[0] += matrix.row(0);
     planes[1] -= matrix.row(0);
     planes[2] += matrix.row(1);
     planes[3] -= matrix.row(1);
     planes[4] += matrix.row(2);
     planes[5] -= matrix.row(2);
+    
+    // normalize planes
+    // for plane in planes.iter_mut() {
+    //     *plane /= Vec3A::from(*plane).length();
+    // }
+
     planes
 }
 
@@ -282,10 +276,13 @@ struct App {
     use_mock_camera: bool,
     show_cascade_view_frustum: bool,
     show_cascade_light_frustum: bool,
+    show_bounding_boxes: bool,
+    show_frustum_planes: bool,
     open_scene_editor_open: bool,
     open_graph_debugger: bool,
     open_profiler: bool,
     open_camera_light_editor: bool,
+    open_cull_debugger: bool,
 }
 
 impl App {
@@ -503,7 +500,8 @@ impl App {
         let equirectangular_cube_map_loader = EnvironmentMapLoader::new(context);
 
         let equirectangular_environment_image = {
-            let (image_binary, image_format) = gltf_loader::load_image_data("C:\\Users\\thefe\\Downloads\\spree_bank_4k.dds")
+            let (image_binary, image_format) =
+                gltf_loader::load_image_data("C:\\Users\\thefe\\Downloads\\spree_bank_4k.dds")
                 .unwrap();
             let mut image =
                 gltf_loader::load_image(context, "environment_map".into(), &image_binary, image_format, true, true);
@@ -511,7 +509,7 @@ impl App {
             image.set_sampler_flags(render::SamplerKind::LinearRepeat);
 
             image
-        };
+        };  
 
         let environment_map = equirectangular_cube_map_loader
             .create_from_equirectangular_image(&context, "environment_map".into(), 1024, &equirectangular_environment_image);
@@ -556,10 +554,13 @@ impl App {
             use_mock_camera: false,
             show_cascade_view_frustum: false,
             show_cascade_light_frustum: false,
+            show_bounding_boxes: false,
+            show_frustum_planes: false,
             open_scene_editor_open: false,
-            open_profiler: false,
             open_graph_debugger: false,
+            open_profiler: false,
             open_camera_light_editor: false,
+            open_cull_debugger: false,
         }
     }
 
@@ -605,6 +606,9 @@ impl App {
         }
         if input.key_pressed(KeyCode::F4) {
             self.open_camera_light_editor = !self.open_camera_light_editor;
+        }
+        if input.key_pressed(KeyCode::F5) {
+            self.open_cull_debugger = !self.open_cull_debugger;
         }
 
         fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
@@ -664,6 +668,21 @@ impl App {
             });
         }
 
+        if self.open_graph_debugger {
+            self.open_graph_debugger = context.graph_debugger(egui_ctx);
+        }
+
+        if self.open_profiler {
+            self.open_profiler = puffin_egui::profiler_window(egui_ctx);
+        }
+
+        if self.open_cull_debugger {
+            egui::Window::new("culling debugger").open(&mut self.open_cull_debugger).show(egui_ctx, |ui| {
+                ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
+                ui.checkbox(&mut self.show_frustum_planes, "show frustum planes");
+            });
+        }
+
         const RENDER_MODES: &[KeyCode] = &[
             KeyCode::Key0,
             KeyCode::Key1,
@@ -686,14 +705,6 @@ impl App {
 
         if let Some(new_render_mode) = new_render_mode {
             self.render_mode = new_render_mode;
-        }
-
-        if self.open_graph_debugger {
-            self.open_graph_debugger = context.graph_debugger(egui_ctx);
-        }
-
-        if self.open_profiler {
-            self.open_profiler = puffin_egui::profiler_window(egui_ctx);
         }
 
         if input.close_requested() | input.key_pressed(KeyCode::Escape) {
@@ -766,12 +777,6 @@ impl App {
         let prefiltered_env_map = context.import_image("prefiltered_env_map", &self.environment_map.prefiltered, Default::default());
         let brdf_integration_map = context.import_image("brdf_integration_map", &self.brdf_integration_map, Default::default());
 
-        let draw_commands_buffer = self.scene_draw_gen
-            .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "main_draw_commands".into());
-
-        let shadow_map_draw_commands = self.scene_draw_gen
-            .create_draw_commands(context, submesh_count, submeshes, mesh_infos, "shadow_map_draw_commands".into());
-
         let light_direction = -self.sun_light.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
 
         let inv_light_direction = self.sun_light.transform.orientation.inverse();
@@ -784,15 +789,20 @@ impl App {
             direction: light_direction,
             _padding: 0,
         };
+
+        let mut shadow_maps = [render::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];
         
         let lambda = self.frustum_split_lambda;
 
-        let shadow_projections: [Mat4; MAX_SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
+        for cascade_index in 0..MAX_SHADOW_CASCADE_COUNT {
             let Projection::Perspective { fov, near_clip } = main_camera.projection else { todo!() };
             let far_clip = self.max_shadow_distance;
             
-            let near = frustum_split(near_clip, far_clip, lambda, i as f32 / MAX_SHADOW_CASCADE_COUNT as f32);
-            let far = frustum_split(near_clip, far_clip, lambda, (i+1) as f32 / MAX_SHADOW_CASCADE_COUNT as f32);
+            let near_split_ratio = cascade_index as f32 / MAX_SHADOW_CASCADE_COUNT as f32;
+            let far_split_ratio = (cascade_index+1) as f32 / MAX_SHADOW_CASCADE_COUNT as f32;
+            
+            let near = frustum_split(near_clip, far_clip, lambda, near_split_ratio);
+            let far = frustum_split(near_clip, far_clip, lambda, far_split_ratio);
 
             let light_matrix = Mat4::from_quat(inv_light_direction);
             let view_to_world_matrix = main_camera.transform.compute_matrix();
@@ -828,42 +838,83 @@ impl App {
             max_extent += subfrustum_center_light_space;
             min_extent += subfrustum_center_light_space;
 
-            let light_projection = Mat4::orthographic_rh(
+            let projection_matrix = Mat4::orthographic_rh(
                 min_extent.x, max_extent.x,
                 min_extent.y, max_extent.y,
                 150.0, -150.0,
             );
 
-            if self.show_cascade_view_frustum && self.selected_cascade == i {
+            if self.show_cascade_view_frustum && self.selected_cascade == cascade_index {
                 let subfrustum_corners_w = subfrustum_corners_view_space.map(|v| view_to_world_matrix * v);
                 self.debug_line_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
             }
             
-            if self.show_cascade_light_frustum && self.selected_cascade == i {
-                let cascade_frustum_corners = frustum_corners_from_matrix(&light_projection);
+            if self.show_cascade_light_frustum && self.selected_cascade == cascade_index {
+                let cascade_frustum_corners = frustum_corners_from_matrix(&(projection_matrix * light_matrix));
                 self.debug_line_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
             }
             
-            light_projection * light_matrix
-        });
-
-        let shadow_maps: [render::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT] = std::array::from_fn(|i| {
-            self.shadow_map_renderer.render_shadow_map(
-                format!("sun_cascade_{i}").into(),
+            let light_projection_matrix = projection_matrix * light_matrix;
+            
+            let shadow_map_draw_commands = self.scene_draw_gen
+            .create_draw_commands(
+                context,
+                format!("sun_cascade_{cascade_index}_draw_commands").into(),
+                &light_projection_matrix,
+                submesh_count,
+                submeshes,
+                mesh_infos,
+                entity_buffer,
+            );
+            
+            let shadow_map = self.shadow_map_renderer.render_shadow_map(
+                format!("sun_cascade_{cascade_index}").into(),
                 context,
                 SHADOW_RESOLUTION,
-                shadow_projections[i],
+                light_projection_matrix,
                 shadow_map_draw_commands,
                 vertex_buffer,
                 index_buffer,
                 entity_buffer
-            )
-        });
+            );
+            
+            directional_light_data.projection_matrices[cascade_index] = light_projection_matrix;
+            directional_light_data.shadow_maps[cascade_index] = context
+                .get_transient_resource_descriptor_index(shadow_map)
+                .unwrap();
+            shadow_maps[cascade_index] = shadow_map;
+        }
 
-        directional_light_data.projection_matrices = shadow_projections;
-        directional_light_data.shadow_maps = shadow_maps.map(|map| context
-            .get_transient_resource_descriptor_index(map)
-            .unwrap()
+        if self.show_bounding_boxes {
+            for entity in self.scene.entities.iter() {
+                if let Some(model) = entity.model {
+                    let transform_matrix = entity.transform.compute_matrix();
+                    for submesh in self.gpu_assets.models[model].submeshes.iter() {
+                        let aabb = self.gpu_assets.mesh_infos[submesh.mesh_handle].aabb;
+                        let corners = [
+                            vec3a( 0.0, 0.0, 0.0),
+                            vec3a( 1.0, 0.0, 0.0),
+                            vec3a( 1.0, 1.0, 0.0),
+                            vec3a( 0.0, 1.0, 0.0),
+                            vec3a( 0.0, 0.0, 1.0),
+                            vec3a( 1.0, 0.0, 1.0),
+                            vec3a( 1.0, 1.0, 1.0),
+                            vec3a( 0.0, 1.0, 1.0),
+                        ].map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
+                        self.debug_line_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0))
+                    }
+                }
+            }
+        }
+
+        let forward_draw_commands = self.scene_draw_gen.create_draw_commands(
+            context,
+            "main_draw_commands".into(),
+            &main_camera.compute_matrix(aspect_ratio),
+            submesh_count,
+            submeshes,
+            mesh_infos,
+            entity_buffer,
         );
 
         let directional_light_buffer = context
@@ -933,7 +984,7 @@ impl App {
         context.add_pass("forward_pass")
             .with_dependency(target_image, render::AccessKind::ColorAttachmentWrite)
             .with_dependency(depth_image, render::AccessKind::DepthAttachmentWrite)
-            .with_dependency(draw_commands_buffer, render::AccessKind::IndirectBuffer)
+            .with_dependency(forward_draw_commands, render::AccessKind::IndirectBuffer)
             .with_dependencies(shadow_maps.map(|h| (h, render::AccessKind::FragmentShaderRead)))
             .render(move |cmd, graph| {
                 let target_image = graph.get_image(target_image);
@@ -951,7 +1002,7 @@ impl App {
                 let material_buffer = graph.get_buffer(material_buffer);
 
                 let instance_buffer = graph.get_buffer(entity_buffer);
-                let draw_commands_buffer = graph.get_buffer(shadow_map_draw_commands);
+                let draw_commands_buffer = graph.get_buffer(forward_draw_commands);
                 let directional_light_buffer = graph.get_buffer(directional_light_buffer);
 
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
@@ -1140,6 +1191,13 @@ impl ScreenPostProcess {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuCullData {
+    view_matrix: Mat4,
+    frustum_sides: [Vec4; 4],
+}
+
 const MAX_DRAW_COUNT: usize = 1_000_000;
 
 pub struct SceneDrawGen {
@@ -1165,10 +1223,12 @@ impl SceneDrawGen {
     pub fn create_draw_commands(
         &self,
         frame_ctx: &mut render::Context,
+        draw_commands_name: Cow<'static, str>,
+        view_projection_matrix: &Mat4,
         scene_submesh_count: u32,
         scene_submeshes: render::GraphBufferHandle,
         mesh_infos: render::GraphBufferHandle,
-        draw_commands_name: Cow<'static, str>,
+        entity_buffer: render::GraphBufferHandle,
     ) -> render::GraphBufferHandle {
         let pass_name = format!("{draw_commands_name}_generation");
         let draw_commands = frame_ctx.create_transient_buffer(draw_commands_name, render::BufferDesc {
@@ -1178,23 +1238,26 @@ impl SceneDrawGen {
         });
         let pipeline = self.pipeline;
 
-        use render::AccessKind;
+        let view_projection_matrix = view_projection_matrix.clone();
 
         frame_ctx.add_pass(pass_name)
             // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
             // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
-            .with_dependency(draw_commands, AccessKind::ComputeShaderWrite)
+            .with_dependency(draw_commands, render::AccessKind::ComputeShaderWrite)
             .render(move |cmd, graph| {
                 let scene_submeshes = graph.get_buffer(scene_submeshes);
                 let mesh_infos = graph.get_buffer(mesh_infos);
                 let draw_commands = graph.get_buffer(draw_commands);
-
+                let entity_buffer = graph.get_buffer(entity_buffer);
+                
                 cmd.bind_compute_pipeline(pipeline);
 
                 cmd.build_constants()
+                    .mat4(&view_projection_matrix)
                     .buffer(&scene_submeshes)
                     .buffer(&mesh_infos)
-                    .buffer(&draw_commands);
+                    .buffer(&draw_commands)
+                    .buffer(&entity_buffer);
 
                 cmd.dispatch([scene_submesh_count / 256 + 1, 1, 1]);
             });
@@ -1544,7 +1607,41 @@ impl DebugLineRenderer {
             vertex.position = pos + vec3(0.0, theta.sin() * radius, theta.cos() * radius);
         }
         self.add_vertices(&circle_vertices);
-    
+    }
+
+    pub fn draw_plane(&mut self, mut plane: Vec4, half_size: f32, color: Vec4) {
+        let color = color.to_array().map(|f| (f * 255.0) as u8);
+        plane /= Vec3A::from(plane).length(); // normalize plane
+        let normal = Vec3A::from(plane);
+        let distance = plane.w;
+        let (plane_x, plane_y) = normal.any_orthonormal_pair();
+        let center = normal * distance;
+        self.add_vertices(&[
+            DebugLineVertex { position: (center + ( plane_x +  plane_y) * half_size).into(), color },
+            DebugLineVertex { position: (center + ( plane_x + -plane_y) * half_size).into(), color },
+
+            DebugLineVertex { position: (center + ( plane_x + -plane_y) * half_size).into(), color },
+            DebugLineVertex { position: (center + (-plane_x + -plane_y) * half_size).into(), color },
+            
+            DebugLineVertex { position: (center + (-plane_x + -plane_y) * half_size).into(), color },
+            DebugLineVertex { position: (center + (-plane_x +  plane_y) * half_size).into(), color },
+            
+            DebugLineVertex { position: (center + (-plane_x +  plane_y) * half_size).into(), color },
+            DebugLineVertex { position: (center + ( plane_x +  plane_y) * half_size).into(), color },
+
+
+            DebugLineVertex { position: (center + ( plane_x +  plane_y) * half_size).into(), color },
+            DebugLineVertex { position: (center + ( plane_x +  plane_y + normal * 0.5) * half_size).into(), color },
+            
+            DebugLineVertex { position: (center + ( plane_x + -plane_y) * half_size).into(), color },
+            DebugLineVertex { position: (center + ( plane_x + -plane_y + normal * 0.5) * half_size).into(), color },
+            
+            DebugLineVertex { position: (center + (-plane_x + -plane_y) * half_size).into(), color },
+            DebugLineVertex { position: (center + (-plane_x + -plane_y + normal * 0.5) * half_size).into(), color },
+            
+            DebugLineVertex { position: (center + (-plane_x +  plane_y) * half_size).into(), color },
+            DebugLineVertex { position: (center + (-plane_x +  plane_y + normal * 0.5) * half_size).into(), color },
+        ]);
     }
 
     pub fn render(
@@ -2053,7 +2150,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::IMMEDIATE,
+            present_mode: vk::PresentModeKHR::FIFO,
         },
     );
 

@@ -259,7 +259,7 @@ impl Context {
                     0,
                     timestamp_count,
                     &mut frame.graph_debug_info.timestamp_data,
-                    vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,    
+                    vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
                 ).unwrap();
             } else {
                 frame.first_time_use = false;
@@ -304,6 +304,12 @@ impl Context {
 pub struct GraphHandle<T> {
     pub resource_index: render::GraphResourceIndex,
     pub _phantom: PhantomData<T>,
+}
+
+impl<T> GraphHandle<T> {
+    pub fn uninit() -> Self {
+        Self { resource_index: 0, _phantom: PhantomData }
+    }
 }
 
 impl<T> Clone for GraphHandle<T> {

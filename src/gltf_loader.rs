@@ -1,11 +1,12 @@
 use std::{collections::HashMap, path::Path, borrow::Cow};
 
 use ash::vk;
-use glam::{Vec4, Mat4, Vec3};
+use glam::{Vec4, Mat4, Vec3, Vec3A};
 use gpu_allocator::MemoryLocation;
+use image::EncodableLayout;
 
 use crate::{
-    assets::{sep_vertex_merge, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle},
+    assets::{sep_vertex_merge, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle, Aabb},
     render,
     scene::{EntityData, SceneBuffer, Transform},
 };
@@ -214,11 +215,11 @@ fn image_data_from_gltf<'a>(
 pub fn upload_image_and_generate_mipmaps(
     context: &render::Context,
     name: Cow<'static, str>,
-    image_data: &image::RgbaImage,
+    image_data: image::DynamicImage,
     srgb: bool,
     hdr: bool,
 ) -> render::Image {
-    let (width, height) = image_data.dimensions();
+    let (width, height) = (image_data.width(), image_data.height());
     let max_size = u32::max(width, height);
     let mip_levels = u32::max(1, f32::floor(f32::log2(max_size as f32)) as u32 + 1);
     
@@ -227,7 +228,7 @@ pub fn upload_image_and_generate_mipmaps(
         format: match (srgb, hdr) {
             (true, false)  => vk::Format::R8G8B8A8_SRGB,
             (false, false) => vk::Format::R8G8B8A8_UNORM,
-            (_, true)      => vk::Format::R16G16B16A16_SFLOAT,
+            (_, true)      => vk::Format::R32G32B32A32_SFLOAT, // the `image` crate doesn't support 16 bit floats
         },
         dimensions: [width, height, 1],
         mip_levels,
@@ -236,15 +237,29 @@ pub fn upload_image_and_generate_mipmaps(
         aspect: vk::ImageAspectFlags::COLOR,
     });
 
-    let scratch_buffer = context.create_buffer_init(
-        "scratch_buffer",
-        &render::BufferDesc {
-            size: image_data.len(),
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
-            memory_location: MemoryLocation::CpuToGpu,
-        },
-        &image_data,
-    );
+    let scratch_buffer = if hdr {
+        let image = image_data.into_rgba32f();
+        context.create_buffer_init(
+            "scratch_buffer",
+            &render::BufferDesc {
+                size: image.as_bytes().len(),
+                usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                memory_location: MemoryLocation::CpuToGpu,
+            },
+            image.as_bytes(),
+        )
+    } else {
+        let image = image_data.into_rgba8();
+        context.create_buffer_init(
+            "scratch_buffer",
+            &render::BufferDesc {
+                size: image.len(),
+                usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                memory_location: MemoryLocation::CpuToGpu,
+            },
+            image.as_bytes(),
+        )
+    };
 
     context.record_and_submit(|cmd| {
         use render::AccessKind;
@@ -366,8 +381,21 @@ pub fn load_image(
             upload_dds_image(context, name, &image_binary)
         },
         format => {
-            let image_data = image::load_from_memory_with_format(&image_binary, format).unwrap().to_rgba8();
-            upload_image_and_generate_mipmaps(context, name, &image_data, srgb, hdr)
+            // https://github.com/image-rs/image/issues/1936
+            let image_data = if image_format == image::ImageFormat::Hdr {
+                let hdr_decoder = image::codecs::hdr::HdrDecoder::new(std::io::BufReader::new(image_binary)).unwrap();
+                let width = hdr_decoder.metadata().width;
+                let height = hdr_decoder.metadata().height;
+                let buffer = hdr_decoder.read_image_hdr().ok().unwrap();
+                image::DynamicImage::ImageRgb32F(image::ImageBuffer::from_vec(
+                    width,
+                    height,
+                    buffer.into_iter().flat_map(|c| vec![c[0], c[1], c[2]]).collect(),
+                ).unwrap())
+            } else {
+                image::load_from_memory_with_format(&image_binary, format).unwrap()
+            };
+            upload_image_and_generate_mipmaps(context, name, image_data, srgb, hdr)
         },
     }
 }
@@ -525,6 +553,16 @@ pub fn load_gltf(
                 }
             }
 
+            let bounding_box = primitive.bounding_box();
+            mesh_data.aabb = Aabb::from_arrays(bounding_box.min, bounding_box.max);
+
+            let mut sphere_radius_sqr: f32 = 0.0;
+            for vertex in mesh_data.vertices.iter() {
+                let position = Vec3A::from(vertex.position);
+                sphere_radius_sqr = sphere_radius_sqr.max(position.length_squared())
+            }
+            mesh_data.sphere_radius = sphere_radius_sqr.sqrt();
+            
             let mesh_handle = asset_store.add_mesh(context, &mesh_data);
             submeshes.push(Submesh {
                 mesh_handle,

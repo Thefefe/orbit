@@ -4,12 +4,30 @@
 #include "include/types.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
+	mat4 view_projection_matrix;
     SubmeshBuffer submesh_buffer;
 	MeshInfoBuffer mesh_info_buffer;
 	DrawCommandsBuffer draw_commands_buffer;
+	EntityBuffer entity_buffer;
 };
 
 layout (local_size_x = 256) in;
+
+float point_on_plane(vec3 point, vec4 plane) {
+	return dot(plane.xyz, point) - plane.w;
+}
+
+bool aabb_plane_test(vec3 box_min, vec3 box_max, vec4 plane) {
+	vec3 c = (box_max + box_min) * 0.5f; // Compute AABB center
+    vec3 e = box_max - c; // Compute positive extents
+
+    // Compute the projection interval radius of b onto L(t) = b.c + t * p.n
+    float radius = e.x * abs(plane.x) + e.y * abs(plane.y) + e.z * abs(plane.z);
+
+    float center_distance = dot(plane.xyz, c) - plane.w;
+
+    return center_distance < -radius;
+}
 
 void main() {
 	draw_commands_buffer.count = 0;
@@ -18,19 +36,34 @@ void main() {
 	if (gID < submesh_buffer.count) {
 		Submesh submesh = submesh_buffer.submeshes[gID];
 		MeshInfo mesh_info = mesh_info_buffer.mesh_infos[submesh.mesh_index];
-
-		// TODO: culling, subgroup ballot
+		EntityData entity_data = entity_buffer.entities[submesh.entity_index];
+		
 		bool visible = true;
+		
+		Aabb aabb = mesh_info.aabb;
+
+		mat4 mvp = view_projection_matrix * entity_data.model_matrix;
+		mat4 mvp_t = transpose(mvp);
+		vec4 planes[6];
+		planes[0] = mvp_t[3] + mvp_t[0];
+		planes[1] = mvp_t[3] - mvp_t[0];
+		planes[2] = mvp_t[3] + mvp_t[1];
+		planes[3] = mvp_t[3] - mvp_t[1];
+		planes[4] = mvp_t[3] + mvp_t[2];
+		planes[5] = mvp_t[3] - mvp_t[2];
+
+		for (uint i = 0; i < 6; i += 1) {
+			visible = visible && !aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(planes[i].xyz, -planes[i].w));
+		}
 
 		if (visible) {
 			uint draw_index = atomicAdd(draw_commands_buffer.count, 1);
-
-			draw_commands_buffer.commands[gID].index_count 	 = mesh_info.index_count;
-			draw_commands_buffer.commands[gID].instance_count = 1;
-			draw_commands_buffer.commands[gID].first_index    = mesh_info.index_offset;
-			draw_commands_buffer.commands[gID].vertex_offset  = mesh_info.vertex_offset;
-			draw_commands_buffer.commands[gID].first_instance = submesh.entity_index;
-			draw_commands_buffer.commands[gID].material_index = submesh.material_index;
+			draw_commands_buffer.commands[draw_index].index_count 	  = mesh_info.index_count;
+			draw_commands_buffer.commands[draw_index].instance_count  = 1;
+			draw_commands_buffer.commands[draw_index].first_index     = mesh_info.index_offset;
+			draw_commands_buffer.commands[draw_index].vertex_offset   = mesh_info.vertex_offset;
+			draw_commands_buffer.commands[draw_index].first_instance  = submesh.entity_index;
+			draw_commands_buffer.commands[draw_index].material_index  = submesh.material_index;
 		}
 	}
 }

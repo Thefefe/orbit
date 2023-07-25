@@ -509,6 +509,7 @@ impl<'a> PushConstantBuilder<'a> {
         128 - self.byte_cursor
     }
 
+    #[track_caller]
     #[inline(always)]
     pub fn push_bytes_with_align(mut self, bytes: &[u8], align: usize) -> Self {
         let padding = self.byte_cursor % align;
@@ -521,46 +522,60 @@ impl<'a> PushConstantBuilder<'a> {
         self
     }
 
+    #[track_caller]
+    #[inline(always)]
+    pub fn array<T: bytemuck::NoUninit>(self, slice: &[T]) -> Self {
+        self.push_bytes_with_align(bytemuck::cast_slice(slice), std::mem::align_of_val(slice))
+    }
+
+    #[track_caller]
     #[inline(always)]
     pub fn uint(self, val: u32) -> Self {
         self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
     }
 
+    #[track_caller]
     #[inline(always)]
     pub fn float(self, val: impl Into<f32>) -> Self {
         let val = val.into();
         self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
     }
 
+    #[track_caller]
     #[inline(always)]
     pub fn vec2(self, val: impl Into<glam::Vec2>) -> Self {
         let val = val.into();
         self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
     }
 
+    #[track_caller]
     #[inline(always)]
     pub fn vec3(self, val: impl Into<glam::Vec3>) -> Self {
         let val = val.into();
         self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
     }
 
+    #[track_caller]
     #[inline(always)]
     pub fn vec4(self, val: impl Into<glam::Vec4>) -> Self {
         let val = val.into();
         self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
     }
 
+    #[track_caller]
     #[inline(always)]
     pub fn mat4(self, val: &glam::Mat4) -> Self {
         self.push_bytes_with_align(bytemuck::bytes_of(val), std::mem::align_of_val(val))
     }
     
+    #[track_caller]
     #[inline(always)]
     pub fn image(self, image: &render::ImageView) -> Self {
         let descriptor_index = image.descriptor_index.unwrap();
         self.push_bytes_with_align(bytemuck::bytes_of(&descriptor_index), std::mem::align_of_val(&descriptor_index))
     }
     
+    #[track_caller]
     #[inline(always)]
     pub fn buffer(self, buffer: &render::BufferView) -> Self {
         let address = buffer.device_address;

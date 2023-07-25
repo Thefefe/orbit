@@ -14,13 +14,13 @@ use ash::vk;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMeshVertex {
-    position: Vec3,
-    _padding0: u32,
-    uv_coord: Vec2,
-    _padding1: [u32; 2],
-    normal: Vec3,
-    _padding2: u32,
-    tangent: Vec4,
+    pub position: Vec3,
+    pub _padding0: u32,
+    pub uv_coord: Vec2,
+    pub _padding1: [u32; 2],
+    pub normal: Vec3,
+    pub _padding2: u32,
+    pub tangent: Vec4,
 }
 
 impl GpuMeshVertex {
@@ -66,15 +66,17 @@ pub struct GpuMeshInfo {
     index_offset: u32,
     index_count: u32,
     vertex_offset: u32,
-    _padding: u32,
+    sphere_radius: f32,
+    aabb: GpuAabb,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MeshBlock {
+pub struct MeshInfo {
     pub vertex_range: BlockRange,
     pub index_range: BlockRange,
     pub vertex_alloc_index: arena::Index,
     pub index_alloc_index: arena::Index,
+    pub aabb: Aabb,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -138,7 +140,7 @@ pub struct GpuAssetStore {
     index_allocator: FreeListAllocator,
 
     pub mesh_info_buffer: render::Buffer,
-    pub mesh_blocks: arena::Arena<MeshBlock>,
+    pub mesh_infos: arena::Arena<MeshInfo>,
     pub models: arena::Arena<ModelData>,
 
     pub textures: arena::Arena<render::Image>,
@@ -181,7 +183,7 @@ impl GpuAssetStore {
             index_allocator: FreeListAllocator::new(MAX_INDEX_COUNT),
 
             mesh_info_buffer,
-            mesh_blocks: arena::Arena::new(),
+            mesh_infos: arena::Arena::new(),
             models: arena::Arena::new(),
 
             textures: arena::Arena::new(),
@@ -201,20 +203,22 @@ impl GpuAssetStore {
         context.immediate_write_buffer(&self.vertex_buffer, vertex_bytes, vertex_range.start * std::mem::size_of::<GpuMeshVertex>());
         context.immediate_write_buffer(&self.index_buffer, index_bytes, index_range.start * std::mem::size_of::<u32>());
 
-        let mesh_block = MeshBlock {
+        let mesh_block = MeshInfo {
             vertex_range,
             index_range,
             vertex_alloc_index,
             index_alloc_index,
+            aabb: mesh.aabb,
         };
-        let mesh_index = self.mesh_blocks.insert(mesh_block);
+        let mesh_index = self.mesh_infos.insert(mesh_block);
 
 
         let mesh_info = GpuMeshInfo {
             index_offset: index_range.start as u32,
             index_count: index_range.size() as u32,
             vertex_offset: vertex_range.start as u32,
-            _padding: 0,
+            sphere_radius: mesh.sphere_radius,
+            aabb: mesh.aabb.into(),
         };
         context.immediate_write_buffer(
             &self.mesh_info_buffer,
@@ -283,8 +287,8 @@ impl GpuAssetStore {
         index
     }
 
-    pub fn submesh_blocks(&self, model: ModelHandle) -> impl Iterator<Item = &MeshBlock> {
-        self.models[model].submeshes.iter().map(|submesh| &self.mesh_blocks[submesh.mesh_handle])
+    pub fn submesh_blocks(&self, model: ModelHandle) -> impl Iterator<Item = &MeshInfo> {
+        self.models[model].submeshes.iter().map(|submesh| &self.mesh_infos[submesh.mesh_handle])
     }
 
     pub fn destroy(&self, context: &render::Context) {
@@ -361,6 +365,8 @@ impl Iterator for SepVertexIter<'_> {
 pub struct MeshData {
     pub vertices: Vec<GpuMeshVertex>,
     pub indices: Vec<u32>,
+    pub aabb: Aabb,
+    pub sphere_radius: f32,
 }
 
 impl MeshData {
@@ -368,6 +374,8 @@ impl MeshData {
         Self {
             vertices: Vec::new(),
             indices: Vec::new(),
+            aabb: Aabb::default(),
+            sphere_radius: 0.0,
         }
     }
 
@@ -421,6 +429,48 @@ impl MeshData {
         }
 
         Ok(mesh_data)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Aabb {
+    pub min: Vec3A,
+    pub max: Vec3A,
+}
+
+impl Aabb {
+    pub const ZERO: Self = Self {
+        min: Vec3A::ZERO,
+        max: Vec3A::ZERO,
+    };
+
+    pub fn from_arrays(min: [f32; 3], max: [f32; 3]) -> Self {
+        Self {
+            min: Vec3A::from_array(min),
+            max: Vec3A::from_array(max),
+        }
+    }
+}
+
+impl Default for Aabb {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuAabb {
+    min: Vec4,
+    max: Vec4,
+}
+
+impl From<Aabb> for GpuAabb {
+    fn from(value: Aabb) -> Self {
+        Self {
+            min: value.min.extend(1.0),
+            max: value.max.extend(1.0),
+        }
     }
 }
 

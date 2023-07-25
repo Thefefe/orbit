@@ -75,14 +75,29 @@ struct Submesh {
     uint entity_index;
     uint mesh_index;
     uint material_index;
-    uint _padding;   
+    uint _padding;
+};
+
+struct Aabb {
+    vec4 min_pos;
+    vec4 max_pos;  
 };
 
 struct MeshInfo {
     uint index_offset;
     uint index_count;
     int  vertex_offset;
-    uint _padding;
+    float sphere_radius;
+    Aabb aabb;
+};
+
+struct CullData {
+    mat4 view_matrix;
+    vec4 frustum_sides[4];
+};
+
+Buffer(16) CullDataBuffer {
+    CullData data;  
 };
 
 Buffer(4) SubmeshBuffer {
@@ -90,7 +105,7 @@ Buffer(4) SubmeshBuffer {
 	Submesh submeshes[];
 };
 
-Buffer(4) MeshInfoBuffer {
+Buffer(16) MeshInfoBuffer {
 	MeshInfo mesh_infos[];
 };
 

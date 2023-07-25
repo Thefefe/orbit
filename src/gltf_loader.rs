@@ -283,77 +283,7 @@ pub fn upload_image_and_generate_mipmaps(
         );
 
         if mip_levels > 1 {
-            let mut mip_width = width;
-            let mut mip_height = height;
-
-            for (last_level, current_level) in (1..mip_levels).enumerate() {
-                let last_level = last_level as u32;
-                let current_level = current_level as u32;
-
-                let new_mip_width = if mip_width > 1 { mip_width / 2 } else { 1 };
-                let new_mip_height = if mip_height > 1 { mip_height / 2 } else { 1 };
-
-                cmd.barrier(&[], &[render::image_subresource_barrier(
-                    &image,
-                    last_level..last_level + 1, 
-                    ..,
-                    AccessKind::TransferWrite,
-                    AccessKind::TransferRead
-                )], &[]);
-
-                let blit_region = vk::ImageBlit {
-                    src_subresource: image.subresource_layers(last_level, ..),
-                    src_offsets: [
-                        vk::Offset3D { x: 0, y: 0, z: 0 },
-                        vk::Offset3D {
-                            x: mip_width as i32,
-                            y: mip_height as i32,
-                            z: 1,
-                        },
-                    ],
-                    dst_subresource: image.subresource_layers(current_level, ..),
-                    dst_offsets: [
-                        vk::Offset3D { x: 0, y: 0, z: 0 },
-                        vk::Offset3D {
-                            x: new_mip_width as i32,
-                            y: new_mip_height as i32,
-                            z: 1,
-                        },
-                    ],
-                };
-
-                cmd.blit_image(
-                    &image,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    &image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    std::slice::from_ref(&blit_region),
-                    vk::Filter::LINEAR,
-                );
-
-                if mip_width > 1 {
-                    mip_width /= 2
-                };
-                if mip_height > 1 {
-                    mip_height /= 2
-                };
-            }
-            
-            cmd.barrier(&[], &[render::image_subresource_barrier(
-                &image,
-                mip_levels - 1..mip_levels, 
-                ..,
-                AccessKind::TransferWrite,
-                AccessKind::AllGraphicsRead,
-            )], &[]);
-
-            cmd.barrier(&[], &[render::image_subresource_barrier(
-                &image,
-                ..mip_levels - 1, 
-                ..,
-                AccessKind::TransferRead,
-                AccessKind::AllGraphicsRead,
-            )], &[]);
+            cmd.generate_mipmaps(&image, 0..1, AccessKind::TransferWrite, AccessKind::AllGraphicsRead);
         } else {
             cmd.barrier(&[], &[render::image_barrier(
                 &image,

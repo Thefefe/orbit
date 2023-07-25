@@ -2,6 +2,7 @@
 
 #include "include/common.glsl"
 #include "include/types.glsl"
+#include "include/functions.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
     PerFrameBuffer per_frame_buffer;
@@ -25,50 +26,6 @@ layout(location = 0) in VertexOutput {
 } vout;
 
 layout(location = 0) out vec4 out_color;
-
-uint hash(uint a)
-{
-   a = (a+0x7ed55d16) + (a<<12);
-   a = (a^0xc761c23c) ^ (a>>19);
-   a = (a+0x165667b1) + (a<<5);
-   a = (a+0xd3a2646c) ^ (a<<9);
-   a = (a+0xfd7046c5) + (a<<3);
-   a = (a^0xb55a4f09) ^ (a>>16);
-   return a;
-}
-
-vec3 srgb_to_linear(vec3 srgb) {
-    bvec3 cutoff = lessThan(srgb, vec3(0.04045));
-    vec3 lower = srgb / vec3(12.92);
-    vec3 higher = pow((srgb + vec3(0.055)) / vec3(1.055), vec3(2.4));
-    return mix(higher, lower, cutoff);
-}
-
-float distribution_ggx(float n_dot_h, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
-    denom = PI * denom * denom;
-    return a2 / max(denom, EPSILON);
-}
-
-float geometry_smith(float n_dot_v, float n_dot_l, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    float ggx1 = n_dot_v / (n_dot_v * (1.0 - k) + k); // schlick ggx
-    float ggx2 = n_dot_l / (n_dot_l * (1.0 - k) + k);
-    return ggx1 * ggx2;
-}
-
-vec3 fresnel_schlick(float h_dot_v, vec3 base_reflectivity) {
-    return base_reflectivity + (1.0 - base_reflectivity) * pow(1.0 - h_dot_v, 5.0);
-}
-
-vec3 fresnel_schlick_roughness(float cos_theta, vec3 base_reflectivity, float roughness)
-{
-    return base_reflectivity + (max(vec3(1.0 - roughness), base_reflectivity) - base_reflectivity)
-     * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
-}   
 
 float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
     vec3 proj_coords = light_space_frag_pos.xyz / light_space_frag_pos.w;

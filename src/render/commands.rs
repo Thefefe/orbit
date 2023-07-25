@@ -479,6 +479,111 @@ impl<'a> CommandRecorder<'a> {
             self.device.raw.cmd_dispatch(self.buffer(), group_counts[0], group_counts[1], group_counts[2])
         }
     }
+
+    pub fn generate_mipmaps(
+        &self,
+        image: &render::ImageView,
+        target_layers: Range<u32>,
+        initial_access: render::AccessKind,
+        target_access: render::AccessKind
+    ) {
+        let mip_levels = image.mip_level();
+        let mut mip_width = image.width();
+        let mut mip_height = image.height();
+
+        if mip_height == 1 {
+            log::warn!("attempted to generate mipmaps for image with only 1 mip levels");
+            return;
+        }
+
+        self.barrier(&[], &[  
+            render::image_subresource_barrier(
+                &image,
+                0..1,
+                target_layers.clone(),
+                initial_access,
+                render::AccessKind::TransferRead,
+            ),
+            render::image_subresource_barrier(
+                &image,
+                1..mip_levels,
+                target_layers.clone(),
+                initial_access,
+                render::AccessKind::TransferWrite,
+            ),
+        ], &[]);
+
+        for (last_level, current_level) in (1..mip_levels).enumerate() {
+            let last_level = last_level as u32;
+            let current_level = current_level as u32;
+
+            let new_mip_width = if mip_width > 1 { mip_width / 2 } else { 1 };
+            let new_mip_height = if mip_height > 1 { mip_height / 2 } else { 1 };
+
+            if last_level != 0 {
+                self.barrier(&[], &[render::image_subresource_barrier(
+                    &image,
+                    last_level..last_level + 1, 
+                    target_layers.clone(),
+                    render::AccessKind::TransferWrite,
+                    render::AccessKind::TransferRead,
+                )], &[]);
+            }
+
+            let blit_region = vk::ImageBlit {
+                src_subresource: image.subresource_layers(last_level, target_layers.clone()),
+                src_offsets: [
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: mip_width as i32,
+                        y: mip_height as i32,
+                        z: 1,
+                    },
+                ],
+                dst_subresource: image.subresource_layers(current_level, target_layers.clone()),
+                dst_offsets: [
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: new_mip_width as i32,
+                        y: new_mip_height as i32,
+                        z: 1,
+                    },
+                ],
+            };
+
+            self.blit_image(
+                &image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                &image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                std::slice::from_ref(&blit_region),
+                vk::Filter::LINEAR,
+            );
+
+            if mip_width > 1 {
+                mip_width /= 2
+            };
+            if mip_height > 1 {
+                mip_height /= 2
+            };
+        }
+        
+        self.barrier(&[], &[render::image_subresource_barrier(
+            &image,
+            mip_levels - 1..mip_levels, 
+            target_layers.clone(),
+            render::AccessKind::TransferWrite,
+            target_access,
+        )], &[]);
+
+        self.barrier(&[], &[render::image_subresource_barrier(
+            &image,
+            ..mip_levels - 1, 
+            target_layers.clone(),
+            render::AccessKind::TransferRead,
+            target_access,
+        )], &[]);
+    }
 }
 
 impl Drop for CommandRecorder<'_> {

@@ -501,7 +501,7 @@ impl App {
 
         let equirectangular_environment_image = {
             let (image_binary, image_format) =
-                gltf_loader::load_image_data("C:\\Users\\thefe\\Downloads\\spree_bank_4k.dds")
+                gltf_loader::load_image_data("D:\\dev\\models\\fbx\\Bistro_v5_2\\san_giuseppe_bridge_4k.dds")
                 .unwrap();
             let mut image =
                 gltf_loader::load_image(context, "environment_map".into(), &image_binary, image_format, true, true);
@@ -1901,13 +1901,18 @@ impl EnvironmentMapLoader {
         resolution: u32,
         equirectangular_image: &render::ImageView,
     ) -> EnvironmentMap {
+        let skybox_mip_levels = gltf_loader::mip_levels_from_size(resolution);
         let skybox = context.create_image(format!("{name}_skybox"), &render::ImageDesc {
             ty: render::ImageType::Cube,
             format: vk::Format::R16G16B16A16_SFLOAT,
             dimensions: [resolution, resolution, 1],
-            mip_levels: 1,
+            mip_levels: skybox_mip_levels,
             samples: render::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            usage:
+                vk::ImageUsageFlags::SAMPLED |
+                vk::ImageUsageFlags::COLOR_ATTACHMENT |
+                vk::ImageUsageFlags::TRANSFER_SRC |
+                vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
         });
 
@@ -1984,13 +1989,20 @@ impl EnvironmentMapLoader {
 
                 cmd.end_rendering();
             }
+
+            cmd.generate_mipmaps(
+                &skybox,
+                0..6,
+                render::AccessKind::ColorAttachmentWrite,
+                render::AccessKind::AllGraphicsRead
+            );
             
             cmd.barrier(&[], &[
-                render::image_barrier(
-                    &skybox,
-                    render::AccessKind::ColorAttachmentWrite,
-                    render::AccessKind::AllGraphicsRead,
-                ),
+                // render::image_barrier(
+                //     &skybox,
+                //     render::AccessKind::ColorAttachmentWrite,
+                //     render::AccessKind::AllGraphicsRead,
+                // ),
                 render::image_barrier(
                     &irradiance,
                     render::AccessKind::None,

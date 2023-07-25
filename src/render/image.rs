@@ -47,6 +47,16 @@ impl ImageView {
     }
 
     #[inline(always)]
+    pub fn mip_level(&self) -> u32 {
+        self.subresource_range.level_count
+    }
+
+    #[inline(always)]
+    pub fn layers(&self) -> u32 {
+        self.subresource_range.layer_count
+    }
+
+    #[inline(always)]
     pub fn subresource_range(
         &self,
         mip_levels: impl RangeBounds<u32>,

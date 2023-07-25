@@ -1,5 +1,6 @@
 #include "include/common.glsl"
 #include "include/types.glsl"
+#include "include/functions.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
     mat4 matrix;
@@ -10,66 +11,41 @@ layout(push_constant, std430) uniform PushConstants {
 layout(location = 0) in vec3 in_local_pos;
 layout(location = 0) out vec4 out_color;
 
-float radical_inverse_VdC(uint bits) 
+const uint SAMPLE_COUNT = 1024u * 4;
+
+
+vec3 prefilterEnvMap(vec3 R, float roughness)
 {
-    bits = (bits << 16u) | (bits >> 16u);
-    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
-    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
-    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
-    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
-    return float(bits) * 2.3283064365386963e-10; // / 0x100000000
+	vec3 N = R;
+	vec3 V = R;
+	vec3 color = vec3(0.0);
+	float totalWeight = 0.0;
+	float envMapDim = float(textureSize(GetSampledTextureCube(image_index), 0).x);
+	for(uint i = 0u; i < SAMPLE_COUNT; i++) {
+		vec2 Xi = hammersley_2d(i, SAMPLE_COUNT);
+		vec3 H = importance_sample_ggx(Xi, roughness, N);
+		vec3 L = 2.0 * dot(V, H) * H - V;
+		float dotNL = clamp(dot(N, L), 0.0, 1.0);
+		if(dotNL > 0.0) {
+			float dotNH = clamp(dot(N, H), 0.0, 1.0);
+			float dotVH = clamp(dot(V, H), 0.0, 1.0);
+
+			// Probability Distribution Function
+			float pdf = distribution_ggx(dotNH, roughness) * dotNH / (4.0 * dotVH) + 0.0001;
+			// Slid angle of current smple
+			float omegaS = 1.0 / (float(SAMPLE_COUNT) * pdf);
+			// Solid angle of 1 pixel across all cube faces
+			float omegaP = 4.0 * PI / (6.0 * envMapDim * envMapDim);
+			// Biased (+1.0) mip level for better result
+			float mipLevel = roughness == 0.0 ? 0.0 : max(0.5 * log2(omegaS / omegaP) + 1.0, 0.0f);
+			color += textureLod(GetSampledTextureCube(image_index), L, mipLevel).rgb * dotNL;
+			totalWeight += dotNL;
+
+		}
+	}
+	return (color / totalWeight);
 }
 
-vec2 hammersley(uint i, uint N)
-{
-    return vec2(float(i)/float(N), radical_inverse_VdC(i));
-}  
-
-vec3 importance_sample_ggx(vec2 Xi, vec3 N, float roughness)
-{
-    float a = roughness*roughness;
-	
-    float phi = 2.0 * PI * Xi.x;
-    float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (a*a - 1.0) * Xi.y));
-    float sinTheta = sqrt(1.0 - cosTheta*cosTheta);
-	
-    // from spherical coordinates to cartesian coordinates
-    vec3 H;
-    H.x = cos(phi) * sinTheta;
-    H.y = sin(phi) * sinTheta;
-    H.z = cosTheta;
-	
-    // from tangent-space vector to world-space sample vector
-    vec3 up        = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-    vec3 tangent   = normalize(cross(up, N));
-    vec3 bitangent = cross(N, tangent);
-	
-    vec3 sampleVec = tangent * H.x + bitangent * H.y + N * H.z;
-    return normalize(sampleVec);
-}  
-
 void main() {
-    vec3 N = normalize(in_local_pos);    
-    vec3 R = N;
-    vec3 V = R;
-
-    const uint SAMPLE_COUNT = 1024u;
-    float totalWeight = 0.0;   
-    vec3 prefilteredColor = vec3(0.0);     
-    for(uint i = 0u; i < SAMPLE_COUNT; ++i)
-    {
-        vec2 Xi = hammersley(i, SAMPLE_COUNT);
-        vec3 H  = importance_sample_ggx(Xi, N, roughness);
-        vec3 L  = normalize(2.0 * dot(V, H) * H - V);
-
-        float NdotL = max(dot(N, L), 0.0);
-        if(NdotL > 0.0)
-        {
-            prefilteredColor += texture(GetSampledTextureCube(image_index), L).rgb * NdotL;
-            totalWeight      += NdotL;
-        }
-    }
-    prefilteredColor = prefilteredColor / totalWeight;
-
-    out_color = vec4(prefilteredColor, 1.0);
+    out_color = vec4(prefilterEnvMap(normalize(in_local_pos), roughness), 1.0);
 }

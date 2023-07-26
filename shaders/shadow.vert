@@ -5,13 +5,13 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;
-    VertexBuffer vertex_buffer;
-    EntityBuffer entity_buffer;
+    uint vertex_buffer;
+    uint entity_buffer;
 };
 
 void main() {
-    MeshVertex vertex = vertex_buffer.vertices[gl_VertexIndex];
-    mat4 model_matrix = entity_buffer.entities[gl_InstanceIndex].model_matrix;
+    MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex];
+    mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].model_matrix;
 
     gl_Position =
         view_proj *

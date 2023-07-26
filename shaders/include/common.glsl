@@ -3,13 +3,9 @@
 
 #extension GL_EXT_nonuniform_qualifier : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
-#extension GL_EXT_buffer_reference : require
 
 const float PI = 3.14159265359;
 const float EPSILON = 0.0000001;
-
-#define Buffer(Alignment) \
-  layout(buffer_reference, std430, buffer_reference_align = Alignment) buffer
 
 #define IMMUTABLE_SAMPLER_COUNT 5
 #define SHADOW_SAMPLER 4
@@ -19,6 +15,14 @@ layout(set = 1, binding = 0) uniform samplerShadow _u_sampler_comparisson_regist
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2D _u_texture2d_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2DMS _u_texture2dms_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_texture_cube_registry[];
+
+#define GetBufferRegistryName(Name) _u_##Name##Registry
+
+#define RegisterBuffer(Name, Struct) \
+    layout(std430, set = 0, binding = 0) buffer Name Struct GetBufferRegistryName(Name)[]
+
+#define GetBuffer(Name, Index) \
+    GetBufferRegistryName(Name)[nonuniformEXT(Index)]
 
 #define GetSampler(Index) \
     _u_sampler_registry[nonuniformEXT(Index)]

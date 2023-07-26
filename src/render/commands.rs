@@ -683,7 +683,7 @@ impl<'a> PushConstantBuilder<'a> {
     #[track_caller]
     #[inline(always)]
     pub fn buffer(self, buffer: &render::BufferView) -> Self {
-        let address = buffer.device_address;
+        let address = buffer.descriptor_index.unwrap();
         self.push_bytes_with_align(bytemuck::bytes_of(&address), std::mem::align_of_val(&address))
     }
 }

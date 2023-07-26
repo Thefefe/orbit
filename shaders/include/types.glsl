@@ -91,36 +91,36 @@ struct MeshInfo {
     Aabb aabb;
 };
 
-Buffer(4) SubmeshBuffer {
+RegisterBuffer(SubmeshBuffer, {
 	uint count;
 	Submesh submeshes[];
-};
+});
 
-Buffer(16) MeshInfoBuffer {
+RegisterBuffer(MeshInfoBuffer, {
 	MeshInfo mesh_infos[];
-};
+});
 
-Buffer(4) DrawCommandsBuffer {
+RegisterBuffer(DrawCommandsBuffer, {
 	uint count;
 	DrawCommand commands[];
-};
+});
 
-Buffer(16) VertexBuffer {
+RegisterBuffer(VertexBuffer, {
     MeshVertex vertices[];
-};
+});
 
-Buffer(16) EntityBuffer {
+RegisterBuffer(EntityBuffer, {
     EntityData entities[];
-};
+});
 
-Buffer(16) PerFrameBuffer {
+RegisterBuffer(PerFrameBuffer, {
     PerFrameData data;
-};
+});
 
-Buffer(16) DirectionalLightBuffer {
+RegisterBuffer(DirectionalLightBuffer, {
     DirectionalLightData data;
-};
+});
 
-Buffer(16) MaterialsBuffer {
+RegisterBuffer(MaterialsBuffer, {
     MaterialData materials[];
-};
+});

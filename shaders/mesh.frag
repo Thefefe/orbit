@@ -5,12 +5,12 @@
 #include "include/functions.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
-    PerFrameBuffer per_frame_buffer;
-    VertexBuffer vertex_buffer;
-    EntityBuffer entity_buffer;
-    DrawCommandsBuffer draw_commands;
-    MaterialsBuffer materials_buffer;
-    DirectionalLightBuffer directional_light_buffer;
+    uint per_frame_buffer;
+    uint vertex_buffer;
+    uint entity_buffer;
+    uint draw_commands;
+    uint materials_buffer;
+    uint directional_light_buffer;
     uint irradiance_image_index;
     uint prefiltered_env_map_index;
     uint brdf_integration_map_index;
@@ -110,8 +110,8 @@ const vec3 CASCADE_COLORS[6] = vec3[](
 );
 
 void main() {
-    MaterialData material = materials_buffer.materials[vout.material_index];
-    uint render_mode = per_frame_buffer.data.render_mode;
+    MaterialData material = GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index];
+    uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).data.render_mode;
 
     vec4  base_color = material.base_color;
     vec3  albedo     = base_color.rgb;
@@ -151,7 +151,7 @@ void main() {
 
     vec3 base_reflectivity = mix(vec3(0.04), albedo, metallic);
 
-    vec3 view_direction = normalize(per_frame_buffer.data.view_pos - vout.world_pos.xyz);
+    vec3 view_direction = normalize(GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_pos - vout.world_pos.xyz);
 
     out_color.a = base_color.a;
     if (out_color.a < 0.5) {
@@ -166,16 +166,16 @@ void main() {
     }
 
     vec4 light_space_frag_pos = vout.cascade_map_coords[cascade_index];
-    uint shadow_map = directional_light_buffer.data.shadow_maps[cascade_index];
+    uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
 
     float shadow = 1.0;
     if (cascade_index < MAX_SHADOW_CASCADE_COUNT) shadow = compute_shadow(light_space_frag_pos, shadow_map);
 
     switch (render_mode) {
         case 0:
-            vec3 light_direction =  directional_light_buffer.data.direction;
-            vec3 light_color = directional_light_buffer.data.color;
-            light_color *= directional_light_buffer.data.intensitiy;
+            vec3 light_direction =  GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
+            vec3 light_color = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.color;
+            light_color *= GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.intensitiy;
             vec3 Lo = calculate_light(
                 view_direction,
                 light_direction,

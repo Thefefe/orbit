@@ -5,10 +5,10 @@
 
 layout(push_constant, std430) uniform PushConstants {
 	mat4 view_projection_matrix;
-    SubmeshBuffer submesh_buffer;
-	MeshInfoBuffer mesh_info_buffer;
-	DrawCommandsBuffer draw_commands_buffer;
-	EntityBuffer entity_buffer;
+    uint submesh_buffer;
+	uint mesh_info_buffer;
+	uint draw_commands_buffer;
+	uint entity_buffer;
 };
 
 layout (local_size_x = 256) in;
@@ -30,13 +30,13 @@ bool aabb_plane_test(vec3 box_min, vec3 box_max, vec4 plane) {
 }
 
 void main() {
-	draw_commands_buffer.count = 0;
+	GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count = 0;
 	memoryBarrier();
     uint gID = gl_GlobalInvocationID.x;
-	if (gID < submesh_buffer.count) {
-		Submesh submesh = submesh_buffer.submeshes[gID];
-		MeshInfo mesh_info = mesh_info_buffer.mesh_infos[submesh.mesh_index];
-		EntityData entity_data = entity_buffer.entities[submesh.entity_index];
+	if (gID < GetBuffer(SubmeshBuffer, submesh_buffer).count) {
+		Submesh submesh = GetBuffer(SubmeshBuffer, submesh_buffer).submeshes[gID];
+		MeshInfo mesh_info = GetBuffer(MeshInfoBuffer, mesh_info_buffer).mesh_infos[submesh.mesh_index];
+		EntityData entity_data = GetBuffer(EntityBuffer, entity_buffer).entities[submesh.entity_index];
 		
 		bool visible = true;
 		
@@ -57,13 +57,16 @@ void main() {
 		}
 
 		if (visible) {
-			uint draw_index = atomicAdd(draw_commands_buffer.count, 1);
-			draw_commands_buffer.commands[draw_index].index_count 	  = mesh_info.index_count;
-			draw_commands_buffer.commands[draw_index].instance_count  = 1;
-			draw_commands_buffer.commands[draw_index].first_index     = mesh_info.index_offset;
-			draw_commands_buffer.commands[draw_index].vertex_offset   = mesh_info.vertex_offset;
-			draw_commands_buffer.commands[draw_index].first_instance  = submesh.entity_index;
-			draw_commands_buffer.commands[draw_index].material_index  = submesh.material_index;
+			DrawCommand draw_command;
+			draw_command.index_count 	  = mesh_info.index_count;
+			draw_command.instance_count   = 1;
+			draw_command.first_index      = mesh_info.index_offset;
+			draw_command.vertex_offset    = mesh_info.vertex_offset;
+			draw_command.first_instance   = submesh.entity_index;
+			draw_command.material_index   = submesh.material_index;
+
+			uint draw_index = atomicAdd(GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count, 1);
+			GetBuffer(DrawCommandsBuffer, draw_commands_buffer).commands[draw_index] = draw_command;
 		}
 	}
 }

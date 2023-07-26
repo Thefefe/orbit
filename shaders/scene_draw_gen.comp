@@ -40,8 +40,8 @@ void main() {
 		
 		bool visible = true;
 		
+		// frustum culling
 		Aabb aabb = mesh_info.aabb;
-
 		mat4 mvp = view_projection_matrix * entity_data.model_matrix;
 		mat4 mvp_t = transpose(mvp);
 		vec4 planes[6];

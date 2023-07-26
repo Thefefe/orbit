@@ -1191,13 +1191,6 @@ impl ScreenPostProcess {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct GpuCullData {
-    view_matrix: Mat4,
-    frustum_sides: [Vec4; 4],
-}
-
 const MAX_DRAW_COUNT: usize = 1_000_000;
 
 pub struct SceneDrawGen {

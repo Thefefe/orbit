@@ -91,15 +91,6 @@ struct MeshInfo {
     Aabb aabb;
 };
 
-struct CullData {
-    mat4 view_matrix;
-    vec4 frustum_sides[4];
-};
-
-Buffer(16) CullDataBuffer {
-    CullData data;  
-};
-
 Buffer(4) SubmeshBuffer {
 	uint count;
 	Submesh submeshes[];

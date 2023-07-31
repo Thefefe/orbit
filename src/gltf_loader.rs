@@ -8,7 +8,7 @@ use image::EncodableLayout;
 use crate::{
     assets::{sep_vertex_merge, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle, Aabb},
     render,
-    scene::{EntityData, SceneBuffer, Transform}, utils::OptionDefaultIterator,
+    scene::{EntityData, SceneData, Transform}, utils::OptionDefaultIterator,
 };
 
 fn dxgi_format_to_vk(format : ddsfile::DxgiFormat) -> Option<vk::Format> {
@@ -334,7 +334,7 @@ pub fn load_gltf(
     path: &str,
     context: &render::Context,
     asset_store: &mut GpuAssetStore,
-    scene: &mut SceneBuffer,
+    scene: &mut SceneData,
 ) -> gltf::Result<()> {
     let path = Path::new(path);
     let base_path = path.parent().unwrap_or(Path::new(""));
@@ -519,7 +519,7 @@ pub fn load_gltf(
     }
 
     fn add_gltf_node(
-        scene: &mut SceneBuffer,
+        scene: &mut SceneData,
         model_lookup_table: &[ModelHandle],
         node: gltf::Node,
         parent: Option<&Mat4>,

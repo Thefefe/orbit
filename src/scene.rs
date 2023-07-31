@@ -86,7 +86,14 @@ pub struct GpuDrawCommand {
     _padding: [u32; 2],
 }
 
-pub struct SceneBuffer {
+#[derive(Clone, Copy)]
+pub struct SceneFrameData {
+    pub submesh_count: usize,
+    pub submesh_buffer: render::GraphBufferHandle,
+    pub entity_buffer: render::GraphBufferHandle,
+}
+
+pub struct SceneData {
     pub entities: Vec<EntityData>,
     pub entity_data_buffer: render::Buffer, 
     
@@ -96,7 +103,7 @@ pub struct SceneBuffer {
 
 const MAX_INSTANCE_COUNT: usize = 1_000_000;
 
-impl SceneBuffer {
+impl SceneData {
     pub fn new(context: &render::Context) -> Self {
         let entity_data_buffer = context.create_buffer("scene_instance_buffer", &render::BufferDesc {
             size: MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityData>(),
@@ -165,6 +172,14 @@ impl SceneBuffer {
             bytemuck::cast_slice(&self.submesh_data),
             4,
         );
+    }
+
+    pub fn import_to_graph(&self, context: &mut render::Context) -> SceneFrameData {
+        SceneFrameData {
+            submesh_count: self.submesh_data.len(),
+            submesh_buffer: context.import_buffer(&self.submesh_buffer),
+            entity_buffer: context.import_buffer(&self.entity_data_buffer),
+        }
     }
 
     pub fn destroy(&self, context: &render::Context) {

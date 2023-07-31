@@ -131,6 +131,14 @@ const MAX_VERTEX_COUNT: usize = 4_000_000;
 const MAX_INDEX_COUNT: usize = 12_000_000;
 const MAX_MATERIAL_COUNT: usize = 1_000;
 
+#[derive(Clone, Copy)]
+pub struct AssetFrameData {
+    pub vertex_buffer: render::GraphBufferHandle,
+    pub index_buffer: render::GraphBufferHandle,
+    pub mesh_info_buffer: render::GraphBufferHandle,
+    pub materials_buffer: render::GraphBufferHandle,
+}
+
 pub struct GpuAssetStore {
     pub vertex_buffer: render::Buffer,
     pub index_buffer: render::Buffer,
@@ -289,6 +297,15 @@ impl GpuAssetStore {
 
     pub fn submesh_blocks(&self, model: ModelHandle) -> impl Iterator<Item = &MeshInfo> {
         self.models[model].submeshes.iter().map(|submesh| &self.mesh_infos[submesh.mesh_handle])
+    }
+
+    pub fn import_to_graph(&self, context: &mut render::Context) -> AssetFrameData {
+        AssetFrameData {
+            vertex_buffer:    context.import_buffer(&self.vertex_buffer),
+            index_buffer:     context.import_buffer(&self.index_buffer),
+            mesh_info_buffer: context.import_buffer(&self.mesh_info_buffer),
+            materials_buffer: context.import_buffer(&self.material_buffer),
+        }
     }
 
     pub fn destroy(&self, context: &render::Context) {

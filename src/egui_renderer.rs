@@ -185,7 +185,7 @@ impl EguiRenderer {
                 let texture = match mesh.texture_id {
                     egui::TextureId::Managed(id) => {
                         let image = self.textures.get(&id).unwrap();
-                        context.import_image(
+                        context.import_image_with(
                             "egui_image",
                             image,
                             render::GraphResourceImportDesc {
@@ -315,13 +315,13 @@ impl EguiRenderer {
         let screen_size = window_size.map(|n| n as f32);
         let pipeline = self.pipeline;
 
-        let index_buffer = context.import_buffer(
+        let index_buffer = context.import_buffer_with(
             "egui_index_buffer",
             &self.index_buffer,
             render::GraphResourceImportDesc::default(),
         );
 
-        let vertex_buffer = context.import_buffer(
+        let vertex_buffer = context.import_buffer_with(
             "egui_vertex_buffer",
             &self.vertex_buffer,
             render::GraphResourceImportDesc::default(),

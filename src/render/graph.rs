@@ -72,6 +72,21 @@ pub enum AnyResourceView {
     Image(render::ImageView),
 }
 
+impl AnyResourceView {
+    pub fn handle(&self) -> AnyResourceHandle {
+        match self {
+            AnyResourceView::Buffer(buffer) => AnyResourceHandle::Buffer(buffer.handle),
+            AnyResourceView::Image(image) => AnyResourceHandle::Image(image.handle),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnyResourceHandle {
+    Buffer(vk::Buffer),
+    Image(vk::Image),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AnyResourceDesc {
     Buffer(render::BufferDesc),
@@ -274,6 +289,8 @@ pub struct RenderGraph {
     pub resources: Vec<GraphResourceData>,
     pub passes: arena::Arena<PassData>,
     dependencies: Vec<DependencyData>,
+    
+    pub import_cache: HashMap<AnyResourceHandle, GraphResourceIndex>,
 }
 
 impl RenderGraph {
@@ -282,6 +299,7 @@ impl RenderGraph {
             resources: Vec::new(),
             passes: arena::Arena::new(),
             dependencies: Vec::new(),
+            import_cache: HashMap::new(),
         }
     }
 
@@ -289,11 +307,22 @@ impl RenderGraph {
         self.resources.clear();
         self.passes.clear();
         self.dependencies.clear();
+        self.import_cache.clear();
     }
 
     pub fn add_resource(&mut self, resource_data: GraphResourceData) -> GraphResourceIndex {
         let index = self.resources.len();
+        let imported_handle = if let ResourceSource::Import { view } = &resource_data.source {
+            Some(view.handle())
+        } else {
+            None
+        };
         self.resources.push(resource_data);
+
+        if let Some(handle) = imported_handle {
+            self.import_cache.insert(handle, index);
+        }
+
         index
     }
 

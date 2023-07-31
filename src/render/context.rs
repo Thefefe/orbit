@@ -397,7 +397,25 @@ impl Context {
         self.graph.resources[handle.resource_index].descriptor_index
     }
 
-    pub fn import_buffer(
+    pub fn import_buffer(&mut self, buffer: &render::Buffer) -> GraphHandle<render::Buffer> {
+        let cache = self.graph.import_cache.get(&render::AnyResourceHandle::Buffer(buffer.handle));
+        if let Some(resource_index) = cache.copied() {
+            GraphHandle { resource_index, _phantom: PhantomData }
+        } else {
+            self.import_buffer_with(buffer.name.clone(), &buffer, Default::default())
+        }
+    }
+
+    pub fn import_image(&mut self, image: &render::Image) -> GraphHandle<render::Image> {
+        let cache = self.graph.import_cache.get(&render::AnyResourceHandle::Image(image.handle));
+        if let Some(resource_index) = cache.copied() {
+            GraphHandle { resource_index, _phantom: PhantomData }
+        } else {
+            self.import_image_with(image.name.clone(), &image, Default::default())
+        }
+    }
+
+    pub fn import_buffer_with(
         &mut self,
         name: impl Into<Cow<'static, str>>,
         buffer: &render::BufferView,
@@ -420,7 +438,7 @@ impl Context {
         GraphHandle { resource_index, _phantom: PhantomData }
     }
 
-    pub fn import_image(
+    pub fn import_image_with(
         &mut self,
         name: impl Into<Cow<'static, str>>,
         image: &render::ImageView,

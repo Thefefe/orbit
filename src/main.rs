@@ -5,8 +5,8 @@ use std::{f32::consts::PI, borrow::Cow};
 use ash::vk;
 use gltf_loader::load_gltf;
 use gpu_allocator::MemoryLocation;
-use assets::GpuAssetStore;
-use scene::{Transform, SceneBuffer, GpuDrawCommand};
+use assets::{GpuAssetStore, AssetFrameData};
+use scene::{Transform, SceneData, GpuDrawCommand, SceneFrameData};
 use time::Time;
 use winit::{
     event::{Event,  VirtualKeyCode as KeyCode, MouseButton},
@@ -165,7 +165,7 @@ const NDC_BOUNDS: [Vec4; 8] = [
 ];
 
 const MAX_SHADOW_CASCADE_COUNT: usize = 4;
-const SHADOW_RESOLUTION: u32 = 1024 * 1;
+const SHADOW_RESOLUTION: u32 = 1024 * 4;
 
 fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
     let uniform = near + (far - near) * ratio;
@@ -223,6 +223,15 @@ fn perspective_corners(fovy: f32, aspect_ratio: f32, near: f32, far: f32) -> [Ve
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct ForwardFrameData {
+    view_projection: Mat4,
+    view: Mat4,
+    view_pos: Vec3,
+    render_mode: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct GpuDirectionalLight {
     projection_matrices: [Mat4; MAX_SHADOW_CASCADE_COUNT],
     shadow_maps: [u32; MAX_SHADOW_CASCADE_COUNT],
@@ -232,18 +241,9 @@ struct GpuDirectionalLight {
     _padding: u32,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-struct PerFrameData {
-    view_projection: Mat4,
-    view: Mat4,
-    view_pos: Vec3,
-    render_mode: u32,
-}
-
 struct App {
     gpu_assets: GpuAssetStore,
-    scene: SceneBuffer,
+    scene: SceneData,
     debug_line_renderer: DebugLineRenderer,
     scene_draw_gen: SceneDrawGen,
     shadow_map_renderer: ShadowMapRenderer,
@@ -478,7 +478,7 @@ impl App {
         });
 
         let mut gpu_assets = GpuAssetStore::new(context);
-        let mut scene = SceneBuffer::new(context);
+        let mut scene = SceneData::new(context);
         
         if let Some(gltf_path) = gltf_path {
             load_gltf(gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
@@ -487,16 +487,7 @@ impl App {
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
 
-        let camera = Camera {
-            transform: Transform {
-                position: vec3(0.0, 2.0, 0.0),
-                ..Default::default()
-            },
-            projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.03 },
-            // projection: Projection::Orthographic { half_width: 32.0, near_clip: 0.0, far_clip: 1000.0 },
-        };
-        scene.update_instances(context);
-
+        
         let equirectangular_cube_map_loader = EnvironmentMapLoader::new(context);
 
         let equirectangular_environment_image = {
@@ -515,6 +506,14 @@ impl App {
             .create_from_equirectangular_image(&context, "environment_map".into(), 1024, &equirectangular_environment_image);
 
         context.destroy_image(&equirectangular_environment_image);
+
+        let camera = Camera {
+            transform: Transform {
+                position: vec3(0.0, 2.0, 0.0),
+                ..Default::default()
+            },
+            projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.01 },
+        };
 
         Self {
             gpu_assets,
@@ -730,7 +729,7 @@ impl App {
 
         let view_matrix = main_camera.transform.compute_matrix().inverse();
 
-        let per_frame_data = context.transient_storage_data("per_frame_data", bytemuck::bytes_of(&PerFrameData {
+        let forward_frame_data = context.transient_storage_data("per_frame_data", bytemuck::bytes_of(&ForwardFrameData {
             view_projection: view_projection_matrix,
             view: view_matrix,
             view_pos: self.camera.transform.position,
@@ -757,25 +756,13 @@ impl App {
             aspect: vk::ImageAspectFlags::DEPTH,
         });
         
-        let vertex_buffer = context
-            .import_buffer("mesh_vertex_buffer", &self.gpu_assets.vertex_buffer, Default::default());
-        let index_buffer = context
-            .import_buffer("mesh_index_buffer", &self.gpu_assets.index_buffer, Default::default());
-        let material_buffer = context
-            .import_buffer("material_buffer", &self.gpu_assets.material_buffer, Default::default());
-        let entity_buffer = context
-            .import_buffer("entity_instance_buffer", &self.scene.entity_data_buffer, Default::default());
+        let assets = self.gpu_assets.import_to_graph(context);
+        let scene = self.scene.import_to_graph(context);
 
-        let submeshes = context
-            .import_buffer("scene_submesh_buffer", &self.scene.submesh_buffer, Default::default());
-        let mesh_infos = context
-            .import_buffer("mesh_info_buffer", &self.gpu_assets.mesh_info_buffer, Default::default());
-        let submesh_count = self.scene.submesh_data.len() as u32;
-
-        let skybox_image = context.import_image("skybox", &self.environment_map.skybox, Default::default());
-        let irradiance_image = context.import_image("irradiance_image", &self.environment_map.irradiance, Default::default());
-        let prefiltered_env_map = context.import_image("prefiltered_env_map", &self.environment_map.prefiltered, Default::default());
-        let brdf_integration_map = context.import_image("brdf_integration_map", &self.brdf_integration_map, Default::default());
+        let skybox_image = context.import_image_with("skybox", &self.environment_map.skybox, Default::default());
+        let irradiance_image = context.import_image_with("irradiance_image", &self.environment_map.irradiance, Default::default());
+        let prefiltered_env_map = context.import_image_with("prefiltered_env_map", &self.environment_map.prefiltered, Default::default());
+        let brdf_integration_map = context.import_image_with("brdf_integration_map", &self.brdf_integration_map, Default::default());
 
         let light_direction = -self.sun_light.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
 
@@ -856,15 +843,12 @@ impl App {
             
             let light_projection_matrix = projection_matrix * light_matrix;
             
-            let shadow_map_draw_commands = self.scene_draw_gen
-            .create_draw_commands(
+            let shadow_map_draw_commands = self.scene_draw_gen.create_draw_commands(
                 context,
                 format!("sun_cascade_{cascade_index}_draw_commands").into(),
                 &light_projection_matrix,
-                submesh_count,
-                submeshes,
-                mesh_infos,
-                entity_buffer,
+                assets,
+                scene,
             );
             
             let shadow_map = self.shadow_map_renderer.render_shadow_map(
@@ -873,9 +857,8 @@ impl App {
                 SHADOW_RESOLUTION,
                 light_projection_matrix,
                 shadow_map_draw_commands,
-                vertex_buffer,
-                index_buffer,
-                entity_buffer
+                assets,
+                scene,
             );
             
             directional_light_data.projection_matrices[cascade_index] = light_projection_matrix;
@@ -911,10 +894,8 @@ impl App {
             context,
             "main_draw_commands".into(),
             &main_camera.compute_matrix(aspect_ratio),
-            submesh_count,
-            submeshes,
-            mesh_infos,
-            entity_buffer,
+            assets,
+            scene,
         );
 
         let directional_light_buffer = context
@@ -995,13 +976,13 @@ impl App {
                 let prefiltered_env_map = graph.get_image(prefiltered_env_map);
                 let brdf_integration_map = graph.get_image(brdf_integration_map);
 
-                let per_frame_data = graph.get_buffer(per_frame_data);
+                let per_frame_data = graph.get_buffer(forward_frame_data);
                 
-                let vertex_buffer = graph.get_buffer(vertex_buffer);
-                let index_buffer = graph.get_buffer(index_buffer);
-                let material_buffer = graph.get_buffer(material_buffer);
+                let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
+                let index_buffer = graph.get_buffer(assets.index_buffer);
+                let materials_buffer = graph.get_buffer(assets.materials_buffer);
 
-                let instance_buffer = graph.get_buffer(entity_buffer);
+                let instance_buffer = graph.get_buffer(scene.entity_buffer);
                 let draw_commands_buffer = graph.get_buffer(forward_draw_commands);
                 let directional_light_buffer = graph.get_buffer(directional_light_buffer);
 
@@ -1054,7 +1035,7 @@ impl App {
                     .buffer(&vertex_buffer)
                     .buffer(&instance_buffer)
                     .buffer(&draw_commands_buffer)
-                    .buffer(&material_buffer)
+                    .buffer(&materials_buffer)
                     .buffer(&directional_light_buffer)
                     .image(&irradiance_image)
                     .image(&prefiltered_env_map)
@@ -1215,16 +1196,14 @@ impl SceneDrawGen {
 
     pub fn create_draw_commands(
         &self,
-        frame_ctx: &mut render::Context,
+        context: &mut render::Context,
         draw_commands_name: Cow<'static, str>,
         view_projection_matrix: &Mat4,
-        scene_submesh_count: u32,
-        scene_submeshes: render::GraphBufferHandle,
-        mesh_infos: render::GraphBufferHandle,
-        entity_buffer: render::GraphBufferHandle,
+        assets: AssetFrameData,
+        scene: SceneFrameData,
     ) -> render::GraphBufferHandle {
         let pass_name = format!("{draw_commands_name}_generation");
-        let draw_commands = frame_ctx.create_transient_buffer(draw_commands_name, render::BufferDesc {
+        let draw_commands = context.create_transient_buffer(draw_commands_name, render::BufferDesc {
             size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
             memory_location: MemoryLocation::GpuOnly,
@@ -1233,15 +1212,15 @@ impl SceneDrawGen {
 
         let view_projection_matrix = view_projection_matrix.clone();
 
-        frame_ctx.add_pass(pass_name)
+        context.add_pass(pass_name)
             // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
             // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
             .with_dependency(draw_commands, render::AccessKind::ComputeShaderWrite)
             .render(move |cmd, graph| {
-                let scene_submeshes = graph.get_buffer(scene_submeshes);
-                let mesh_infos = graph.get_buffer(mesh_infos);
+                let mesh_infos = graph.get_buffer(assets.mesh_info_buffer);
+                let scene_submeshes = graph.get_buffer(scene.submesh_buffer);
+                let entity_buffer = graph.get_buffer(scene.entity_buffer);
                 let draw_commands = graph.get_buffer(draw_commands);
-                let entity_buffer = graph.get_buffer(entity_buffer);
                 
                 cmd.bind_compute_pipeline(pipeline);
 
@@ -1252,7 +1231,7 @@ impl SceneDrawGen {
                     .buffer(&draw_commands)
                     .buffer(&entity_buffer);
 
-                cmd.dispatch([scene_submesh_count / 256 + 1, 1, 1]);
+                cmd.dispatch([scene.submesh_count as u32 / 256 + 1, 1, 1]);
             });
         
         draw_commands
@@ -1319,9 +1298,8 @@ impl ShadowMapRenderer {
         view_projection: Mat4,
         draw_commands: render::GraphBufferHandle,
 
-        vertex_buffer: render::GraphBufferHandle,
-        index_buffer: render::GraphBufferHandle,
-        entity_data: render::GraphBufferHandle,
+        assets: AssetFrameData,
+        scene: SceneFrameData,
     ) -> render::GraphImageHandle {
         let pass_name = format!("shadow_pass_for_{name}");
         let shadow_map = frame_ctx.create_transient_image(name, render::ImageDesc {
@@ -1344,9 +1322,9 @@ impl ShadowMapRenderer {
             .render(move |cmd, graph| {
                 let shadow_map = graph.get_image(shadow_map);
                 
-                let vertex_buffer = graph.get_buffer(vertex_buffer);
-                let index_buffer = graph.get_buffer(index_buffer);
-                let entity_buffer = graph.get_buffer(entity_data);
+                let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
+                let index_buffer = graph.get_buffer(assets.index_buffer);
+                let entity_buffer = graph.get_buffer(scene.entity_buffer);
                 let draw_commands_buffer = graph.get_buffer(draw_commands);
 
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
@@ -1645,7 +1623,7 @@ impl DebugLineRenderer {
         depth_image: render::GraphImageHandle,
         view_projection: Mat4,
     ) {
-        let line_buffer = frame_ctx.import_buffer("debug_line_buffer", &self.line_buffer, Default::default());
+        let line_buffer = frame_ctx.import_buffer_with("debug_line_buffer", &self.line_buffer, Default::default());
         let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>();
         let vertex_count = self.vertex_cursor as u32;
         let pipeline = self.pipeline;

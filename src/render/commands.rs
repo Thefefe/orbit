@@ -202,6 +202,7 @@ impl<'a> CommandRecorder<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn write_query(&self, stage: vk::PipelineStageFlags2, pool: vk::QueryPool, query: u32) {
         unsafe {
             self.device.raw.cmd_write_timestamp2(self.buffer(), stage, pool, query);
@@ -238,6 +239,7 @@ impl<'a> CommandRecorder<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn copy_image(
         &self,
         src_image: &render::ImageView,

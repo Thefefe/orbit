@@ -132,7 +132,7 @@ const MAX_INDEX_COUNT: usize = 12_000_000;
 const MAX_MATERIAL_COUNT: usize = 1_000;
 
 #[derive(Clone, Copy)]
-pub struct AssetFrameData {
+pub struct AssetGraphData {
     pub vertex_buffer: render::GraphBufferHandle,
     pub index_buffer: render::GraphBufferHandle,
     pub mesh_info_buffer: render::GraphBufferHandle,
@@ -299,8 +299,8 @@ impl GpuAssetStore {
         self.models[model].submeshes.iter().map(|submesh| &self.mesh_infos[submesh.mesh_handle])
     }
 
-    pub fn import_to_graph(&self, context: &mut render::Context) -> AssetFrameData {
-        AssetFrameData {
+    pub fn import_to_graph(&self, context: &mut render::Context) -> AssetGraphData {
+        AssetGraphData {
             vertex_buffer:    context.import_buffer(&self.vertex_buffer),
             index_buffer:     context.import_buffer(&self.index_buffer),
             mesh_info_buffer: context.import_buffer(&self.mesh_info_buffer),

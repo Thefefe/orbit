@@ -87,7 +87,7 @@ pub struct GpuDrawCommand {
 }
 
 #[derive(Clone, Copy)]
-pub struct SceneFrameData {
+pub struct SceneGraphData {
     pub submesh_count: usize,
     pub submesh_buffer: render::GraphBufferHandle,
     pub entity_buffer: render::GraphBufferHandle,
@@ -174,8 +174,8 @@ impl SceneData {
         );
     }
 
-    pub fn import_to_graph(&self, context: &mut render::Context) -> SceneFrameData {
-        SceneFrameData {
+    pub fn import_to_graph(&self, context: &mut render::Context) -> SceneGraphData {
+        SceneGraphData {
             submesh_count: self.submesh_data.len(),
             submesh_buffer: context.import_buffer(&self.submesh_buffer),
             entity_buffer: context.import_buffer(&self.entity_data_buffer),

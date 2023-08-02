@@ -27,31 +27,139 @@ layout(location = 0) in VertexOutput {
 
 layout(location = 0) out vec4 out_color;
 
-float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
-    vec3 proj_coords = light_space_frag_pos.xyz / light_space_frag_pos.w;
-    proj_coords.y *= -1.0;
-    float current_depth = proj_coords.z;
+#define PCF_SAMPLES 8
+#define PCF_RADIUS 2
+#define PCF_JITTER_MULTIPLIER 0.3
+float pcf(uint shadow_map, vec4 clip_pos) {
+    float sum = 0.0;
 
-    vec2 tex_coord = (proj_coords.xy + 1.0 ) / 2.0;
-
-    if (tex_coord.x < 0.0 || tex_coord.x > 1.0 || tex_coord.y < 0.0 || tex_coord.y > 1.0) return 1.0;
-
-    float shadow = 0.0;
     vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    const int SAMPLES = 2;
-    for(int x = -SAMPLES; x <= SAMPLES; ++x)
-    {
-        for(int y = -SAMPLES; y <= SAMPLES; ++y)
-        {
-            shadow += texture(
-                sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-                vec3(tex_coord + vec2(x, y) * texel_size, current_depth)
-            );
-        }    
-    }
-    shadow /= (SAMPLES * 2 + 1) * (SAMPLES * 2 + 1);
 
-    return shadow;
+    // for (int j = 0; j < PCF_SAMPLES; j += 1) {
+    //     // int x = i - PCF_SAMPLES / 2;
+    //     // int y = j - PCF_SAMPLES / 2;
+
+    //     vec2 jitter = vec2(
+    //         random(gl_FragCoord.xy + j),
+    //         random(gl_FragCoord.yx)
+    //     ) - 1.0;
+
+    //     float x = (float(j) + 0.5 + jitter.x) / float(PCF_SAMPLES);
+    //     float y = (float(PCF_SAMPLES) + 0.5 + jitter.y) / float(PCF_SAMPLES);
+
+    //     vec2 warped_offset = vec2(
+    //         sqrt(y) * cos(2 * PI * x),
+    //         sqrt(y) * sin(2 * PI * x)
+    //     ) * PCF_RADIUS;
+
+    //     sum += textureProj(
+    //         sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+    //         vec4(clip_pos.xy + warped_offset * texel_size, clip_pos.zw)
+    //     );
+    // }
+
+    // if (sum == float(PCF_SAMPLES)) return 1.0;
+    // if (sum == 0.0) return 0.0;
+
+    for (int i = 0; i < PCF_SAMPLES; i += 1) {
+        float ring_sum = 0.0;
+        for (int j = 0; j < PCF_SAMPLES; j += 1) {
+            // int x = i - PCF_SAMPLES / 2;
+            // int y = j - PCF_SAMPLES / 2;
+
+            vec2 jitter = vec2(
+                random(gl_FragCoord.xy + j),
+                random(gl_FragCoord.yx + i)
+            ) - 1.0;
+            jitter *= PCF_JITTER_MULTIPLIER;
+
+            float x = (float(j) + 0.5 + jitter.x) / float(PCF_SAMPLES);
+            float y = (float(PCF_SAMPLES - i) + 0.5 + jitter.y) / float(PCF_SAMPLES);
+
+            vec2 warped_offset = vec2(
+                sqrt(y) * cos(2 * PI * x),
+                sqrt(y) * sin(2 * PI * x)
+            ) * PCF_RADIUS;
+
+            ring_sum += textureProj(
+                sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+                vec4(clip_pos.xy + warped_offset * texel_size, clip_pos.zw)
+            );
+        }
+        sum += ring_sum;
+
+        if (ring_sum == float(PCF_SAMPLES) || ring_sum == 0.0)
+            return sum / float(((i + 1) * PCF_SAMPLES));
+    }
+    sum /= PCF_SAMPLES * PCF_SAMPLES;
+
+    return sum;
+}
+
+float compute_shadow(vec4 light_space_frag_pos, uint shadow_map) {
+    // vec3 proj_coords = light_space_frag_pos.xyz / light_space_frag_pos.w;
+    // proj_coords.y *= -1.0;
+    // float current_depth = proj_coords.z;
+
+    // vec2 tex_coord = (proj_coords.xy + 1.0 ) / 2.0;
+
+    // if (tex_coord.x < 0.0 || tex_coord.x > 1.0 || tex_coord.y < 0.0 || tex_coord.y > 1.0) return 1.0;
+
+    // float shadow = 0.0;
+    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    // const int SAMPLES = 2;
+    // for(int x = -SAMPLES; x <= SAMPLES; ++x)
+    // {
+    //     for(int y = -SAMPLES; y <= SAMPLES; ++y)
+    //     {
+    //         vec2 jitter = vec2(
+    //             random(gl_FragCoord.xy) + x,
+    //             random(gl_FragCoord.yx) + y
+    //         ) - 1.0;
+    //         shadow += texture(
+    //             sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+    //             vec3(tex_coord + (vec2(x, y) + jitter) * texel_size, current_depth)
+    //         );
+    //     }    
+    // }
+    // shadow /= (SAMPLES * 2 + 1) * (SAMPLES * 2 + 1);
+
+    // for (int i = 0; i < PCF_SAMPLES; i += 1) {
+    //     for (int j = 0; j < PCF_SAMPLES; j += 1) {
+    //         int x = i - PCF_SAMPLES / 2;
+    //         int y = j - PCF_SAMPLES / 2;
+
+    //         vec2 jitter = vec2(
+    //             random(gl_FragCoord.xy) + x,
+    //             random(gl_FragCoord.yx) + y
+    //         ) - 1.0;
+
+    //         shadow += texture(
+    //             sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+    //             vec3(tex_coord + (vec2(x, y) + jitter) * texel_size, current_depth)
+    //         );
+    //     }
+    // }
+    // shadow /= PCF_SAMPLES * PCF_SAMPLES;
+
+    // return shadow;
+
+    vec4 proj_coords = light_space_frag_pos;
+    proj_coords.y *= -1.0;
+    proj_coords.xy = (proj_coords.xy + 1.0) * 0.5;
+    return pcf(shadow_map, proj_coords);
+
+    // vec2 jitter = vec2(
+    //     random(gl_FragCoord.xy),
+    //     random(gl_FragCoord.yx)
+    // ) - 1.0;
+
+    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+
+    // return texture(
+    //     sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+    //     vec3(proj_coords.xy + jitter * texel_size, proj_coords.z)
+    // );
 }
 
 vec3 calculate_light(

@@ -31,6 +31,7 @@ impl SceneDrawGen {
         context: &mut render::Context,
         draw_commands_name: Cow<'static, str>,
         view_projection_matrix: &Mat4,
+        cull_plane_mask: FrustumPlaneMask,
         assets: AssetGraphData,
         scene: SceneGraphData,
     ) -> render::GraphBufferHandle {
@@ -58,6 +59,7 @@ impl SceneDrawGen {
 
                 cmd.build_constants()
                     .mat4(&view_projection_matrix)
+                    .uint(cull_plane_mask.0)
                     .buffer(&scene_submeshes)
                     .buffer(&mesh_infos)
                     .buffer(&draw_commands)
@@ -72,4 +74,21 @@ impl SceneDrawGen {
     pub fn destroy(&self, context: &render::Context) {
         context.destroy_pipeline(&self.pipeline);
     }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct FrustumPlaneMask(u32);
+ash::vk_bitflags_wrapped!(FrustumPlaneMask, u32);
+
+impl FrustumPlaneMask {
+    pub const RIGHT:   Self = Self(0b1);
+    pub const LEFT:  Self = Self(0b01);
+    pub const BOTTOM: Self = Self(0b001);
+    pub const TOP:    Self = Self(0b0001);
+    pub const NEAR:   Self = Self(0b00001);
+    pub const FAR:    Self = Self(0b000001);
+
+    pub const SIDES:  Self = Self(0b111100);
+    pub const ALL:    Self = Self(0b111111);
 }

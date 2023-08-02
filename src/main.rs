@@ -45,9 +45,11 @@ use passes::{
     post_process::ScreenPostProcess
 };
 
+use crate::passes::draw_gen::FrustumPlaneMask;
+
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
-pub const SHADOW_RESOLUTION: u32 = 512 * 1;
+pub const SHADOW_RESOLUTION: u32 = 512 * 2;
 
 struct CameraController {
     mouse_sensitivity: f32,
@@ -497,7 +499,7 @@ impl App {
             self.sun_light.transform.orientation,
             self.light_color,
             self.light_intensitiy,
-            &self.camera,
+            &focused_camera,
             aspect_ratio,
             &self.scene_draw_gen,
             assets,
@@ -508,6 +510,7 @@ impl App {
             context,
             "forward_draw_commands".into(),
             &focused_camera_view_projection,
+            FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR,
             assets,
             scene
         );
@@ -607,6 +610,14 @@ impl App {
                         self.debug_line_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0))
                     }
                 }
+            }
+        }
+
+        if self.show_frustum_planes {
+            let planes = math::frustum_planes_from_matrix(&focused_camera.compute_matrix(aspect_ratio));
+
+            for plane in planes {
+                self.debug_line_renderer.draw_plane(plane * vec4(-1.0, -1.0, -1.0, 1.0), 2.0, vec4(1.0, 1.0, 1.0, 1.0));
             }
         }
     }

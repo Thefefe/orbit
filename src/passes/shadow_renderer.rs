@@ -7,17 +7,19 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
 
 use crate::{
     render,
-    App,
-    Camera,
+    math,
     utils,
     assets::AssetGraphData,
     scene::{SceneGraphData, GpuDrawCommand},
+    App,
+    Camera,
+    Projection,
     MAX_DRAW_COUNT,
     MAX_SHADOW_CASCADE_COUNT,
-    SHADOW_RESOLUTION, Projection, math
+    SHADOW_RESOLUTION,
 };
 
-use super::draw_gen::SceneDrawGen;
+use super::draw_gen::{SceneDrawGen, FrustumPlaneMask};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -291,6 +293,7 @@ impl ShadowMapRenderer {
                 context,
                 format!("{name}_{cascade_index}_draw_commands").into(),
                 &light_projection_matrix,
+                FrustumPlaneMask::SIDES,
                 assets,
                 scene,
             );

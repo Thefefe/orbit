@@ -5,6 +5,8 @@
 
 layout(push_constant, std430) uniform PushConstants {
 	mat4 view_projection_matrix;
+	uint plane_mask;
+
     uint submesh_buffer;
 	uint mesh_info_buffer;
 	uint draw_commands_buffer;
@@ -26,7 +28,7 @@ bool aabb_plane_test(vec3 box_min, vec3 box_max, vec4 plane) {
 
     float center_distance = dot(plane.xyz, c) - plane.w;
 
-    return center_distance < -radius;
+    return center_distance > radius;
 }
 
 void main() {
@@ -52,8 +54,11 @@ void main() {
 		planes[4] = mvp_t[3] + mvp_t[2];
 		planes[5] = mvp_t[3] - mvp_t[2];
 
-		for (uint i = 0; i < 6; i += 1) {
-			visible = visible && !aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(planes[i].xyz, -planes[i].w));
+		for (uint i = 0; i < 5; i += 1) {
+			visible = visible && (
+				(plane_mask & (1 << i)) == 0 ||
+				!aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(-planes[i].xyz, planes[i].w))
+			);
 		}
 
 		if (visible) {

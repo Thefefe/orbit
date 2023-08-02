@@ -47,7 +47,7 @@ use passes::{
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
-pub const SHADOW_RESOLUTION: u32 = 1024 * 4;
+pub const SHADOW_RESOLUTION: u32 = 512 * 1;
 
 struct CameraController {
     mouse_sensitivity: f32,
@@ -454,7 +454,22 @@ impl App {
         let screen_extent = context.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
+        let focused_camera = if self.use_mock_camera {
+            &self.mock_camera
+        } else {
+            &self.camera
+        };
+
+        let focused_camera_view_projection = focused_camera.compute_matrix(aspect_ratio);
         let camera_view_projection = self.camera.compute_matrix(aspect_ratio);
+
+        if self.use_mock_camera {
+            let Projection::Perspective { fov, near_clip } = focused_camera.projection else { todo!() };
+            let far_clip = self.shadow_map_renderer.settings.max_shadow_distance;
+            let frustum_corner = math::perspective_corners(fov, aspect_ratio, near_clip, far_clip)
+                .map(|corner| focused_camera.transform.compute_matrix() * corner);
+            self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
+        }
 
         let color_target = context.create_transient_image("color_target", render::ImageDesc {
             ty: render::ImageType::Single2D,
@@ -492,7 +507,7 @@ impl App {
         let forwad_draw_commands = self.scene_draw_gen.create_draw_commands(
             context,
             "forward_draw_commands".into(),
-            &camera_view_projection,
+            &focused_camera_view_projection,
             assets,
             scene
         );

@@ -4,6 +4,7 @@
 #include "include/types.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
+    ivec2 screen_size;
     uint per_frame_buffer;
     uint vertex_buffer;
     uint entity_buffer;

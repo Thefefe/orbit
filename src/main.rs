@@ -49,7 +49,7 @@ use crate::passes::draw_gen::FrustumPlaneMask;
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
-pub const SHADOW_RESOLUTION: u32 = 512 * 2;
+pub const SHADOW_RESOLUTION: u32 = 512 * 8;
 
 struct CameraController {
     mouse_sensitivity: f32,

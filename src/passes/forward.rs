@@ -333,6 +333,8 @@ impl ForwardRenderer {
                 cmd.bind_index_buffer(&index_buffer, 0);
 
                 cmd.build_constants()
+                    .uint(screen_extent.width)
+                    .uint(screen_extent.height)
                     .buffer(&per_frame_data)
                     .buffer(&vertex_buffer)
                     .buffer(&instance_buffer)

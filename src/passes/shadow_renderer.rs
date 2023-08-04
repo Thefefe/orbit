@@ -29,7 +29,12 @@ struct GpuDirectionalLight {
     color: Vec3,
     intensity: f32,
     direction: Vec3,
-    _padding: u32,
+    _padding0: u32,
+    
+    penumbra_filter_max_size: f32,
+    min_filter_radius: f32,
+    max_filter_radius: f32,
+    _padding1: u32
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +52,10 @@ pub struct ShadowSettings {
     // directional
     pub cascade_split_lambda: f32,
     pub max_shadow_distance: f32,
+
+    pub penumbra_filter_max_size: f32,
+    pub min_filter_radius: f32,
+    pub max_filter_radius: f32,
 }
 
 impl Default for ShadowSettings {
@@ -58,6 +67,10 @@ impl Default for ShadowSettings {
             
             cascade_split_lambda: 0.8,
             max_shadow_distance: 100.0,
+
+            penumbra_filter_max_size: 8.0,
+            min_filter_radius: 0.5,
+            max_filter_radius: 8.0,
         }
     }
 }
@@ -220,7 +233,12 @@ impl ShadowMapRenderer {
             color: light_color,
             intensity,
             direction: light_direction,
-            _padding: 0,
+            _padding0: 0,
+
+            penumbra_filter_max_size: self.settings.penumbra_filter_max_size,
+            max_filter_radius: self.settings.max_filter_radius,
+            min_filter_radius: self.settings.min_filter_radius,
+            _padding1: 0,
         };
 
         let mut shadow_maps = [render::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];

@@ -171,8 +171,6 @@ impl Camera {
     }
 }
 
-
-
 struct App {
     gpu_assets: GpuAssetStore,
     scene: SceneData,
@@ -571,6 +569,21 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label("depth_bias_slope_factor");
                 ui.add(egui::DragValue::new(&mut shadow_settings.depth_bias_slope_factor).speed(0.01));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("min_filter_radius");
+                ui.add(egui::DragValue::new(&mut shadow_settings.min_filter_radius).speed(0.1));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("max_filter_radius");
+                ui.add(egui::DragValue::new(&mut shadow_settings.max_filter_radius).speed(0.1));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("penumbra_filter_max_size");
+                ui.add(egui::DragValue::new(&mut shadow_settings.penumbra_filter_max_size).speed(0.1));
             });
 
             ui.horizontal(|ui| {

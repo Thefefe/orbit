@@ -7,8 +7,9 @@
 const float PI = 3.14159265359;
 const float EPSILON = 0.0000001;
 
-#define IMMUTABLE_SAMPLER_COUNT 5
+#define IMMUTABLE_SAMPLER_COUNT 6
 #define SHADOW_SAMPLER 4
+#define SHADOW_DEPTH_SAMPLER 5
 
 layout(set = 1, binding = 0) uniform sampler _u_sampler_registry[IMMUTABLE_SAMPLER_COUNT];
 layout(set = 1, binding = 0) uniform samplerShadow _u_sampler_comparisson_registry[IMMUTABLE_SAMPLER_COUNT];

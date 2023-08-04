@@ -43,8 +43,44 @@ vec2 vogel_disk_sample(int sampleIndex, int samplesCount, float phi) {
   return vec2(r * sin(theta), r * cos(theta));
 }
 
-#define VOGEL_SAMPLES 16
-#define VOGEL_RADIUS 4
+float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers_depth) {
+    float penumbra = (z_shadow_map_view - avg_blockers_depth) / avg_blockers_depth;
+    penumbra *= penumbra;
+    return clamp(80.0f * penumbra, 0.0, 1.0);
+}
+
+#define PENUMBRA_SAMPLE_COUNT 16
+#define SHADOW_SAMPLE_COUNT 32
+
+float penumbra(uint shadow_map, float vogel_theta, vec2 shadow_map_uv, float z_shadow_map_view) {
+    float avg_blockers_depth = 0.0f;
+    float blockers_count = 0.0f;
+
+    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    float penumbra_filter_max_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.penumbra_filter_max_size;
+
+    for(int i = 0; i < PENUMBRA_SAMPLE_COUNT; i ++) {
+        vec2 sample_uv = vogel_disk_sample(i, PENUMBRA_SAMPLE_COUNT, vogel_theta);
+        sample_uv = shadow_map_uv + penumbra_filter_max_size * sample_uv * texel_size;
+
+        float sample_depth = texture(
+            sampler2D(GetTexture2D(shadow_map), GetSampler(SHADOW_DEPTH_SAMPLER)),
+            sample_uv
+        ).x;
+
+        if(sample_depth > z_shadow_map_view) {
+            avg_blockers_depth += sample_depth;
+            blockers_count += 1.0f;
+        }
+    }
+
+    if(blockers_count > 0.0f) {
+        avg_blockers_depth /= blockers_count;
+        return avg_blockers_depth_to_penumbra(z_shadow_map_view, avg_blockers_depth);
+    } else {
+        return 0.0f;
+    }
+}
 
 float pcf_vogel(uint shadow_map, vec4 clip_pos) {
     clip_pos.xyz /= clip_pos.w;
@@ -53,10 +89,17 @@ float pcf_vogel(uint shadow_map, vec4 clip_pos) {
 
     float sum = 0.0;
     vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    float random_theta = interleaved_gradient_noise(gl_FragCoord.xy * screen_size) * 2 * PI;
 
-    for (int i = 0; i < VOGEL_SAMPLES; i += 1) {
-        float random_theta = interleaved_gradient_noise(gl_FragCoord.xy * screen_size) * 2 * PI;
-        vec2 offset = vogel_disk_sample(i, VOGEL_SAMPLES, random_theta) * texel_size * VOGEL_RADIUS;
+    float penumbra = penumbra(shadow_map, random_theta, clip_pos.xy, clip_pos.z);
+
+    float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
+    float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
+    
+    float filter_radius = mix(min_filter_radius, max_filter_radius, penumbra);
+
+    for (int i = 0; i < SHADOW_SAMPLE_COUNT; i += 1) {
+        vec2 offset = vogel_disk_sample(i, SHADOW_SAMPLE_COUNT, random_theta) * texel_size * filter_radius;
         vec2 sample_pos = clip_pos.xy + offset;
 
         vec4 gathered_samples = textureGather(
@@ -68,57 +111,7 @@ float pcf_vogel(uint shadow_map, vec4 clip_pos) {
         sum += dot(gathered_samples, vec4(1.0));
     }
 
-    sum /= VOGEL_SAMPLES * 4;
-
-    return sum;
-}
-
-#define PCF_SAMPLES 12
-#define PCF_RADIUS 4
-#define PCF_JITTER_MULTIPLIER 0.3
-float pcf(uint shadow_map, vec4 clip_pos) {
-    clip_pos.xyz /= clip_pos.w;
-    clip_pos.y *= -1.0;
-    clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
-
-    float sum = 0.0;
-
-    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-
-    for (int i = 0; i < PCF_SAMPLES; i += 1) {
-        float ring_sum = 0.0;
-        for (int j = 0; j < PCF_SAMPLES; j += 1) {
-            // int x = i - PCF_SAMPLES / 2;
-            // int y = j - PCF_SAMPLES / 2;
-
-            vec2 jitter = vec2(
-                random(gl_FragCoord.xy + j),
-                random(gl_FragCoord.yx + i)
-            ) - 1.0;
-            jitter *= PCF_JITTER_MULTIPLIER;
-
-            float x = (float(j) + 0.5 + jitter.x) / float(PCF_SAMPLES);
-            float y = (float(PCF_SAMPLES - i) + 0.5 + jitter.y) / float(PCF_SAMPLES);
-
-            vec2 warped_offset = vec2(
-                sqrt(y) * cos(2 * PI * x),
-                sqrt(y) * sin(2 * PI * x)
-            ) * PCF_RADIUS;
-
-            vec4 samples = textureGather(
-                sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-                clip_pos.xy + warped_offset * texel_size,
-                clip_pos.z
-            ); 
-            ring_sum += dot(samples, vec4(1.0));
-
-        }
-        sum += ring_sum;
-
-        if (ring_sum == float(PCF_SAMPLES) || ring_sum == 0.0)
-            return sum / float(((i + 1) * PCF_SAMPLES * 4));
-    }
-    sum /= PCF_SAMPLES * PCF_SAMPLES * 4;
+    sum /= SHADOW_SAMPLE_COUNT * 4;
 
     return sum;
 }
@@ -286,11 +279,12 @@ void main() {
             out_color.rgb = ambient + Lo + emissive * 4.0;
             break;
         case 1: 
-            float shadow = max(shadow, 0.7);
-            vec3 cascade_color = vec3(0.25);
-            if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
-                cascade_color = CASCADE_COLORS[cascade_index];
-            out_color = vec4(cascade_color * albedo * shadow, 1.0);
+            // float shadow = max(shadow, 0.7);
+            // vec3 cascade_color = vec3(0.25);
+            // if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
+            //     cascade_color = CASCADE_COLORS[cascade_index];
+            // out_color = vec4(cascade_color * albedo * shadow, 1.0);
+            out_color = vec4(vec3(shadow), 1.0);
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 2: 

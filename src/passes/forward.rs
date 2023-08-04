@@ -131,7 +131,7 @@ impl ForwardRenderer {
             let fragment_shader = utils::load_spv("shaders/brdf_integration.frag.spv").unwrap();
 
             let vertex_module = context.create_shader_module(&vertex_shader, "blit_vertex_shader");
-            let fragment_module = context.create_shader_module(&fragment_shader, "blit_fragment_shader");
+            let fragment_module = context.create_shader_module(&fragment_shader, "brdf_integration_fragment_shader");
 
             let entry = cstr::cstr!("main");
 

@@ -15,6 +15,11 @@ struct DirectionalLightData {
     float intensitiy;
     vec3 direction;
     uint _padding;
+
+    float penumbra_filter_max_size;
+    float min_filter_radius;
+    float max_filter_radius;
+    uint _padding1;
 };
 
 struct PerFrameData {

@@ -13,6 +13,6 @@ layout(push_constant, std430) uniform PushConstants {
 };
 
 void main() {
-    vec4 tex_color = texture(sampler2D(GetTexture2D(input_texture), _uSamplers[0]), in_uv);
+    vec4 tex_color = texture(sampler2D(GetTexture2D(input_texture), GetSampler(0)), in_uv);
     out_color = in_color * tex_color;
 }

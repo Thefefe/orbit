@@ -338,9 +338,10 @@ pub enum SamplerKind {
     NearestClamp     = 2,
     NearestRepeat    = 3,
     ShadowComparison = 4,
+    ShadowDepth      = 5,
 }
 
-const SAMPLER_COUNT: usize = 5;
+const SAMPLER_COUNT: usize = 6;
 
 impl SamplerKind {
     pub const ALL: [SamplerKind; SAMPLER_COUNT] = [
@@ -349,6 +350,7 @@ impl SamplerKind {
         Self::NearestClamp,
         Self::NearestRepeat,
         Self::ShadowComparison,
+        Self::ShadowDepth,
     ];
 
     fn create_info(self) -> vk::SamplerCreateInfo {
@@ -405,14 +407,25 @@ impl SamplerKind {
                 .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                 .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                 .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .min_filter(vk::Filter::NEAREST)
-                .mag_filter(vk::Filter::NEAREST)
-                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .min_filter(vk::Filter::LINEAR)
+                .mag_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
                 .min_lod(0.0)
-                .max_lod(1.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
                 .compare_enable(true)
                 .compare_op(vk::CompareOp::GREATER_OR_EQUAL)
                 .build(),
+            SamplerKind::ShadowDepth => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .min_filter(vk::Filter::LINEAR)
+                .mag_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+                
         }
     }
 }

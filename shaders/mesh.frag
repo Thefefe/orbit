@@ -279,13 +279,11 @@ void main() {
             out_color.rgb = ambient + Lo + emissive * 4.0;
             break;
         case 1: 
-            // float shadow = max(shadow, 0.7);
-            // vec3 cascade_color = vec3(0.25);
-            // if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
-            //     cascade_color = CASCADE_COLORS[cascade_index];
-            // out_color = vec4(cascade_color * albedo * shadow, 1.0);
-            out_color = vec4(vec3(shadow), 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            float shadow = max(shadow, 0.1);
+            vec3 cascade_color = vec3(0.25);
+            if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
+                cascade_color = CASCADE_COLORS[cascade_index];
+            out_color = vec4(cascade_color * albedo * shadow, 1.0);
             break;
         case 2: 
             out_color = vec4(normal * 0.5 + 0.5, 1.0);

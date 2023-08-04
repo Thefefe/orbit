@@ -16,7 +16,6 @@ use crate::{
     Projection,
     MAX_DRAW_COUNT,
     MAX_SHADOW_CASCADE_COUNT,
-    SHADOW_RESOLUTION,
 };
 
 use super::draw_gen::{SceneDrawGen, FrustumPlaneMask};
@@ -45,6 +44,8 @@ pub struct DirectionalLightGraphData {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ShadowSettings {
+    pub shadow_resolution: u32,
+
     pub depth_bias_constant_factor: f32,
     pub depth_bias_clamp: f32,
     pub depth_bias_slope_factor: f32,
@@ -61,6 +62,8 @@ pub struct ShadowSettings {
 impl Default for ShadowSettings {
     fn default() -> Self {
         Self {
+            shadow_resolution: 4096,
+
             depth_bias_constant_factor: -6.0,
             depth_bias_clamp: 0.0,
             depth_bias_slope_factor: -6.0,
@@ -72,6 +75,62 @@ impl Default for ShadowSettings {
             min_filter_radius: 0.5,
             max_filter_radius: 8.0,
         }
+    }
+}
+
+impl ShadowSettings {
+    pub fn edit(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("shadow_resolution");
+            egui::ComboBox::from_id_source("shadow_resolution")
+                .selected_text(format!("{}", self.shadow_resolution))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.shadow_resolution, 512, "512");
+                    ui.selectable_value(&mut self.shadow_resolution, 1024, "1024");
+                    ui.selectable_value(&mut self.shadow_resolution, 2048, "2048");
+                    ui.selectable_value(&mut self.shadow_resolution, 4096, "4096");
+                });
+        });
+
+
+        ui.horizontal(|ui| {
+            ui.label("depth_bias_constant_factor");
+            ui.add(egui::DragValue::new(&mut self.depth_bias_constant_factor).speed(0.01));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("depth_bias_clamp");
+            ui.add(egui::DragValue::new(&mut self.depth_bias_clamp).speed(0.01));
+        });
+        ui.horizontal(|ui| {
+            ui.label("depth_bias_slope_factor");
+            ui.add(egui::DragValue::new(&mut self.depth_bias_slope_factor).speed(0.01));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("min_filter_radius");
+            ui.add(egui::DragValue::new(&mut self.min_filter_radius).speed(0.1));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("max_filter_radius");
+            ui.add(egui::DragValue::new(&mut self.max_filter_radius).speed(0.1));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("penumbra_filter_max_size");
+            ui.add(egui::DragValue::new(&mut self.penumbra_filter_max_size).speed(0.1));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("max_shadow_distance");
+            ui.add(egui::DragValue::new(&mut self.max_shadow_distance).speed(1.0));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("lambda");
+            ui.add(egui::Slider::new(&mut self.cascade_split_lambda, 0.0..=1.0));
+        });
     }
 }
 
@@ -278,7 +337,7 @@ impl ShadowMapRenderer {
             let subfrustum_center_light_space = Vec3A::from(subfrustum_center_light_space)
                 / subfrustum_center_light_space.w;
 
-            let texel_size_vs = radius * 2.0 / SHADOW_RESOLUTION as f32;
+            let texel_size_vs = radius * 2.0 / self.settings.shadow_resolution as f32;
             
             // texel alignment
             let subfrustum_center_light_space = (subfrustum_center_light_space / texel_size_vs).floor() * texel_size_vs;
@@ -319,7 +378,7 @@ impl ShadowMapRenderer {
             let shadow_map = self.render_shadow_map(
                 format!("{name}_{cascade_index}").into(),
                 context,
-                SHADOW_RESOLUTION,
+                self.settings.shadow_resolution,
                 light_projection_matrix,
                 shadow_map_draw_commands,
                 assets,

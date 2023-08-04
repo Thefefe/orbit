@@ -49,7 +49,6 @@ use crate::passes::draw_gen::FrustumPlaneMask;
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
-pub const SHADOW_RESOLUTION: u32 = 512 * 2;
 
 struct CameraController {
     mouse_sensitivity: f32,
@@ -555,46 +554,8 @@ impl App {
                 ui.label("light_intensitiy");
                 ui.add(egui::DragValue::new(&mut self.light_intensitiy).speed(0.4));
             });
-            
-            let shadow_settings = &mut self.shadow_map_renderer.settings;
 
-            ui.horizontal(|ui| {
-                ui.label("depth_bias_constant_factor");
-                ui.add(egui::DragValue::new(&mut shadow_settings.depth_bias_constant_factor).speed(0.01));
-            });
-            ui.horizontal(|ui| {
-                ui.label("depth_bias_clamp");
-                ui.add(egui::DragValue::new(&mut shadow_settings.depth_bias_clamp).speed(0.01));
-            });
-            ui.horizontal(|ui| {
-                ui.label("depth_bias_slope_factor");
-                ui.add(egui::DragValue::new(&mut shadow_settings.depth_bias_slope_factor).speed(0.01));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("min_filter_radius");
-                ui.add(egui::DragValue::new(&mut shadow_settings.min_filter_radius).speed(0.1));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("max_filter_radius");
-                ui.add(egui::DragValue::new(&mut shadow_settings.max_filter_radius).speed(0.1));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("penumbra_filter_max_size");
-                ui.add(egui::DragValue::new(&mut shadow_settings.penumbra_filter_max_size).speed(0.1));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("max_shadow_distance");
-                ui.add(egui::DragValue::new(&mut shadow_settings.max_shadow_distance).speed(1.0));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("lambda");
-                ui.add(egui::Slider::new(&mut shadow_settings.cascade_split_lambda, 0.0..=1.0));
-            });
+            self.shadow_map_renderer.settings.edit(ui);
 
             ui.horizontal(|ui| {
                 ui.label("selected_cascade");

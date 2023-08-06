@@ -227,14 +227,22 @@ void main() {
     }
 
     uint map_based_cascade_index = 4;
-    for (uint i = 0; i < MAX_SHADOW_CASCADE_COUNT; i += 1) {
-        if (check_ndc_bounds(vout.cascade_map_coords[i])) {
-            map_based_cascade_index -= 1;
-        }
+    if (check_ndc_bounds(vout.cascade_map_coords[3])) {
+        map_based_cascade_index = 3;
+    }
+    if (check_ndc_bounds(vout.cascade_map_coords[2])) {
+        map_based_cascade_index = 2;
+    }
+    if (check_ndc_bounds(vout.cascade_map_coords[1])) {
+        map_based_cascade_index = 1;
+    }
+    if (check_ndc_bounds(vout.cascade_map_coords[0])) {
+        map_based_cascade_index = 0;
     }
 
     vec4 cascade_distances = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascade_distances;
-    uint cascade_index = select_cascade_by_interval(cascade_distances, vout.view_pos.z);
+    // uint cascade_index = select_cascade_by_interval(cascade_distances, vout.view_pos.z);
+    uint cascade_index = map_based_cascade_index;
     
     float split_blend_ratio = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.split_blend_ratio;
     float cascade_near_distance = 0.0;
@@ -252,15 +260,15 @@ void main() {
     if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
         shadow = pcf_vogel(shadow_map, vout.cascade_map_coords[cascade_index]);
         
-        if (blend_distance < blend_threshold) {
-            float far_shadow = 1.0;
-            if (cascade_index + 1 < MAX_SHADOW_CASCADE_COUNT) {
-                uint far_shadow_map =
-                    GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index + 1];
-                far_shadow = pcf_vogel(far_shadow_map, vout.cascade_map_coords[cascade_index + 1]);
-            }
-            shadow = mix(shadow, far_shadow, blend_amount);
-        }
+        // if (blend_distance < blend_threshold) {
+        //     float far_shadow = 1.0;
+        //     if (cascade_index + 1 < MAX_SHADOW_CASCADE_COUNT) {
+        //         uint far_shadow_map =
+        //             GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index + 1];
+        //         far_shadow = pcf_vogel(far_shadow_map, vout.cascade_map_coords[cascade_index + 1]);
+        //     }
+        //     shadow = mix(shadow, far_shadow, blend_amount);
+        // }
     }
 
     switch (render_mode) {
@@ -317,9 +325,9 @@ void main() {
             if (cascade_index + 1 < MAX_SHADOW_CASCADE_COUNT)
                 far_cascade_color = CASCADE_COLORS[cascade_index + 1];
             
-            vec3 blended_cascade_color = mix(cascade_color, far_cascade_color, blend_amount);
+            // vec3 blended_cascade_color = mix(cascade_color, far_cascade_color, blend_amount);
 
-            out_color = vec4(blended_cascade_color * albedo * shadow, 1.0);
+            out_color = vec4(cascade_color * albedo * shadow, 1.0);
             break;
         case 2: 
             out_color = vec4(normal * 0.5 + 0.5, 1.0);

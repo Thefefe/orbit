@@ -1,13 +1,6 @@
 #[allow(unused_imports)]
 use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
 
-pub fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
-    let uniform = near + (far - near) * ratio;
-    let log = near * (far / near).powf(ratio);
-    
-    log * lambda + (1.0 - lambda) * uniform
-}
-
 pub const NDC_BOUNDS: [Vec4; 8] = [
     vec4(-1.0, -1.0, 0.0,  1.0),
     vec4( 1.0, -1.0, 0.0,  1.0),
@@ -19,6 +12,18 @@ pub const NDC_BOUNDS: [Vec4; 8] = [
     vec4( 1.0,  1.0, 1.0,  1.0),
     vec4(-1.0,  1.0, 1.0,  1.0),
 ];
+
+
+pub fn lerp_element_wise(x: Vec4, y: Vec4, a: Vec4) -> Vec4 {
+    x + ((y - x) * a)
+}
+
+pub fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
+    let uniform = near + (far - near) * ratio;
+    let log = near * (far / near).powf(ratio);
+    
+    log * lambda + (1.0 - lambda) * uniform
+}
 
 pub fn frustum_planes_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
     let mut planes = [matrix.row(3); 6];

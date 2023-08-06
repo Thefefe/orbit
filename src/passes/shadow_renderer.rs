@@ -334,51 +334,82 @@ impl ShadowMapRenderer {
             let view_to_world_matrix = camera.transform.compute_matrix();
             let view_to_light_matrix = light_matrix * view_to_world_matrix;
 
-            let subfrustum_corners_view_space = math::perspective_corners(fov, aspect_ratio, near, far);
-            
-            let mut subfrustum_center_view_space = Vec4::ZERO;
-            let mut min_coords_light_space = Vec3A::ZERO;
-            let mut max_coords_light_space = Vec3A::ZERO;
-            for corner_view_space in subfrustum_corners_view_space.iter().copied() {
-                subfrustum_center_view_space += corner_view_space;
+            let subfrustum_corners_light_space = math::perspective_corners(fov, aspect_ratio, near, far)
+                .map(|corner| {
+                    let v = view_to_light_matrix * corner;
+                    v / v.w
+                });
 
-                let corner_light_space = Vec3A::from(view_to_light_matrix * corner_view_space);
-                min_coords_light_space = Vec3A::min(min_coords_light_space, corner_light_space);
-                max_coords_light_space = Vec3A::max(max_coords_light_space, corner_light_space);
+            let mut subfrustum_center_light_space = Vec4::ZERO;
+            let mut min_coords_light_space = Vec3A::from(subfrustum_corners_light_space[0]);
+            let mut max_coords_light_space = Vec3A::from(subfrustum_corners_light_space[0]);
+            for corner_light_space in subfrustum_corners_light_space.iter().copied() {
+                subfrustum_center_light_space += corner_light_space;
+                min_coords_light_space = Vec3A::min(min_coords_light_space, corner_light_space.into());
+                max_coords_light_space = Vec3A::max(max_coords_light_space, corner_light_space.into());
             }
-            subfrustum_center_view_space /= 8.0;
+            subfrustum_center_light_space /= 8.0;
             
             let mut radius_sqr = 0.0;
-            for corner_view_space in subfrustum_corners_view_space.iter().copied() {
-                let corner = Vec3A::from(corner_view_space);
-                radius_sqr = f32::max(radius_sqr, corner.distance_squared(subfrustum_center_view_space.into()));
+            for corner_light_space in subfrustum_corners_light_space.iter().copied() {
+                let corner = Vec3A::from(corner_light_space);
+                radius_sqr = f32::max(radius_sqr, corner.distance_squared(subfrustum_center_light_space.into()));
             }
             let radius = radius_sqr.sqrt();
 
-            let subfrustum_center_light_space = view_to_light_matrix * subfrustum_center_view_space;
-            let subfrustum_center_light_space = Vec3A::from(subfrustum_center_light_space)
-                / subfrustum_center_light_space.w;
+            // offsets the whole projection to minimize the area not visible by the camera
+            // this one isn't perfect but close enough
+            let forward_offset = {
+                let min_coords = min_coords_light_space - Vec3A::from(subfrustum_center_light_space);
+                let max_coords = max_coords_light_space - Vec3A::from(subfrustum_center_light_space);
+
+                let forward_sign = -view_to_light_matrix.transform_vector3a(vec3a(0.0, 0.0, -1.0));
+                let forward_a = (forward_sign + 1.0) / 2.0;
+
+                let offset = math::lerp_element_wise(min_coords.extend(1.0), max_coords.extend(1.0), forward_a.extend(1.0));
+                let offset = Vec3A::from(offset) - Vec3A::splat(radius) * forward_sign;
+
+                offset
+            };
+
+            // if cascade_index == selected_cascade {
+            //     let min_max_corners = math::NDC_BOUNDS.map(|corner| {
+            //         let mut a = (corner + Vec4::ONE) / 2.0;
+            //         a.w = 1.0;
+            //         let min = min_coords_light_space.extend(1.0);
+            //         let max = max_coords_light_space.extend(1.0);
+            //         light_matrix.inverse() * math::lerp_element_wise(min, max, a)
+            //     });
+            //     debug_line_renderer.draw_frustum(&min_max_corners, vec4(0.0, 0.0, 1.0, 1.0));
+            // }
 
             let texel_size_vs = radius * 2.0 / self.settings.shadow_resolution as f32;
             
-            // texel alignment
-            let subfrustum_center_light_space = (subfrustum_center_light_space / texel_size_vs).floor() * texel_size_vs;
+            // modifications:
+            //  - aligned to view space texel sizes
+            //  - offset in the direction of the camera
+            let subfrustum_center_modified_light_space =
+                ((Vec3A::from(subfrustum_center_light_space) + forward_offset) / texel_size_vs).floor() * texel_size_vs;
 
             let mut max_extent = Vec3A::splat(radius);
             let mut min_extent = -max_extent;
 
-            max_extent += subfrustum_center_light_space;
-            min_extent += subfrustum_center_light_space;
+            max_extent += subfrustum_center_modified_light_space;
+            min_extent += subfrustum_center_modified_light_space;
 
             let projection_matrix = Mat4::orthographic_rh(
                 min_extent.x, max_extent.x,
                 min_extent.y, max_extent.y,
-                -150.0,
-                -min_coords_light_space.z,
+                // min_coords_light_space.x, max_coords_light_space.x,
+                // min_coords_light_space.y, max_coords_light_space.y,
+                -max_coords_light_space.z - 200.0,
+                // -min_coords_light_space.z + 200.0,
+                -subfrustum_center_modified_light_space.z + radius,
             );
 
             if show_cascade_view_frustum && selected_cascade == cascade_index {
-                let subfrustum_corners_w = subfrustum_corners_view_space.map(|v| view_to_world_matrix * v);
+                let subfrustum_corners_w = math::perspective_corners(fov, aspect_ratio, near, far)
+                    .map(|v| view_to_world_matrix * v);
                 debug_line_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
             }
             

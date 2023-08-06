@@ -51,8 +51,9 @@ float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers
 
 #define PENUMBRA_SAMPLE_COUNT 16
 #define SHADOW_SAMPLE_COUNT 32
+#define SHADOW_FILTER_MULTIPLIER 0.01
 
-float penumbra(uint shadow_map, float vogel_theta, vec2 shadow_map_uv, float z_shadow_map_view) {
+float penumbra(uint shadow_map, float vogel_theta, vec3 light_space_pos) {
     float avg_blockers_depth = 0.0f;
     float blockers_count = 0.0f;
 
@@ -61,14 +62,14 @@ float penumbra(uint shadow_map, float vogel_theta, vec2 shadow_map_uv, float z_s
 
     for(int i = 0; i < PENUMBRA_SAMPLE_COUNT; i ++) {
         vec2 sample_uv = vogel_disk_sample(i, PENUMBRA_SAMPLE_COUNT, vogel_theta);
-        sample_uv = shadow_map_uv + penumbra_filter_max_size * sample_uv * texel_size;
+        sample_uv = light_space_pos.xy + sample_uv * penumbra_filter_max_size * texel_size;
 
         float sample_depth = texture(
             sampler2D(GetTexture2D(shadow_map), GetSampler(SHADOW_DEPTH_SAMPLER)),
             sample_uv
         ).x;
 
-        if(sample_depth > z_shadow_map_view) {
+        if(sample_depth < light_space_pos.z) {
             avg_blockers_depth += sample_depth;
             blockers_count += 1.0f;
         }
@@ -76,7 +77,7 @@ float penumbra(uint shadow_map, float vogel_theta, vec2 shadow_map_uv, float z_s
 
     if(blockers_count > 0.0f) {
         avg_blockers_depth /= blockers_count;
-        return avg_blockers_depth_to_penumbra(z_shadow_map_view, avg_blockers_depth);
+        return avg_blockers_depth_to_penumbra(light_space_pos.z, avg_blockers_depth);
     } else {
         return 0.0f;
     }
@@ -91,7 +92,7 @@ float pcf_vogel(uint shadow_map, vec4 clip_pos) {
     vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
     float random_theta = interleaved_gradient_noise(gl_FragCoord.xy * screen_size) * 2 * PI;
 
-    float penumbra = penumbra(shadow_map, random_theta, clip_pos.xy, clip_pos.z);
+    float penumbra = penumbra(shadow_map, random_theta, clip_pos.xyz);
 
     float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
     float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
@@ -99,7 +100,7 @@ float pcf_vogel(uint shadow_map, vec4 clip_pos) {
     float filter_radius = mix(min_filter_radius, max_filter_radius, penumbra);
 
     for (int i = 0; i < SHADOW_SAMPLE_COUNT; i += 1) {
-        vec2 offset = vogel_disk_sample(i, SHADOW_SAMPLE_COUNT, random_theta) * texel_size * filter_radius;
+        vec2 offset = vogel_disk_sample(i, SHADOW_SAMPLE_COUNT, random_theta) * filter_radius * texel_size;
         vec2 sample_pos = clip_pos.xy + offset;
 
         vec4 gathered_samples = textureGather(
@@ -158,8 +159,14 @@ vec3 calculate_light(
     return (kD * albedo / PI + specular) * radiance * n_dot_l;
 }
 
-bool check_ndc_bounds(vec2 v) {
-    return all(bvec4(lessThanEqual(vec2(-1.0), v), lessThanEqual(v, vec2(1.0))));
+bool check_ndc_bounds(vec4 p) {
+    p /= p.w;
+    return all(greaterThanEqual(p, vec4(-1.0, -1.0, 0.0, 0.0))) && all(lessThanEqual(p, vec4(1.0)));
+}
+
+uint select_cascade_by_interval(vec4 distances, float d) {
+    vec4 cmp = mix(vec4(0.0), vec4(1.0), lessThanEqual(vec4(d), distances));
+    return 4 - uint(dot(cmp, vec4(1.0)));
 }
 
 const vec3 CASCADE_COLORS[6] = vec3[](
@@ -189,7 +196,6 @@ void main() {
     }
 
     if (material.normal_texture_index != TEXTURE_NONE) {
-        // support for 2 component normals, for now I do this for all normal maps
         vec4 normal_tex = texture(GetSampledTexture2D(material.normal_texture_index), vout.uv);
         vec3 normal_tang = normal_tex.xyz * 2.0 - 1.0;
         normal_tang.z = sqrt(abs(1 - normal_tang.x*normal_tang.x - normal_tang.y * normal_tang.y));
@@ -220,19 +226,36 @@ void main() {
         discard;
     }
 
-    uint cascade_index = 4 ;
-    for (int i = 3; i >= 0; i -= 1) {
-        if (check_ndc_bounds(vout.cascade_map_coords[i].xy)) {
-            cascade_index = i;
+    uint map_based_cascade_index = 4;
+    for (uint i = 0; i < MAX_SHADOW_CASCADE_COUNT; i += 1) {
+        if (check_ndc_bounds(vout.cascade_map_coords[i])) {
+            map_based_cascade_index -= 1;
         }
     }
 
-    vec4 light_space_frag_pos = vout.cascade_map_coords[cascade_index];
+    vec4 cascade_distances = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascade_distances;
+    uint cascade_index = select_cascade_by_interval(cascade_distances, vout.view_pos.z);
+    
+    float cascade_seam = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.blend_seam;
+    float blend_distance = cascade_distances[cascade_index] - vout.view_pos.z;
+    float blend_amount = 1.0 - clamp((cascade_distances[cascade_index] - vout.view_pos.z) / cascade_seam, 0.0, 1.0);
+    
     uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
 
     float shadow = 1.0;
-    if (cascade_index < MAX_SHADOW_CASCADE_COUNT) shadow =
-        pcf_vogel(shadow_map,light_space_frag_pos);
+    if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
+        shadow = pcf_vogel(shadow_map, vout.cascade_map_coords[cascade_index]);
+        
+        if (blend_distance < cascade_seam) {
+            float far_shadow = 1.0;
+            if (cascade_index + 1 < MAX_SHADOW_CASCADE_COUNT) {
+                uint far_shadow_map =
+                    GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index + 1];
+                far_shadow = pcf_vogel(far_shadow_map, vout.cascade_map_coords[cascade_index + 1]);
+            }
+            shadow = mix(shadow, far_shadow, blend_amount);
+        }
+    }
 
     switch (render_mode) {
         case 0:
@@ -281,9 +304,16 @@ void main() {
         case 1: 
             float shadow = max(shadow, 0.1);
             vec3 cascade_color = vec3(0.25);
+            vec3 far_cascade_color = vec3(0.25);
+
             if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
                 cascade_color = CASCADE_COLORS[cascade_index];
-            out_color = vec4(cascade_color * albedo * shadow, 1.0);
+            if (cascade_index + 1 < MAX_SHADOW_CASCADE_COUNT)
+                far_cascade_color = CASCADE_COLORS[cascade_index + 1];
+            
+            vec3 blended_cascade_color = mix(cascade_color, far_cascade_color, blend_amount);
+
+            out_color = vec4(blended_cascade_color * albedo * shadow, 1.0);
             break;
         case 2: 
             out_color = vec4(normal * 0.5 + 0.5, 1.0);

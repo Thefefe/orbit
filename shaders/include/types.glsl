@@ -11,10 +11,11 @@ struct GlobalData {
 struct DirectionalLightData {
     mat4 projection_matrices[MAX_SHADOW_CASCADE_COUNT];
     uint shadow_maps[MAX_SHADOW_CASCADE_COUNT];
+    vec4 cascade_distances;
     vec3 color;
     float intensitiy;
     vec3 direction;
-    uint _padding;
+    float blend_seam;
 
     float penumbra_filter_max_size;
     float min_filter_radius;

@@ -498,9 +498,16 @@ impl App {
             self.light_intensitiy,
             &focused_camera,
             aspect_ratio,
-            &self.scene_draw_gen,
+            
             assets,
-            scene
+            scene,
+
+            &self.scene_draw_gen,
+            
+            self.selected_cascade,
+            self.show_cascade_view_frustum,
+            self.show_cascade_light_frustum,
+            &mut self.debug_line_renderer,
         );
 
         let forwad_draw_commands = self.scene_draw_gen.create_draw_commands(

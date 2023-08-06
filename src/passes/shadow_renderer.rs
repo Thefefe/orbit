@@ -18,17 +18,18 @@ use crate::{
     MAX_SHADOW_CASCADE_COUNT,
 };
 
-use super::draw_gen::{SceneDrawGen, FrustumPlaneMask};
+use super::{draw_gen::{SceneDrawGen, FrustumPlaneMask}, debug_line_renderer::DebugLineRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct GpuDirectionalLight {
     projection_matrices: [Mat4; MAX_SHADOW_CASCADE_COUNT],
     shadow_maps: [u32; MAX_SHADOW_CASCADE_COUNT],
+    cascade_distances: Vec4,
     color: Vec3,
     intensity: f32,
     direction: Vec3,
-    _padding0: u32,
+    blend_seam: f32,
     
     penumbra_filter_max_size: f32,
     min_filter_radius: f32,
@@ -53,6 +54,7 @@ pub struct ShadowSettings {
     // directional
     pub cascade_split_lambda: f32,
     pub max_shadow_distance: f32,
+    pub blend_seam: f32,
 
     pub penumbra_filter_max_size: f32,
     pub min_filter_radius: f32,
@@ -64,16 +66,17 @@ impl Default for ShadowSettings {
         Self {
             shadow_resolution: 4096,
 
-            depth_bias_constant_factor: -6.0,
+            depth_bias_constant_factor: 6.0,
             depth_bias_clamp: 0.0,
-            depth_bias_slope_factor: -6.0,
+            depth_bias_slope_factor: 6.0,
             
             cascade_split_lambda: 0.8,
             max_shadow_distance: 100.0,
+            blend_seam: 4.0,
 
-            penumbra_filter_max_size: 8.0,
-            min_filter_radius: 0.5,
-            max_filter_radius: 8.0,
+            penumbra_filter_max_size: 6.0,
+            min_filter_radius: 1.0,
+            max_filter_radius: 6.0,
         }
     }
 }
@@ -109,22 +112,27 @@ impl ShadowSettings {
 
         ui.horizontal(|ui| {
             ui.label("min_filter_radius");
-            ui.add(egui::DragValue::new(&mut self.min_filter_radius).speed(0.1));
+            ui.add(egui::DragValue::new(&mut self.min_filter_radius).speed(0.1).clamp_range(0.0..=32.0));
         });
 
         ui.horizontal(|ui| {
             ui.label("max_filter_radius");
-            ui.add(egui::DragValue::new(&mut self.max_filter_radius).speed(0.1));
+            ui.add(egui::DragValue::new(&mut self.max_filter_radius).speed(0.1).clamp_range(0.0..=32.0));
         });
 
         ui.horizontal(|ui| {
             ui.label("penumbra_filter_max_size");
-            ui.add(egui::DragValue::new(&mut self.penumbra_filter_max_size).speed(0.1));
+            ui.add(egui::DragValue::new(&mut self.penumbra_filter_max_size).speed(0.1).clamp_range(0.0..=32.0));
         });
 
         ui.horizontal(|ui| {
             ui.label("max_shadow_distance");
-            ui.add(egui::DragValue::new(&mut self.max_shadow_distance).speed(1.0));
+            ui.add(egui::DragValue::new(&mut self.max_shadow_distance).speed(0.5).clamp_range(0.0..=1000.0));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("blend_seam");
+            ui.add(egui::DragValue::new(&mut self.blend_seam).speed(0.05).clamp_range(0.0..=16.0));
         });
 
         ui.horizontal(|ui| {
@@ -167,7 +175,7 @@ impl ShadowMapRenderer {
                     format: App::DEPTH_FORMAT,
                     test: true,
                     write: true,
-                    compare: vk::CompareOp::GREATER,
+                    compare: vk::CompareOp::LESS,
                 }),
                 multisample: render::MultisampleCount::None,
                 dynamic_states: &[vk::DynamicState::DEPTH_BIAS]
@@ -225,7 +233,7 @@ impl ShadowMapRenderer {
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
                         depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 0.0,
+                            depth: 1.0,
                             stencil: 0,
                         },
                     })
@@ -278,10 +286,15 @@ impl ShadowMapRenderer {
         camera: &Camera,
         aspect_ratio: f32,
 
-        draw_gen: &SceneDrawGen,
-
         assets: AssetGraphData,
         scene: SceneGraphData,
+
+        draw_gen: &SceneDrawGen,
+
+        selected_cascade: usize,
+        show_cascade_view_frustum: bool,
+        show_cascade_light_frustum: bool,
+        debug_line_renderer: &mut DebugLineRenderer,
     ) -> DirectionalLightGraphData {
         let light_direction = -direction.mul_vec3(vec3(0.0, 0.0, -1.0));
         let inv_light_direction = direction.inverse();
@@ -289,10 +302,11 @@ impl ShadowMapRenderer {
         let mut directional_light_data = GpuDirectionalLight {
             projection_matrices: bytemuck::Zeroable::zeroed(),
             shadow_maps: bytemuck::Zeroable::zeroed(),
+            cascade_distances: Vec4::ZERO,
             color: light_color,
             intensity,
             direction: light_direction,
-            _padding0: 0,
+            blend_seam: self.settings.blend_seam,
 
             penumbra_filter_max_size: self.settings.penumbra_filter_max_size,
             max_filter_radius: self.settings.max_filter_radius,
@@ -314,25 +328,33 @@ impl ShadowMapRenderer {
             let near = math::frustum_split(near_clip, far_clip, lambda, near_split_ratio);
             let far = math::frustum_split(near_clip, far_clip, lambda, far_split_ratio);
 
+            directional_light_data.cascade_distances[cascade_index] = far;
+
             let light_matrix = Mat4::from_quat(inv_light_direction);
             let view_to_world_matrix = camera.transform.compute_matrix();
+            let view_to_light_matrix = light_matrix * view_to_world_matrix;
 
             let subfrustum_corners_view_space = math::perspective_corners(fov, aspect_ratio, near, far);
             
             let mut subfrustum_center_view_space = Vec4::ZERO;
-            for corner in subfrustum_corners_view_space.iter().copied() {
-                subfrustum_center_view_space += corner;
+            let mut min_coords_light_space = Vec3A::ZERO;
+            let mut max_coords_light_space = Vec3A::ZERO;
+            for corner_view_space in subfrustum_corners_view_space.iter().copied() {
+                subfrustum_center_view_space += corner_view_space;
+
+                let corner_light_space = Vec3A::from(view_to_light_matrix * corner_view_space);
+                min_coords_light_space = Vec3A::min(min_coords_light_space, corner_light_space);
+                max_coords_light_space = Vec3A::max(max_coords_light_space, corner_light_space);
             }
             subfrustum_center_view_space /= 8.0;
             
             let mut radius_sqr = 0.0;
-            for corner in subfrustum_corners_view_space.iter().copied() {
-                let corner = Vec3A::from(corner);
+            for corner_view_space in subfrustum_corners_view_space.iter().copied() {
+                let corner = Vec3A::from(corner_view_space);
                 radius_sqr = f32::max(radius_sqr, corner.distance_squared(subfrustum_center_view_space.into()));
             }
             let radius = radius_sqr.sqrt();
 
-            let view_to_light_matrix = light_matrix * view_to_world_matrix;
             let subfrustum_center_light_space = view_to_light_matrix * subfrustum_center_view_space;
             let subfrustum_center_light_space = Vec3A::from(subfrustum_center_light_space)
                 / subfrustum_center_light_space.w;
@@ -351,18 +373,19 @@ impl ShadowMapRenderer {
             let projection_matrix = Mat4::orthographic_rh(
                 min_extent.x, max_extent.x,
                 min_extent.y, max_extent.y,
-                150.0, -150.0,
+                -150.0,
+                -min_coords_light_space.z,
             );
 
-            // if self.show_cascade_view_frustum && self.selected_cascade == cascade_index {
-            //     let subfrustum_corners_w = subfrustum_corners_view_space.map(|v| view_to_world_matrix * v);
-            //     self.debug_line_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
-            // }
+            if show_cascade_view_frustum && selected_cascade == cascade_index {
+                let subfrustum_corners_w = subfrustum_corners_view_space.map(|v| view_to_world_matrix * v);
+                debug_line_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
+            }
             
-            // if self.show_cascade_light_frustum && self.selected_cascade == cascade_index {
-            //     let cascade_frustum_corners = frustum_corners_from_matrix(&(projection_matrix * light_matrix));
-            //     self.debug_line_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
-            // }
+            if show_cascade_light_frustum && selected_cascade == cascade_index {
+                let cascade_frustum_corners = math::frustum_corners_from_matrix(&(projection_matrix * light_matrix));
+                debug_line_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
+            }
             
             let light_projection_matrix = projection_matrix * light_matrix;
             

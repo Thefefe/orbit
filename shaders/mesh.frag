@@ -236,17 +236,23 @@ void main() {
     vec4 cascade_distances = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascade_distances;
     uint cascade_index = select_cascade_by_interval(cascade_distances, vout.view_pos.z);
     
-    float cascade_seam = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.blend_seam;
-    float blend_distance = cascade_distances[cascade_index] - vout.view_pos.z;
-    float blend_amount = 1.0 - clamp((cascade_distances[cascade_index] - vout.view_pos.z) / cascade_seam, 0.0, 1.0);
-    
+    float split_blend_ratio = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.split_blend_ratio;
+    float cascade_near_distance = 0.0;
+    float cascade_far_distance = 0.0;
+    if (cascade_index - 1 < MAX_SHADOW_CASCADE_COUNT) cascade_near_distance = cascade_distances[cascade_index - 1];
+    if (cascade_index < MAX_SHADOW_CASCADE_COUNT) cascade_far_distance = cascade_distances[cascade_index];
+    float blend_threshold = (cascade_far_distance - cascade_near_distance) * split_blend_ratio;
+
+    float blend_distance = cascade_far_distance - vout.view_pos.z;
+    float blend_amount = 1.0 - clamp(blend_distance / blend_threshold, 0.0, 1.0);
+
     uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
 
     float shadow = 1.0;
     if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
         shadow = pcf_vogel(shadow_map, vout.cascade_map_coords[cascade_index]);
         
-        if (blend_distance < cascade_seam) {
+        if (blend_distance < blend_threshold) {
             float far_shadow = 1.0;
             if (cascade_index + 1 < MAX_SHADOW_CASCADE_COUNT) {
                 uint far_shadow_map =

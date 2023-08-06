@@ -15,7 +15,7 @@ struct DirectionalLightData {
     vec3 color;
     float intensitiy;
     vec3 direction;
-    float blend_seam;
+    float split_blend_ratio;
 
     float penumbra_filter_max_size;
     float min_filter_radius;

@@ -527,6 +527,7 @@ impl App {
             depth_target,
 
             &self.camera,
+            focused_camera,
             self.render_mode,
 
             &self.environment_map,

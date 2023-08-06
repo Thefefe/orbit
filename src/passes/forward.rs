@@ -228,6 +228,7 @@ impl ForwardRenderer {
         depth_target: render::GraphImageHandle,
         
         camera: &Camera,
+        focused_camera: &Camera,
         render_mode: u32,
         
         environment_map: &EnvironmentMap,
@@ -241,6 +242,7 @@ impl ForwardRenderer {
         let screen_extent = context.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
+        let focused_view_matrix = focused_camera.transform.compute_matrix().inverse();
         let camera_view_matrix = camera.transform.compute_matrix().inverse();
         let camera_projection_matrix = camera.projection.compute_matrix(aspect_ratio);
         let camera_view_projection_matrix = camera_projection_matrix * camera_view_matrix;
@@ -250,7 +252,7 @@ impl ForwardRenderer {
 
         let frame_data = context.transient_storage_data("per_frame_data", bytemuck::bytes_of(&ForwardFrameData {
             view_projection: camera_view_projection_matrix,
-            view: camera_view_matrix,
+            view: focused_view_matrix,
             view_pos: camera.transform.position,
             render_mode,
         }));

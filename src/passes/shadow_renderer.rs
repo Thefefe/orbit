@@ -54,7 +54,7 @@ pub struct ShadowSettings {
     // directional
     pub cascade_split_lambda: f32,
     pub max_shadow_distance: f32,
-    pub blend_seam: f32,
+    pub split_blend_ratio: f32,
 
     pub penumbra_filter_max_size: f32,
     pub min_filter_radius: f32,
@@ -72,7 +72,7 @@ impl Default for ShadowSettings {
             
             cascade_split_lambda: 0.8,
             max_shadow_distance: 100.0,
-            blend_seam: 4.0,
+            split_blend_ratio: 0.5,
 
             penumbra_filter_max_size: 6.0,
             min_filter_radius: 1.0,
@@ -131,8 +131,8 @@ impl ShadowSettings {
         });
 
         ui.horizontal(|ui| {
-            ui.label("blend_seam");
-            ui.add(egui::DragValue::new(&mut self.blend_seam).speed(0.05).clamp_range(0.0..=16.0));
+            ui.label("split_blend_ratio");
+            ui.add(egui::DragValue::new(&mut self.split_blend_ratio).speed(0.005).clamp_range(0.0..=1.0));
         });
 
         ui.horizontal(|ui| {
@@ -306,7 +306,7 @@ impl ShadowMapRenderer {
             color: light_color,
             intensity,
             direction: light_direction,
-            blend_seam: self.settings.blend_seam,
+            blend_seam: self.settings.split_blend_ratio,
 
             penumbra_filter_max_size: self.settings.penumbra_filter_max_size,
             max_filter_radius: self.settings.max_filter_radius,

@@ -174,7 +174,8 @@ impl RasterPipeline {
             .scissor_count(1);
 
         let multisample_state =
-            vk::PipelineMultisampleStateCreateInfo::builder().rasterization_samples(desc.multisample.to_vk());
+            vk::PipelineMultisampleStateCreateInfo::builder()
+                .rasterization_samples(desc.multisample.to_vk());
 
         let color_blend_attachment: Vec<_> =
             desc.color_attachments.iter().map(|attachment| attachment.color_blend_vk()).collect();

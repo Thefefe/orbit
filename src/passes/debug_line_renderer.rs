@@ -74,7 +74,7 @@ impl DebugLineRenderer {
                     depth_clamp: false,
                 },
                 color_attachments: &[render::PipelineColorAttachment {
-                    format: context.swapchain.format(),
+                    format: App::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
                 }],

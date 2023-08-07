@@ -70,7 +70,7 @@ impl Default for ShadowSettings {
             depth_bias_clamp: 0.0,
             depth_bias_slope_factor: 6.0,
             
-            cascade_split_lambda: 0.8,
+            cascade_split_lambda: 0.91,
             max_shadow_distance: 100.0,
             split_blend_ratio: 0.5,
 

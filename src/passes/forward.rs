@@ -115,7 +115,7 @@ impl ForwardRenderer {
                     write: false,
                     compare: vk::CompareOp::GREATER,
                 }),
-                multisample: render::MultisampleCount::None,
+                multisample: App::MULTISAMPLING,
                 dynamic_states: &[],
             });
 
@@ -225,6 +225,7 @@ impl ForwardRenderer {
         
         draw_commands: render::GraphBufferHandle,
         color_target: render::GraphImageHandle,
+        color_resolve: Option<render::GraphImageHandle>,
         depth_target: render::GraphImageHandle,
         
         camera: &Camera,
@@ -268,12 +269,14 @@ impl ForwardRenderer {
 
         context.add_pass("forward_pass")
             .with_dependency(color_target, render::AccessKind::ColorAttachmentWrite)
+            .with_dependencies(color_resolve.map(|i| (i, render::AccessKind::ColorAttachmentWrite)))
             .with_dependency(depth_target, render::AccessKind::DepthAttachmentWrite)
             .with_dependency(draw_commands, render::AccessKind::IndirectBuffer)
             .with_dependencies(directional_light.shadow_maps.map(|h| (h, render::AccessKind::FragmentShaderRead)))    
             .render(move |cmd, graph| {
-                let target_image = graph.get_image(color_target);
-                let depth_image = graph.get_image(depth_target);
+                let color_target = graph.get_image(color_target);
+                let color_resolve = color_resolve.map(|i| graph.get_image(i));
+                let depth_target = graph.get_image(depth_target);
 
                 let skybox_image = graph.get_image(skybox_image);
                 let irradiance_image = graph.get_image(irradiance_image);
@@ -290,21 +293,21 @@ impl ForwardRenderer {
                 let draw_commands_buffer = graph.get_buffer(draw_commands);
                 let directional_light_buffer = graph.get_buffer(directional_light.buffer);
 
-                let color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(target_image.view)
+                let mut color_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(color_target.view)
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::DONT_CARE)
                     .store_op(vk::AttachmentStoreOp::STORE);
 
-                // if let Some(resolve_image) = resolve_image {
-                //     color_attachment = color_attachment
-                //         .resolve_image_view(resolve_image.view)
-                //         .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                //         .resolve_mode(vk::ResolveModeFlags::AVERAGE);
-                // }
+                if let Some(color_resolve) = color_resolve {
+                    color_attachment = color_attachment
+                        .resolve_image_view(color_resolve.view)
+                        .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+                }
 
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
-                    .image_view(depth_image.view)
+                    .image_view(depth_target.view)
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
@@ -316,7 +319,7 @@ impl ForwardRenderer {
                     .store_op(vk::AttachmentStoreOp::STORE);
 
                 let rendering_info = vk::RenderingInfo::builder()
-                    .render_area(target_image.full_rect())
+                    .render_area(color_target.full_rect())
                     .layer_count(1)
                     .color_attachments(std::slice::from_ref(&color_attachment))
                     .depth_attachment(&depth_attachemnt);

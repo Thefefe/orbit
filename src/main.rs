@@ -212,7 +212,7 @@ struct App {
 impl App {
     pub const COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::None;
+    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X8;
 
     fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
         let mut gpu_assets = GpuAssetStore::new(context);
@@ -470,15 +470,31 @@ impl App {
             self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
-        let color_target = context.create_transient_image("color_target", render::ImageDesc {
+        let color_target = context.create_transient_image("color_target_msaa", render::ImageDesc {
             ty: render::ImageType::Single2D,
             format: Self::COLOR_FORMAT,
             dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
             samples: Self::MULTISAMPLING,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
             aspect: vk::ImageAspectFlags::COLOR,
         });
+
+        let color_target_resolve = if Self::MULTISAMPLING != render::MultisampleCount::None {
+            Some(context.create_transient_image("color_target_msaa", render::ImageDesc {
+                ty: render::ImageType::Single2D,
+                format: Self::COLOR_FORMAT,
+                dimensions: [screen_extent.width, screen_extent.height, 1],
+                mip_levels: 1,
+                samples: render::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+            }))
+        } else {
+            None
+        };
+
+        let color_target_non_msaa = color_target_resolve.unwrap_or(color_target);
 
         let depth_target = context.create_transient_image("depth_target", render::ImageDesc {
             ty: render::ImageType::Single2D,
@@ -524,6 +540,7 @@ impl App {
 
             forwad_draw_commands,
             color_target,
+            None,
             depth_target,
 
             &self.camera,
@@ -537,10 +554,8 @@ impl App {
             scene,
         );
 
-        let swapchain_image = context.get_swapchain_image();
-
-        self.post_process.render(context, color_target, self.camera_exposure);
-        self.debug_line_renderer.render(context, swapchain_image, None, depth_target, camera_view_projection);
+        self.debug_line_renderer.render(context, color_target, Some(color_target_non_msaa), depth_target, camera_view_projection);
+        self.post_process.render(context, color_target_non_msaa, self.camera_exposure);
 
         egui::Window::new("camera_and_lighting").open(&mut self.open_camera_light_editor).show(egui_ctx, |ui| {
             ui.checkbox(&mut self.use_mock_camera, "use mock camera");

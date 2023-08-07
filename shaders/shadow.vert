@@ -10,11 +10,8 @@ layout(push_constant) uniform PushConstants {
 };
 
 void main() {
-    MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex];
+    vec3 pos = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex].pos;
     mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].model_matrix;
 
-    gl_Position =
-        view_proj *
-        model_matrix *
-        vec4(vertex.pos, 1.0);
+    gl_Position = view_proj * model_matrix * vec4(pos, 1.0);
 }

@@ -3,46 +3,46 @@
 use std::f32::consts::PI;
 
 use ash::vk;
-use gltf_loader::load_gltf;
 use assets::GpuAssetStore;
+use gltf_loader::load_gltf;
 
 use time::Time;
 use winit::{
-    event::{Event,  VirtualKeyCode as KeyCode, MouseButton},
-    event_loop::{EventLoop, ControlFlow},
+    event::{Event, MouseButton, VirtualKeyCode as KeyCode},
+    event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
 
 #[allow(unused_imports)]
-use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
+use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
-mod input;
-mod time;
-mod render;
 mod assets;
+mod input;
+mod render;
 mod scene;
+mod time;
 
 mod passes;
 
-mod math;
 mod collections;
+mod math;
 mod utils;
 
 mod gltf_loader;
 
 mod egui_renderer;
 
-use input::Input;
 use egui_renderer::EguiRenderer;
-use scene::{Transform, SceneData};
+use input::Input;
+use scene::{SceneData, Transform};
 
 use passes::{
-    forward::ForwardRenderer,
-    env_map_loader::{EnvironmentMapLoader, EnvironmentMap},
     debug_line_renderer::DebugLineRenderer,
-    shadow_renderer::ShadowMapRenderer,
     draw_gen::SceneDrawGen,
-    post_process::ScreenPostProcess
+    env_map_loader::{EnvironmentMap, EnvironmentMapLoader},
+    forward::ForwardRenderer,
+    post_process::ScreenPostProcess,
+    shadow_renderer::ShadowMapRenderer,
 };
 
 use crate::passes::draw_gen::FrustumPlaneMask;
@@ -116,7 +116,7 @@ pub enum Projection {
     Perspective {
         fov: f32,
         near_clip: f32,
-    }
+    },
 }
 
 impl Projection {
@@ -180,7 +180,7 @@ struct App {
     shadow_map_renderer: ShadowMapRenderer,
     post_process: ScreenPostProcess,
     equirectangular_cube_map_loader: EnvironmentMapLoader,
-    
+
     environment_map: EnvironmentMap,
 
     camera: Camera,
@@ -189,7 +189,7 @@ struct App {
     mock_camera_controller: CameraController,
     sun_light: Camera,
     light_dir_controller: CameraController,
-    
+
     render_mode: u32,
     camera_exposure: f32,
     light_color: Vec3,
@@ -212,12 +212,12 @@ struct App {
 impl App {
     pub const COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X8;
+    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::None;
 
     fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
         let mut gpu_assets = GpuAssetStore::new(context);
         let mut scene = SceneData::new(context);
-        
+
         if let Some(gltf_path) = gltf_path {
             load_gltf(gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
         }
@@ -225,23 +225,31 @@ impl App {
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
 
-        
         let equirectangular_cube_map_loader = EnvironmentMapLoader::new(context);
 
         let equirectangular_environment_image = {
             let (image_binary, image_format) =
-                gltf_loader::load_image_data("D:\\dev\\models\\fbx\\Bistro_v5_2\\san_giuseppe_bridge_4k.dds")
-                .unwrap();
-            let mut image =
-                gltf_loader::load_image(context, "environment_map".into(), &image_binary, image_format, true, true);
-            
+                gltf_loader::load_image_data("D:\\thefe\\Downloads\\industrial_sunset_puresky_4k.hdr").unwrap();
+            let mut image = gltf_loader::load_image(
+                context,
+                "environment_map".into(),
+                &image_binary,
+                image_format,
+                true,
+                true,
+            );
+
             image.set_sampler_flags(render::SamplerKind::LinearRepeat);
 
             image
-        };  
+        };
 
-        let environment_map = equirectangular_cube_map_loader
-            .create_from_equirectangular_image(&context, "environment_map".into(), 1024, &equirectangular_environment_image);
+        let environment_map = equirectangular_cube_map_loader.create_from_equirectangular_image(
+            &context,
+            "environment_map".into(),
+            1024,
+            &equirectangular_environment_image,
+        );
 
         context.destroy_image(&equirectangular_environment_image);
 
@@ -250,7 +258,10 @@ impl App {
                 position: vec3(0.0, 2.0, 0.0),
                 ..Default::default()
             },
-            projection: Projection::Perspective { fov: 90f32.to_radians(), near_clip: 0.01 },
+            projection: Projection::Perspective {
+                fov: 90f32.to_radians(),
+                near_clip: 0.01,
+            },
         };
 
         Self {
@@ -272,7 +283,11 @@ impl App {
             mock_camera_controller: CameraController::new(1.0, 0.003),
             sun_light: Camera {
                 transform: Transform::default(),
-                projection: Projection::Orthographic { half_width: 20.0, near_clip: -20.0, far_clip: 20.0 },
+                projection: Projection::Orthographic {
+                    half_width: 20.0,
+                    near_clip: -20.0,
+                    far_clip: 20.0,
+                },
             },
             light_dir_controller: CameraController::new(1.0, 0.003),
 
@@ -302,7 +317,7 @@ impl App {
         time: &Time,
         egui_ctx: &egui::Context,
         context: &render::Context,
-        control_flow: &mut ControlFlow
+        control_flow: &mut ControlFlow,
     ) {
         puffin::profile_function!();
 
@@ -322,8 +337,7 @@ impl App {
             self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
         }
 
-        
-        if input.mouse_held(MouseButton::Middle) {
+        if input.mouse_held(MouseButton::Left) {
             self.light_dir_controller.update_look(input, &mut self.sun_light.transform);
         }
 
@@ -380,24 +394,28 @@ impl App {
         }
 
         if self.open_scene_editor_open {
-            egui::Window::new("scene").open(&mut self.open_scene_editor_open).vscroll(true).show(egui_ctx, |ui| {
-                for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
-                    let header = entity.name.as_ref().map_or(
-                        format!("entity_{entity_index}"),
-                        |name| format!("entity_{entity_index} ({name})")
-                    );
-                    ui.collapsing(header, |ui| {
-                        drag_vec3(ui, "position", &mut entity.transform.position, 0.001);
-    
-                        let (euler_x, euler_y, euler_z) = entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
-                        let mut euler = vec3(euler_x, euler_y, euler_z);
-                        drag_vec3(ui, "orientation", &mut euler, 0.05);
-                        entity.transform.orientation = Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
-    
-                        drag_vec3(ui, "scale", &mut entity.transform.scale, 0.001);
-                    });
-                }
-            });
+            egui::Window::new("scene")
+                .open(&mut self.open_scene_editor_open)
+                .vscroll(true)
+                .show(egui_ctx, |ui| {
+                    for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
+                        let header = entity.name.as_ref().map_or(format!("entity_{entity_index}"), |name| {
+                            format!("entity_{entity_index} ({name})")
+                        });
+                        ui.collapsing(header, |ui| {
+                            drag_vec3(ui, "position", &mut entity.transform.position, 0.001);
+
+                            let (euler_x, euler_y, euler_z) =
+                                entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
+                            let mut euler = vec3(euler_x, euler_y, euler_z);
+                            drag_vec3(ui, "orientation", &mut euler, 0.05);
+                            entity.transform.orientation =
+                                Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
+
+                            drag_vec3(ui, "scale", &mut entity.transform.scale, 0.001);
+                        });
+                    }
+                });
         }
 
         if self.open_graph_debugger {
@@ -427,7 +445,7 @@ impl App {
             KeyCode::Key8,
             KeyCode::Key9,
         ];
-        
+
         let mut new_render_mode = None;
         for (render_mode, key) in RENDER_MODES.iter().enumerate() {
             if input.key_pressed(*key) {
@@ -446,10 +464,10 @@ impl App {
 
     fn render(&mut self, context: &mut render::Context, egui_ctx: &egui::Context) {
         puffin::profile_function!();
-        
+
         let assets = self.gpu_assets.import_to_graph(context);
         let scene = self.scene.import_to_graph(context);
-        
+
         let screen_extent = context.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
@@ -470,7 +488,7 @@ impl App {
             self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
-        let color_target = context.create_transient_image("color_target_msaa", render::ImageDesc {
+        let mut color_target_desc = render::ImageDesc {
             ty: render::ImageType::Single2D,
             format: Self::COLOR_FORMAT,
             dimensions: [screen_extent.width, screen_extent.height, 1],
@@ -478,33 +496,48 @@ impl App {
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
             aspect: vk::ImageAspectFlags::COLOR,
-        });
+        };
 
-        let color_target_resolve = if Self::MULTISAMPLING != render::MultisampleCount::None {
-            Some(context.create_transient_image("color_target_msaa", render::ImageDesc {
-                ty: render::ImageType::Single2D,
-                format: Self::COLOR_FORMAT,
-                dimensions: [screen_extent.width, screen_extent.height, 1],
-                mip_levels: 1,
-                samples: render::MultisampleCount::None,
-                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-                aspect: vk::ImageAspectFlags::COLOR,
-            }))
+        if App::MULTISAMPLING == render::MultisampleCount::None {
+            color_target_desc.usage |= vk::ImageUsageFlags::SAMPLED;
+        }
+
+        let color_target = context.create_transient_image(
+            "color_target",
+            color_target_desc,
+        );
+
+        let color_resolve_target = if Self::MULTISAMPLING != render::MultisampleCount::None {
+            Some(context.create_transient_image(
+                "color_resolve_target",
+                render::ImageDesc {
+                    ty: render::ImageType::Single2D,
+                    format: Self::COLOR_FORMAT,
+                    dimensions: [screen_extent.width, screen_extent.height, 1],
+                    mip_levels: 1,
+                    samples: render::MultisampleCount::None,
+                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                },
+            ))
         } else {
             None
         };
 
-        let color_target_non_msaa = color_target_resolve.unwrap_or(color_target);
+        // let color_target_non_msaa = color_resolve_target.unwrap_or(color_target);
 
-        let depth_target = context.create_transient_image("depth_target", render::ImageDesc {
-            ty: render::ImageType::Single2D,
-            format: Self::DEPTH_FORMAT,
-            dimensions: [screen_extent.width, screen_extent.height, 1],
-            mip_levels: 1,
-            samples: Self::MULTISAMPLING,
-            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-            aspect: vk::ImageAspectFlags::DEPTH,
-        });
+        let depth_target = context.create_transient_image(
+            "depth_target",
+            render::ImageDesc {
+                ty: render::ImageType::Single2D,
+                format: Self::DEPTH_FORMAT,
+                dimensions: [screen_extent.width, screen_extent.height, 1],
+                mip_levels: 1,
+                samples: Self::MULTISAMPLING,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                aspect: vk::ImageAspectFlags::DEPTH,
+            },
+        );
 
         let directional_light = self.shadow_map_renderer.render_directional_light(
             context,
@@ -514,12 +547,9 @@ impl App {
             self.light_intensitiy,
             &focused_camera,
             aspect_ratio,
-            
             assets,
             scene,
-
             &self.scene_draw_gen,
-            
             self.selected_cascade,
             self.show_cascade_view_frustum,
             self.show_cascade_light_frustum,
@@ -532,61 +562,75 @@ impl App {
             &focused_camera_view_projection,
             FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR,
             assets,
-            scene
+            scene,
         );
 
         self.forward_renderer.render(
             context,
-
             forwad_draw_commands,
             color_target,
             None,
             depth_target,
-
             &self.camera,
             focused_camera,
             self.render_mode,
-
             &self.environment_map,
             directional_light,
-            
             assets,
             scene,
         );
 
-        self.debug_line_renderer.render(context, color_target, Some(color_target_non_msaa), depth_target, camera_view_projection);
-        self.post_process.render(context, color_target_non_msaa, self.camera_exposure);
+        self.debug_line_renderer.render(
+            context,
+            color_target,
+            color_resolve_target,
+            depth_target,
+            camera_view_projection,
+        );
+        self.post_process.render(
+            context,
+            if let Some(resolved) = color_resolve_target { resolved } else { color_target },
+            self.camera_exposure
+        );
 
-        egui::Window::new("camera_and_lighting").open(&mut self.open_camera_light_editor).show(egui_ctx, |ui| {
-            ui.checkbox(&mut self.use_mock_camera, "use mock camera");
-            ui.checkbox(&mut self.show_cascade_view_frustum, "use cascade view frustum");
-            ui.checkbox(&mut self.show_cascade_light_frustum, "use cascade light frustum");
+        egui::Window::new("camera_and_lighting")
+            .open(&mut self.open_camera_light_editor)
+            .show(egui_ctx, |ui| {
+                ui.checkbox(&mut self.use_mock_camera, "use mock camera");
+                ui.checkbox(&mut self.show_cascade_view_frustum, "use cascade view frustum");
+                ui.checkbox(&mut self.show_cascade_light_frustum, "use cascade light frustum");
 
-            ui.horizontal(|ui| {
-                ui.label("camera_exposure");
-                ui.add(egui::DragValue::new(&mut self.camera_exposure).speed(0.05).clamp_range(0.1..=20.0));
+                ui.horizontal(|ui| {
+                    ui.label("camera_exposure");
+                    ui.add(egui::DragValue::new(&mut self.camera_exposure).speed(0.05).clamp_range(0.1..=20.0));
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("light_color");
+                    let mut array = self.light_color.to_array();
+                    ui.color_edit_button_rgb(&mut array);
+                    self.light_color = Vec3::from_array(array);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("light_intensitiy");
+                    ui.add(egui::DragValue::new(&mut self.light_intensitiy).speed(0.4));
+                });
+
+                self.shadow_map_renderer.settings.edit(ui);
+
+                ui.horizontal(|ui| {
+                    ui.label("selected_cascade");
+                    ui.add(egui::Slider::new(
+                        &mut self.selected_cascade,
+                        0..=MAX_SHADOW_CASCADE_COUNT - 1,
+                    ));
+                });
+
+                ui.image(
+                    directional_light.shadow_maps[self.selected_cascade],
+                    egui::Vec2::new(250.0, 250.0),
+                );
             });
-
-            ui.horizontal(|ui| {
-                ui.label("light_color");
-                let mut array = self.light_color.to_array();
-                ui.color_edit_button_rgb(&mut array);
-                self.light_color = Vec3::from_array(array);
-            });
-            ui.horizontal(|ui| {
-                ui.label("light_intensitiy");
-                ui.add(egui::DragValue::new(&mut self.light_intensitiy).speed(0.4));
-            });
-
-            self.shadow_map_renderer.settings.edit(ui);
-
-            ui.horizontal(|ui| {
-                ui.label("selected_cascade");
-                ui.add(egui::Slider::new(&mut self.selected_cascade, 0..=MAX_SHADOW_CASCADE_COUNT - 1));
-            });
-
-            ui.image(directional_light.shadow_maps[self.selected_cascade], egui::Vec2::new(250.0, 250.0));
-        });
 
         if self.show_bounding_boxes {
             for entity in self.scene.entities.iter() {
@@ -595,15 +639,16 @@ impl App {
                     for submesh in self.gpu_assets.models[model].submeshes.iter() {
                         let aabb = self.gpu_assets.mesh_infos[submesh.mesh_handle].aabb;
                         let corners = [
-                            vec3a( 0.0, 0.0, 0.0),
-                            vec3a( 1.0, 0.0, 0.0),
-                            vec3a( 1.0, 1.0, 0.0),
-                            vec3a( 0.0, 1.0, 0.0),
-                            vec3a( 0.0, 0.0, 1.0),
-                            vec3a( 1.0, 0.0, 1.0),
-                            vec3a( 1.0, 1.0, 1.0),
-                            vec3a( 0.0, 1.0, 1.0),
-                        ].map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
+                            vec3a(0.0, 0.0, 0.0),
+                            vec3a(1.0, 0.0, 0.0),
+                            vec3a(1.0, 1.0, 0.0),
+                            vec3a(0.0, 1.0, 0.0),
+                            vec3a(0.0, 0.0, 1.0),
+                            vec3a(1.0, 0.0, 1.0),
+                            vec3a(1.0, 1.0, 1.0),
+                            vec3a(0.0, 1.0, 1.0),
+                        ]
+                        .map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
                         self.debug_line_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0))
                     }
                 }
@@ -614,7 +659,8 @@ impl App {
             let planes = math::frustum_planes_from_matrix(&focused_camera.compute_matrix(aspect_ratio));
 
             for plane in planes {
-                self.debug_line_renderer.draw_plane(plane * vec4(-1.0, -1.0, -1.0, 1.0), 2.0, vec4(1.0, 1.0, 1.0, 1.0));
+                self.debug_line_renderer
+                    .draw_plane(plane * vec4(-1.0, -1.0, -1.0, 1.0), 2.0, vec4(1.0, 1.0, 1.0, 1.0));
             }
         }
     }
@@ -685,7 +731,7 @@ fn main() {
 
             let raw_input = egui_state.take_egui_input(&context.window());
             egui_ctx.begin_frame(raw_input);
-            
+
             time.update_now();
             app.update(&input, &time, &egui_ctx, &context, control_flow);
 
@@ -707,7 +753,12 @@ fn main() {
                 puffin::profile_scope!("egui_tessellate");
                 egui_ctx.tessellate(full_output.shapes)
             };
-            egui_renderer.render(&mut context, &clipped_primitives, &full_output.textures_delta, swapchain_image);
+            egui_renderer.render(
+                &mut context,
+                &clipped_primitives,
+                &full_output.textures_delta,
+                swapchain_image,
+            );
 
             context.end_frame();
 

@@ -742,6 +742,12 @@ impl RenderGraph {
                 let pass_data = self.passes.remove(index).unwrap();
                 sorted_passes.passes.insert(pass_data);
             }
+            
+            // temporary fix for infinite loop
+            if remove_list.is_empty() {
+                break;
+            }
+
             remove_list.clear();
 
             let end = sorted_passes.passes.len();

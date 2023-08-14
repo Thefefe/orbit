@@ -50,6 +50,17 @@ use crate::passes::draw_gen::FrustumPlaneMask;
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
 
+/// An experimental Vulkan 1.3 renderer
+#[derive(Debug, onlyargs_derive::OnlyArgs)]
+struct Args {
+    /// The gltf scene to be loaded at startup
+    scene: Option<std::path::PathBuf>,
+    /// The environment map to be used as a skybox and IBL
+    envmap: Option<std::path::PathBuf>,
+    /// Write logs to file
+    file_log: bool,
+}
+
 struct CameraController {
     mouse_sensitivity: f32,
     pitch: f32,
@@ -181,7 +192,7 @@ struct App {
     post_process: ScreenPostProcess,
     equirectangular_cube_map_loader: EnvironmentMapLoader,
 
-    environment_map: EnvironmentMap,
+    environment_map: Option<EnvironmentMap>,
 
     camera: Camera,
     camera_controller: CameraController,
@@ -214,44 +225,52 @@ impl App {
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
     pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::None;
 
-    fn new(context: &render::Context, gltf_path: Option<&str>) -> Self {
+    fn new(
+        context: &render::Context,
+        gltf_path: Option<std::path::PathBuf>,
+        env_map_path: Option<std::path::PathBuf>
+    ) -> Self {
         let mut gpu_assets = GpuAssetStore::new(context);
         let mut scene = SceneData::new(context);
 
         if let Some(gltf_path) = gltf_path {
-            load_gltf(gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
+            load_gltf(&gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
         }
 
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
-
         let equirectangular_cube_map_loader = EnvironmentMapLoader::new(context);
 
-        let equirectangular_environment_image = {
-            let (image_binary, image_format) =
-                gltf_loader::load_image_data("D:\\thefe\\Downloads\\industrial_sunset_puresky_4k.hdr").unwrap();
-            let mut image = gltf_loader::load_image(
-                context,
+        let environment_map = if let Some(env_map_path) = env_map_path {
+            let equirectangular_environment_image = {
+                let (image_binary, image_format) =
+                    gltf_loader::load_image_data(&env_map_path).unwrap();
+                let mut image = gltf_loader::load_image(
+                    context,
+                    "environment_map".into(),
+                    &image_binary,
+                    image_format,
+                    true,
+                    true,
+                );
+
+                image.set_sampler_flags(render::SamplerKind::LinearRepeat);
+
+                image
+            };
+
+            let environment_map = equirectangular_cube_map_loader.create_from_equirectangular_image(
+                &context,
                 "environment_map".into(),
-                &image_binary,
-                image_format,
-                true,
-                true,
+                1024,
+                &equirectangular_environment_image,
             );
 
-            image.set_sampler_flags(render::SamplerKind::LinearRepeat);
-
-            image
+            context.destroy_image(&equirectangular_environment_image);
+            Some(environment_map)
+        } else {
+            None
         };
-
-        let environment_map = equirectangular_cube_map_loader.create_from_equirectangular_image(
-            &context,
-            "environment_map".into(),
-            1024,
-            &equirectangular_environment_image,
-        );
-
-        context.destroy_image(&equirectangular_environment_image);
 
         let camera = Camera {
             transform: Transform {
@@ -574,7 +593,7 @@ impl App {
             &self.camera,
             focused_camera,
             self.render_mode,
-            &self.environment_map,
+            self.environment_map.as_ref(),
             directional_light,
             assets,
             scene,
@@ -675,15 +694,16 @@ impl App {
         self.shadow_map_renderer.destroy(context);
         self.post_process.destroy(context);
         self.equirectangular_cube_map_loader.destroy(context);
-        self.environment_map.destroy(context);
+        if let Some(environment_map) = &self.environment_map {
+            environment_map.destroy(context);
+        }
     }
 }
 
 fn main() {
-    utils::init_logger(false);
+    let args: Args = onlyargs::parse().expect("failed to parse arguments");
+    utils::init_logger(args.file_log);
     puffin::set_scopes_on(true);
-
-    let gltf_path = std::env::args().nth(1);
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -706,7 +726,7 @@ fn main() {
     let mut egui_state = egui_winit::State::new(&event_loop);
     let mut egui_renderer = EguiRenderer::new(&context);
 
-    let mut app = App::new(&context, gltf_path.as_ref().map(|s| s.as_str()));
+    let mut app = App::new(&context, args.scene, args.envmap);
 
     event_loop.run(move |event, _target, control_flow| {
         if let Event::WindowEvent { event, .. } = &event {

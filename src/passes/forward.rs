@@ -232,7 +232,7 @@ impl ForwardRenderer {
         focused_camera: &Camera,
         render_mode: u32,
         
-        environment_map: &EnvironmentMap,
+        environment_map: Option<&EnvironmentMap>,
         directional_light: DirectionalLightGraphData,
         
         assets: AssetGraphData,
@@ -258,9 +258,7 @@ impl ForwardRenderer {
             render_mode,
         }));
 
-        let skybox_image = context.import_image(&environment_map.skybox);
-        let irradiance_image = context.import_image(&environment_map.irradiance);
-        let prefiltered_env_map = context.import_image(&environment_map.prefiltered);
+        let environment_map = environment_map.map(|e| e.import_to_graph(context));
 
         let brdf_integration_map = context.import_image(&self.brdf_integration_map);
 
@@ -278,10 +276,9 @@ impl ForwardRenderer {
                 let color_resolve = color_resolve.map(|i| graph.get_image(i));
                 let depth_target = graph.get_image(depth_target);
 
-                let skybox_image = graph.get_image(skybox_image);
-                let irradiance_image = graph.get_image(irradiance_image);
-                let prefiltered_env_map = graph.get_image(prefiltered_env_map);
                 let brdf_integration_map = graph.get_image(brdf_integration_map);
+                
+                let environment_map = environment_map.map(|e| e.get(graph));
 
                 let per_frame_data = graph.get_buffer(frame_data);
                 
@@ -296,7 +293,12 @@ impl ForwardRenderer {
                 let mut color_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(color_target.view)
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .load_op(if environment_map.is_some() {
+                        vk::AttachmentLoadOp::DONT_CARE 
+                    } else {
+                        vk::AttachmentLoadOp::CLEAR
+                    })
+                    .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } })
                     .store_op(vk::AttachmentStoreOp::STORE);
 
                 if let Some(color_resolve) = color_resolve {
@@ -326,18 +328,20 @@ impl ForwardRenderer {
 
                 cmd.begin_rendering(&rendering_info);
                 
-                cmd.bind_raster_pipeline(skybox_pipeline);
+                if let Some(environment_map) = &environment_map {
+                    cmd.bind_raster_pipeline(skybox_pipeline);
 
-                cmd.build_constants()
-                    .mat4(&skybox_view_projection_matrix)
-                    .image(&skybox_image);
-
-                cmd.draw(0..36, 0..1);
+                    cmd.build_constants()
+                        .mat4(&skybox_view_projection_matrix)
+                        .image(environment_map.skybox);
+    
+                    cmd.draw(0..36, 0..1);    
+                }
 
                 cmd.bind_raster_pipeline(forward_pipeline);
                 cmd.bind_index_buffer(&index_buffer, 0);
 
-                cmd.build_constants()
+                let mut push_constants = cmd.build_constants()
                     .uint(screen_extent.width)
                     .uint(screen_extent.height)
                     .buffer(&per_frame_data)
@@ -345,10 +349,21 @@ impl ForwardRenderer {
                     .buffer(&instance_buffer)
                     .buffer(&draw_commands_buffer)
                     .buffer(&materials_buffer)
-                    .buffer(&directional_light_buffer)
-                    .image(&irradiance_image)
-                    .image(&prefiltered_env_map)
-                    .image(&brdf_integration_map);
+                    .buffer(&directional_light_buffer);
+
+                if let Some(environment_map) = &environment_map {
+                    push_constants = push_constants
+                        .image(environment_map.irradiance)
+                        .image(environment_map.prefiltered)
+                } else {
+                    push_constants = push_constants
+                        .uint(u32::MAX)
+                        .uint(u32::MAX)
+                };
+
+                push_constants = push_constants.image(&brdf_integration_map);
+
+                drop(push_constants);
 
                 cmd.draw_indexed_indirect_count(
                     draw_commands_buffer,

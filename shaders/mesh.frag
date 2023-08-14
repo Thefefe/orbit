@@ -299,21 +299,25 @@ void main() {
             vec3 kD = 1.0 - kS;
             kD *= 1.0 - metallic;	
             
-            vec3 irradiance = texture(GetSampledTextureCube(irradiance_image_index), normal).rgb;
-            vec3 diffuse    = irradiance * albedo;
+            vec3 ambient = vec3(0.0);
+            if (prefiltered_env_map_index != TEXTURE_NONE && irradiance_image_index != TEXTURE_NONE) {
+                vec3 irradiance = texture(GetSampledTextureCube(irradiance_image_index), normal).rgb;
+                vec3 diffuse    = irradiance * albedo;
 
-            float max_reflection_lod = textureQueryLevels(GetSampledTextureCube(prefiltered_env_map_index)) - 1;
-            float reflection_lod = roughness * max_reflection_lod;
-            vec3 reflection_color = textureLod(GetSampledTextureCube(prefiltered_env_map_index), R, reflection_lod).rgb;
-            vec2 env_brdf = texture(
-                GetSampledTexture2D(brdf_integration_map_index),
-                vec2(max(dot(normal, view_direction), 0.0), roughness)
-            ).rg;
-            vec3 specular = reflection_color * (kS * env_brdf.x + env_brdf.y);
+                float max_reflection_lod = textureQueryLevels(GetSampledTextureCube(prefiltered_env_map_index)) - 1;
+                float reflection_lod = roughness * max_reflection_lod;
+                vec3 reflection_color = 
+                    textureLod(GetSampledTextureCube(prefiltered_env_map_index), R, reflection_lod).rgb;
+                vec2 env_brdf = texture(
+                    GetSampledTexture2D(brdf_integration_map_index),
+                    vec2(max(dot(normal, view_direction), 0.0), roughness)
+                ).rg;
+                vec3 specular = reflection_color * (kS * env_brdf.x + env_brdf.y);
 
-            vec3 ambient    = (kD * diffuse + specular) * ao;
+                ambient = (kD * diffuse + specular) * ao;
+            }
 
-            out_color.rgb = ambient + Lo + emissive * 4.0;
+            out_color.rgb = ambient + Lo + emissive;
             break;
         case 1: 
             float shadow = max(shadow, 0.1);

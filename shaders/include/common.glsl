@@ -41,11 +41,11 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_textur
     _u_texture_cube_registry[nonuniformEXT(Index & TEXTURE_INDEX_TEXTURE_MASK)]
 
 #define TEXTURE_NONE 0xFFFFFFFF
-
 #define TEXTURE_INDEX_TEXTURE_MASK 0x00FFFFFF
 #define TEXTURE_INDEX_SAMPLER_MASK 0xFF000000
 #define SAMPLER_BIT_COUNT 24
 
+#define GetTextureIndex(Index) (Index << 8 >> 8)
 #define GetSamplerIndex(Index) \
     ((Index & TEXTURE_INDEX_SAMPLER_MASK) >> SAMPLER_BIT_COUNT)
 
@@ -58,8 +58,4 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_textur
 #define GetSampledTextureCube(Index) \
     samplerCube(GetTextureCube(Index), GetSampler(GetSamplerIndex(Index)))
 
-vec4 sample_texture_index_default(uint texture_index, vec2 tex_coord, vec4 _default) {
-    if (texture_index == TEXTURE_NONE) return _default;
-    return texture(GetSampledTexture2D(texture_index), tex_coord);
-}
 #endif

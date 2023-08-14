@@ -5,6 +5,30 @@ use glam::{vec3, Mat4};
 
 use crate::{render, utils, gltf_loader};
 
+#[derive(Clone, Copy)]
+pub struct EnvironmentMapView<'a> {
+    pub skybox: &'a render::ImageView,
+    pub irradiance: &'a render::ImageView,
+    pub prefiltered: &'a render::ImageView,
+}
+
+#[derive(Clone, Copy)]
+pub struct GraphEnvironmentMap {
+    pub skybox: render::GraphImageHandle,
+    pub irradiance: render::GraphImageHandle,
+    pub prefiltered: render::GraphImageHandle,
+}
+
+impl GraphEnvironmentMap {
+    pub fn get<'a>(&self, graph: &'a render::CompiledRenderGraph) -> EnvironmentMapView<'a> {
+        EnvironmentMapView {
+            skybox: graph.get_image(self.skybox),
+            irradiance: graph.get_image(self.irradiance),
+            prefiltered: graph.get_image(self.prefiltered),
+        }
+    }
+}
+
 pub struct EnvironmentMap {
     pub skybox: render::Image,
     pub irradiance: render::Image,
@@ -12,6 +36,14 @@ pub struct EnvironmentMap {
 }
 
 impl EnvironmentMap {
+    pub fn import_to_graph(&self, context: &mut render::Context) -> GraphEnvironmentMap {
+        GraphEnvironmentMap {
+            skybox: context.import_image(&self.skybox),
+            irradiance: context.import_image(&self.irradiance),
+            prefiltered: context.import_image(&self.prefiltered),
+        }
+    }
+
     pub fn destroy(&self, context: &render::Context) {
         context.destroy_image(&self.skybox);
         context.destroy_image(&self.irradiance);

@@ -176,7 +176,7 @@ pub fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin:
     image
 }
 
-pub fn load_image_data(path: &str) -> image::ImageResult<(Vec<u8>, image::ImageFormat)> {
+pub fn load_image_data(path: &Path) -> image::ImageResult<(Vec<u8>, image::ImageFormat)> {
     let data = std::fs::read(&path)?;
     let format = image::ImageFormat::from_path(&path)?;
     Ok((data, format))
@@ -331,12 +331,11 @@ pub fn load_image(
 }
 
 pub fn load_gltf(
-    path: &str,
+    path: &Path,
     context: &render::Context,
     asset_store: &mut GpuAssetStore,
     scene: &mut SceneData,
 ) -> gltf::Result<()> {
-    let path = Path::new(path);
     let base_path = path.parent().unwrap_or(Path::new(""));
 
     let mut document = gltf::Gltf::open(path)?;

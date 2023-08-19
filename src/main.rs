@@ -237,8 +237,29 @@ impl App {
             load_gltf(&gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
         }
 
+        let dist_size = 4.0;
+        let light_data = scene::LightData {
+            color: vec3(1.0, 1.0, 1.0),
+            intensity: 2.0,
+            position: Vec3::ZERO,
+            size: 0.0,
+        };
+
+        let mut thread_rng = rand::thread_rng();
+        use rand::Rng;
+
+        for _ in 0..32 {
+            let position = Vec3 {
+                x: thread_rng.gen_range(-dist_size..dist_size),
+                y: thread_rng.gen_range(-dist_size..dist_size),
+                z: thread_rng.gen_range(-dist_size..dist_size),
+            };
+            scene.add_light(scene::LightData { position, ..light_data });
+        }
+        
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
+        scene.update_lights(context);
         let equirectangular_cube_map_loader = EnvironmentMapLoader::new(context);
 
         let environment_map = if let Some(env_map_path) = env_map_path {

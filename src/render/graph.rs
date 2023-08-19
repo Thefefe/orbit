@@ -745,6 +745,10 @@ impl RenderGraph {
             
             // temporary fix for infinite loop
             if remove_list.is_empty() {
+                log::debug!("POTENTIAL INFINITE LOOP: passes left:");
+                for (_, pass) in self.passes.iter() {
+                    log::debug!("\t pass: {:?}", &pass.name);
+                }
                 break;
             }
 

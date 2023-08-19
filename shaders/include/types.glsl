@@ -97,6 +97,17 @@ struct MeshInfo {
     Aabb aabb;
 };
 
+struct LightData {
+    vec3 color;
+    float intensity;
+    vec3 position;
+    float size;
+};
+
+RegisterBuffer(LightBuffer, {
+	LightData lights[];
+});
+
 RegisterBuffer(SubmeshBuffer, {
 	uint count;
 	Submesh submeshes[];

@@ -12,6 +12,8 @@ layout(push_constant, std430) uniform PushConstants {
     uint draw_commands;
     uint materials_buffer;
     uint directional_light_buffer;
+    uint light_count;
+    uint light_data_buffer;
     uint irradiance_image_index;
     uint prefiltered_env_map_index;
     uint brdf_integration_map_index;
@@ -122,6 +124,7 @@ vec3 calculate_light(
 
     vec3 light_dir,
     vec3 light_color,
+    float light_distance,
 
     vec3 base_reflectivity,
 
@@ -130,13 +133,12 @@ vec3 calculate_light(
     float metallic,
     float roughness
 ) {
-    vec3 N = normalize(normal);
-    vec3 V = normalize(view_dir);
-    vec3 L = normalize(light_dir);
+    vec3 N = normal;
+    vec3 V = view_dir;
+    vec3 L = light_dir;
     vec3 H = normalize(V + L);
 
-    float distance = 1.0;
-    float attenuation = 1.0 / (distance * distance);
+    float attenuation = 1.0 / max(light_distance * light_distance, EPSILON);
     vec3 radiance = light_color * attenuation;
 
     // Cook-Torrance BRDF
@@ -271,21 +273,42 @@ void main() {
         // }
     }
 
-    switch (render_mode) {
-        case 0:
-            vec3 light_direction =  GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
+    // switch (render_mode) {
+    //     case 0:
+            vec3 light_direction = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
             vec3 light_color = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.color;
             light_color *= GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.intensitiy;
             vec3 Lo = calculate_light(
                 view_direction,
                 light_direction,
                 light_color,
+                1.0, // light_distance
                 base_reflectivity,
                 albedo,
                 normal,
                 metallic,
                 roughness
             ) * shadow;
+
+            for (int i = 0; i < light_count; i++) {
+                LightData light = GetBuffer(LightBuffer, light_data_buffer).lights[i];
+                vec3 light_direction = light.position - vout.world_pos.xyz;
+                vec3 light_color = light.color * light.intensity;
+
+                float light_distance = length(light_direction);
+
+                Lo += calculate_light(
+                    view_direction,
+                    normalize(light_direction),
+                    light_color,
+                    light_distance,
+                    base_reflectivity,
+                    albedo,
+                    normal,
+                    metallic,
+                    roughness
+                );
+            }
 
             vec3 R = reflect(view_direction, normal);
             R.y *= -1.0;
@@ -318,44 +341,44 @@ void main() {
             }
 
             out_color.rgb = ambient + Lo + emissive;
-            break;
-        case 1: 
-            float shadow = max(shadow, 0.1);
-            vec3 cascade_color = vec3(0.25);
-            vec3 far_cascade_color = vec3(0.25);
+    //         break;
+    //     case 1: 
+    //         float shadow = max(shadow, 0.1);
+    //         vec3 cascade_color = vec3(0.25);
+    //         vec3 far_cascade_color = vec3(0.25);
 
-            if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
-                cascade_color = CASCADE_COLORS[cascade_index];
-            if (cascade_index + 1 < MAX_SHADOW_CASCADE_COUNT)
-                far_cascade_color = CASCADE_COLORS[cascade_index + 1];
+    //         if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
+    //             cascade_color = CASCADE_COLORS[cascade_index];
+    //         if (cascade_index + 1 < MAX_SHADOW_CASCADE_COUNT)
+    //             far_cascade_color = CASCADE_COLORS[cascade_index + 1];
             
-            // vec3 blended_cascade_color = mix(cascade_color, far_cascade_color, blend_amount);
+    //         // vec3 blended_cascade_color = mix(cascade_color, far_cascade_color, blend_amount);
 
-            out_color = vec4(cascade_color * albedo * shadow, 1.0);
-            break;
-        case 2: 
-            out_color = vec4(normal * 0.5 + 0.5, 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-            break;
-        case 3: 
-            out_color = vec4(vec3(metallic), 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-            break;
-        case 4: 
-            out_color = vec4(vec3(roughness), 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-            break;
-        case 5: 
-            out_color = vec4(emissive, 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-            break;
-        case 6: 
-            out_color = vec4(vec3(ao), 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-            break;
-        case 7: 
-            out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-            break;
-    }
+    //         out_color = vec4(cascade_color * albedo * shadow, 1.0);
+    //         break;
+    //     case 2: 
+    //         out_color = vec4(normal * 0.5 + 0.5, 1.0);
+    //         out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+    //         break;
+    //     case 3: 
+    //         out_color = vec4(vec3(metallic), 1.0);
+    //         out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+    //         break;
+    //     case 4: 
+    //         out_color = vec4(vec3(roughness), 1.0);
+    //         out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+    //         break;
+    //     case 5: 
+    //         out_color = vec4(emissive, 1.0);
+    //         out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+    //         break;
+    //     case 6: 
+    //         out_color = vec4(vec3(ao), 1.0);
+    //         out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+    //         break;
+    //     case 7: 
+    //         out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);
+    //         out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+    //         break;
+    // }
 }

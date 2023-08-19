@@ -86,22 +86,45 @@ pub struct GpuDrawCommand {
     _padding: [u32; 2],
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct LightData {
+    pub color: Vec3,
+    pub intensity: f32,
+    pub position: Vec3,
+    pub size: f32
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuPointLight {
+    color: Vec3,
+    intensity: f32,
+    position: Vec3,
+    size: f32,
+}
+
 #[derive(Clone, Copy)]
 pub struct SceneGraphData {
     pub submesh_count: usize,
     pub submesh_buffer: render::GraphBufferHandle,
     pub entity_buffer: render::GraphBufferHandle,
-}
-
-pub struct SceneData {
-    pub entities: Vec<EntityData>,
-    pub entity_data_buffer: render::Buffer, 
-    
-    pub submesh_data: Vec<GpuSubmeshData>,
-    pub submesh_buffer: render::Buffer,
+    pub light_count: usize, // temporary
+    pub light_data_buffer: render::GraphHandle<render::Buffer>,
 }
 
 const MAX_INSTANCE_COUNT: usize = 1_000_000;
+const MAX_LIGHT_COUNT: usize = 2_000;
+
+pub struct SceneData {
+    pub entities: Vec<EntityData>,
+    pub entity_data_buffer: render::Buffer,
+    
+    pub submesh_data: Vec<GpuSubmeshData>,
+    pub submesh_buffer: render::Buffer,
+
+    pub lights: Vec<LightData>,
+    pub light_data_buffer: render::Buffer,
+}
 
 impl SceneData {
     pub fn new(context: &render::Context) -> Self {
@@ -117,19 +140,33 @@ impl SceneData {
             memory_location: MemoryLocation::GpuOnly,
         });
 
+        let light_data_buffer = context.create_buffer("light_data_buffer", &render::BufferDesc {
+            size: MAX_LIGHT_COUNT * std::mem::size_of::<GpuPointLight>(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            memory_location: MemoryLocation::GpuOnly,
+        });
+
         Self {
             entities: Vec::new(),
             entity_data_buffer,
 
             submesh_data: Vec::new(),
             submesh_buffer,
+            
+            lights: Vec::new(),
+            light_data_buffer,
         }
     }
 
     pub fn add_entity(&mut self, data: EntityData) -> usize {
         let index = self.entities.len();
         self.entities.push(data);
+        index
+    }
 
+    pub fn add_light(&mut self, data: LightData) -> usize {
+        let index = self.lights.len();
+        self.lights.push(data);
         index
     }
 
@@ -174,16 +211,30 @@ impl SceneData {
         );
     }
 
+    pub fn update_lights(&self, context: &render::Context) {
+        let light_datas: Vec<_> = self.lights.iter().map(|light| GpuPointLight {
+            color: light.color,
+            intensity: light.intensity,
+            position: light.position,
+            size: light.size,
+        }).collect();
+
+        context.immediate_write_buffer(&self.light_data_buffer, bytemuck::cast_slice(light_datas.as_slice()), 0);
+    }
+
     pub fn import_to_graph(&self, context: &mut render::Context) -> SceneGraphData {
         SceneGraphData {
             submesh_count: self.submesh_data.len(),
             submesh_buffer: context.import_buffer(&self.submesh_buffer),
             entity_buffer: context.import_buffer(&self.entity_data_buffer),
+            light_count: self.lights.len(),
+            light_data_buffer: context.import_buffer(&self.light_data_buffer),
         }
     }
 
     pub fn destroy(&self, context: &render::Context) {
         context.destroy_buffer(&self.entity_data_buffer);
         context.destroy_buffer(&self.submesh_buffer);
+        context.destroy_buffer(&self.light_data_buffer);
     }
 }

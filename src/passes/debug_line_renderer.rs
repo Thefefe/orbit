@@ -256,15 +256,6 @@ impl DebugLineRenderer {
         let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>();
         let vertex_count = self.vertex_cursor as u32;
         let pipeline = self.pipeline;
-        
-        let mut dependencies = vec![
-            (target_image, render::AccessKind::ColorAttachmentWrite),
-            (depth_image, render::AccessKind::DepthAttachmentRead),
-        ];
-
-        if let Some(resolve_image) = resolve_image {
-            dependencies.push((resolve_image, render::AccessKind::ColorAttachmentWrite));
-        }
 
         frame_ctx.add_pass("debug_line_render")
             .with_dependency(target_image, render::AccessKind::ColorAttachmentWrite)

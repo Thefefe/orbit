@@ -287,6 +287,7 @@ impl ForwardRenderer {
                 let materials_buffer = graph.get_buffer(assets.materials_buffer);
 
                 let instance_buffer = graph.get_buffer(scene.entity_buffer);
+                let light_buffer = graph.get_buffer(scene.light_data_buffer);
                 let draw_commands_buffer = graph.get_buffer(draw_commands);
                 let directional_light_buffer = graph.get_buffer(directional_light.buffer);
 
@@ -349,7 +350,9 @@ impl ForwardRenderer {
                     .buffer(&instance_buffer)
                     .buffer(&draw_commands_buffer)
                     .buffer(&materials_buffer)
-                    .buffer(&directional_light_buffer);
+                    .buffer(&directional_light_buffer)
+                    .uint(scene.light_count as u32)
+                    .buffer(&light_buffer);
 
                 if let Some(environment_map) = &environment_map {
                     push_constants = push_constants

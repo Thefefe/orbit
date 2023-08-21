@@ -223,7 +223,7 @@ struct App {
 impl App {
     pub const COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::None;
+    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X4;
 
     fn new(
         context: &render::Context,
@@ -739,7 +739,7 @@ fn main() {
     let mut context = render::Context::new(
         window,
         &render::ContextDesc {
-            present_mode: vk::PresentModeKHR::FIFO,
+            present_mode: vk::PresentModeKHR::IMMEDIATE,
         },
     );
 

@@ -20,11 +20,10 @@ layout(push_constant, std430) uniform PushConstants {
 
 layout(location = 0) out VertexOutput {
     vec4 world_pos;
-    vec4 view_pos;
     vec2 uv;
-    mat3 TBN;
+    vec3 normal;
+    vec4 tangent;
     flat uint material_index;
-    vec4 cascade_map_coords[MAX_SHADOW_CASCADE_COUNT];
 } vout;
 
 void main() {
@@ -35,26 +34,11 @@ void main() {
     gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_projection * vout.world_pos;
 
     vout.uv = vertex.uv;
-    vout.view_pos = GetBuffer(PerFrameBuffer, per_frame_buffer).data.view * -vout.world_pos;
-
-    vec3 normal = vertex.norm;
-    vec3 tangent = vertex.tang.xyz;
-    vec3 bitangent = cross(normal, tangent) * vertex.tang.w;
     
     mat3 normal_matrix = mat3(GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].normal_matrix);
 
-    vout.TBN = mat3(
-        normalize(vec3(normal_matrix * tangent)),
-        normalize(vec3(normal_matrix * bitangent)),
-        normalize(vec3(normal_matrix * normal))
-    );
+    vout.normal = normalize(normal_matrix * vertex.norm);
+    vout.tangent = vec4(normalize(normal_matrix * vertex.tang.xyz), vertex.tang.w);
 
     vout.material_index = GetBuffer(DrawCommandsBuffer, draw_commands).commands[gl_DrawID].material_index;
-
-    for (uint i = 0; i < MAX_SHADOW_CASCADE_COUNT; ++i) {
-        mat4 light_proj_matrix =
-            GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.projection_matrices[i] *
-            model_matrix;
-        vout.cascade_map_coords[i] = light_proj_matrix * vec4(vertex.pos, 1.0);
-    }
 }

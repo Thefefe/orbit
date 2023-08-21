@@ -25,11 +25,11 @@ pub struct ForwardRenderer {
 impl ForwardRenderer {
     pub fn new(context: &render::Context) -> Self {
         let forward_pipeline = {
-            let vertex_shader = utils::load_spv("shaders/mesh.vert.spv").unwrap();
-            let fragment_shader = utils::load_spv("shaders/mesh.frag.spv").unwrap();
+            let vertex_shader = utils::load_spv("shaders/forward.vert.spv").unwrap();
+            let fragment_shader = utils::load_spv("shaders/forward.frag.spv").unwrap();
 
-            let vertex_module = context.create_shader_module(&vertex_shader, "mesh_vertex_shader");
-            let fragment_module = context.create_shader_module(&fragment_shader, "mesh_fragment_shader");
+            let vertex_module = context.create_shader_module(&vertex_shader, "forward_vertex_shader");
+            let fragment_module = context.create_shader_module(&fragment_shader, "forward_fragment_shader");
 
             let entry = cstr::cstr!("main");
 

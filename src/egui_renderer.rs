@@ -101,7 +101,7 @@ impl EguiRenderer {
                     ..Default::default()
                 }],
                 depth_state: None,
-                multisample: render::MultisampleCount::None,
+                multisample_state: Default::default(),
                 dynamic_states: &[],
             });
 

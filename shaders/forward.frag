@@ -170,8 +170,12 @@ const vec3 CASCADE_COLORS[6] = vec3[](
     vec3(1.0, 0.25, 1.0)
 );
 
+#define MIP_SCALE 0.25
+
 void main() {
     uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).data.render_mode;
+
+    out_color.a = 1.0;
 
     vec4  base_color;
     vec3  normal;
@@ -192,6 +196,12 @@ void main() {
 
         if (material.base_texture_index != TEXTURE_NONE) {
             base_color *= texture(GetSampledTexture2D(material.base_texture_index), vout.uv);
+
+            vec2 lods = textureQueryLod(GetSampledTexture2D(material.base_texture_index), vout.uv);
+            float alpha_mip_level = max(lods.x, lods.y);
+
+            out_color.a = (base_color.a - alpha_cutoff) / max(fwidth(base_color.a), EPSILON) + 0.5;
+            out_color.a *= 1 + alpha_mip_level * MIP_SCALE;
         }
 
         if (material.normal_texture_index != TEXTURE_NONE) {
@@ -220,11 +230,6 @@ void main() {
         if (material.occulusion_texture_index != TEXTURE_NONE) {
             ao = texture(GetSampledTexture2D(material.occulusion_texture_index), vout.uv).r * material.occulusion_factor;
         }
-    }
-
-    out_color.a = base_color.a;
-    if (out_color.a < alpha_cutoff) {
-        discard;
     }
 
     uint cascade_index = 4;

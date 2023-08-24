@@ -121,6 +121,21 @@ impl MultisampleCount {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct MultisampleState {
+    pub sample_count: MultisampleCount,
+    pub alpha_to_coverage: bool,
+}
+
+impl MultisampleState {
+    pub fn to_vk(self) -> vk::PipelineMultisampleStateCreateInfo {
+        vk::PipelineMultisampleStateCreateInfo::builder()
+            .rasterization_samples(self.sample_count.to_vk())
+            .alpha_to_coverage_enable(self.alpha_to_coverage)
+            .build()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RasterPipelineDesc<'a> {
     pub vertex_stage: ShaderStage<'a>,
     pub fragment_stage: Option<ShaderStage<'a>>,
@@ -128,7 +143,7 @@ pub struct RasterPipelineDesc<'a> {
     pub rasterizer: RasterizerDesc,
     pub color_attachments: &'a [PipelineColorAttachment],
     pub depth_state: Option<DepthState>,
-    pub multisample: MultisampleCount,
+    pub multisample_state: MultisampleState,
     pub dynamic_states: &'a [vk::DynamicState],
 }
 
@@ -173,9 +188,7 @@ impl RasterPipeline {
             .viewport_count(1)
             .scissor_count(1);
 
-        let multisample_state =
-            vk::PipelineMultisampleStateCreateInfo::builder()
-                .rasterization_samples(desc.multisample.to_vk());
+        let multisample_state = desc.multisample_state.to_vk();
 
         let color_blend_attachment: Vec<_> =
             desc.color_attachments.iter().map(|attachment| attachment.color_blend_vk()).collect();

@@ -42,7 +42,7 @@ impl ScreenPostProcess {
                     color_blend: None,
                 }],
                 depth_state: None,
-                multisample: render::MultisampleCount::None,
+                multisample_state: Default::default(),
                 dynamic_states: &[],
             });
 

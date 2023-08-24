@@ -184,7 +184,7 @@ impl ShadowMapRenderer {
                     write: true,
                     compare: vk::CompareOp::LESS,
                 }),
-                multisample: render::MultisampleCount::None,
+                multisample_state: Default::default(),
                 dynamic_states: &[vk::DynamicState::DEPTH_BIAS]
             });
 

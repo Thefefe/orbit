@@ -223,7 +223,7 @@ struct App {
 impl App {
     pub const COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X4;
+    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::None;
 
     fn new(
         context: &render::Context,

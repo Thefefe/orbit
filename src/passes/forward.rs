@@ -63,7 +63,10 @@ impl ForwardRenderer {
                     write: true,
                     compare: vk::CompareOp::GREATER,
                 }),
-                multisample: App::MULTISAMPLING,
+                multisample_state: render::MultisampleState {
+                    sample_count: App::MULTISAMPLING,
+                    alpha_to_coverage: true
+                },
                 dynamic_states: &[],
             });
 
@@ -115,7 +118,10 @@ impl ForwardRenderer {
                     write: false,
                     compare: vk::CompareOp::GREATER,
                 }),
-                multisample: App::MULTISAMPLING,
+                multisample_state: render::MultisampleState {
+                    sample_count: App::MULTISAMPLING,
+                    alpha_to_coverage: true
+                },
                 dynamic_states: &[],
             });
 
@@ -160,7 +166,7 @@ impl ForwardRenderer {
                     color_blend: None,
                 }],
                 depth_state: None,
-                multisample: render::MultisampleCount::None,
+                multisample_state: Default::default(),
                 dynamic_states: &[],
             });
 

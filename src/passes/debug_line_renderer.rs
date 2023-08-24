@@ -84,7 +84,10 @@ impl DebugLineRenderer {
                     write: false,
                     compare: vk::CompareOp::GREATER_OR_EQUAL,
                 }),
-                multisample: App::MULTISAMPLING,
+                multisample_state: render::MultisampleState {
+                    sample_count: App::MULTISAMPLING,
+                    alpha_to_coverage: false,
+                },
                 dynamic_states: &[vk::DynamicState::DEPTH_TEST_ENABLE]
             });
 

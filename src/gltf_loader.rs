@@ -390,7 +390,7 @@ pub fn load_gltf(
     let mut material_lookup_table = Vec::new();
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
-        
+
         let base_texture = pbr.base_color_texture().map(|tex| get_texture(asset_store, tex.texture(), true));
         let normal_texture = material.normal_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
         let metallic_roughness_texture = pbr
@@ -407,6 +407,8 @@ pub fn load_gltf(
         let occulusion_factor = material.occlusion_texture().map_or(0.0, |tex| tex.strength());
         let emissive_factor = Vec3::from_array(material.emissive_factor());
 
+        let alpha_cutoff = material.alpha_cutoff().unwrap_or(0.0);
+
         let handle = asset_store.add_material(
             context,
             MaterialData {
@@ -415,6 +417,8 @@ pub fn load_gltf(
                 metallic_factor,
                 roughness_factor,
                 occulusion_factor,
+
+                alpha_cutoff,
                 
                 base_texture,
                 normal_texture,

@@ -68,13 +68,13 @@ struct MaterialData {
     float roughness_factor;
     float occulusion_factor;
     
+    float alpha_cutoff;
+
     uint base_texture_index;
     uint normal_texture_index;
     uint metallic_roughness_texture_index;
     uint occulusion_texture_index;
     uint emissive_texture_index;
-    
-    uint _padding;
 };
 
 struct Submesh {

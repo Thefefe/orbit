@@ -151,7 +151,11 @@ impl ShadowMapRenderer {
     pub fn new(context: &render::Context) -> Self {
         let pipeline = {
             let vertex_shader = utils::load_spv("shaders/shadow.vert.spv").unwrap();
+            let fragment_shader = utils::load_spv("shaders/shadow.frag.spv").unwrap();
+
             let vertex_module = context.create_shader_module(&vertex_shader, "shadow_vertex_shader");
+            let fragment_module = context.create_shader_module(&fragment_shader, "shadow_fragment_shader");
+            
             let entry = cstr::cstr!("main");
 
             let pipeline = context.create_raster_pipeline("shadowmap_renderer_pipeline", &render::RasterPipelineDesc {
@@ -159,7 +163,10 @@ impl ShadowMapRenderer {
                     module: vertex_module,
                     entry,
                 },
-                fragment_stage: None,
+                fragment_stage: Some(render::ShaderStage {
+                    module: fragment_module,
+                    entry
+                }),
                 vertex_input: render::VertexInput::default(),
                 rasterizer: render::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
@@ -182,6 +189,7 @@ impl ShadowMapRenderer {
             });
 
             context.destroy_shader_module(vertex_module);
+            context.destroy_shader_module(fragment_module);
 
             pipeline
         };
@@ -226,6 +234,7 @@ impl ShadowMapRenderer {
                 let index_buffer = graph.get_buffer(assets.index_buffer);
                 let entity_buffer = graph.get_buffer(scene.entity_buffer);
                 let draw_commands_buffer = graph.get_buffer(draw_commands);
+                let materials_buffer = graph.get_buffer(assets.materials_buffer);
 
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
                     .image_view(shadow_map.view)
@@ -256,8 +265,10 @@ impl ShadowMapRenderer {
 
                 cmd.build_constants()
                     .mat4(&view_projection)
-                    .buffer(&vertex_buffer)
-                    .buffer(&entity_buffer);
+                    .buffer(vertex_buffer)
+                    .buffer(entity_buffer)
+                    .buffer(draw_commands_buffer)
+                    .buffer(materials_buffer);
 
                 cmd.draw_indexed_indirect_count(
                     draw_commands_buffer,

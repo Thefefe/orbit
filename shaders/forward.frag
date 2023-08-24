@@ -173,12 +173,13 @@ const vec3 CASCADE_COLORS[6] = vec3[](
 void main() {
     uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).data.render_mode;
 
-    vec4  base_color = vec4(0.0);
-    vec3  normal     = vec3(0.0);
-    float metallic   = 0.0;
-    float roughness  = 0.0;
-    vec3  emissive   = vec3(0.0);
-    float ao         = 0.0;
+    vec4  base_color;
+    vec3  normal;
+    float metallic;
+    float roughness;
+    vec3  emissive;
+    float ao;
+    float alpha_cutoff;
     {
         MaterialData material = GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index];
         base_color = material.base_color;
@@ -187,6 +188,7 @@ void main() {
         roughness  = material.roughness_factor;
         emissive   = material.emissive_factor;
         ao         = 1.0;
+        alpha_cutoff = material.alpha_cutoff;
 
         if (material.base_texture_index != TEXTURE_NONE) {
             base_color *= texture(GetSampledTexture2D(material.base_texture_index), vout.uv);
@@ -221,7 +223,7 @@ void main() {
     }
 
     out_color.a = base_color.a;
-    if (out_color.a < 0.5) {
+    if (out_color.a < alpha_cutoff) {
         discard;
     }
 
@@ -236,9 +238,11 @@ void main() {
             break;
         }
     }
-
+    
     float shadow = 1.0;
     if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
+        vec4 cascade_map_coord =
+            GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.projection_matrices[cascade_index] * vout.world_pos;
         uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
         shadow = pcf_vogel(shadow_map, cascade_map_coord);
     }
@@ -321,10 +325,10 @@ void main() {
         case 1: 
             float shadow = max(shadow, 0.1);
             vec3 cascade_color = vec3(0.25);
-            vec3 far_cascade_color = vec3(0.25);
 
             if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
                 cascade_color = CASCADE_COLORS[cascade_index];
+            
             out_color = vec4(cascade_color * base_color.rgb * shadow, 1.0);
             break;
         case 2: 

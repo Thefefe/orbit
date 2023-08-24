@@ -96,6 +96,9 @@ pub struct MaterialData {
     pub roughness_factor: f32,
     pub occulusion_factor: f32,
     pub emissive_factor: Vec3,
+
+    pub alpha_cutoff: f32,
+
     pub base_texture: Option<TextureHandle>,
     pub normal_texture: Option<TextureHandle>,
     pub metallic_roughness_texture: Option<TextureHandle>,
@@ -112,14 +115,14 @@ pub struct GpuMaterialData {
     metallic_factor: f32,
     roughness_factor: f32,
     occulusion_factor: f32,
+
+    alpha_cutoff: f32,
     
     base_texture_index: u32,
     normal_texture_index: u32,
     metallic_roughness_texture_index: u32,
     occulusion_texture_index: u32,
     emissive_texture_index: u32,
-    
-    _padding: u32,
 }
 
 pub type MeshHandle = arena::Index;
@@ -277,13 +280,13 @@ impl GpuAssetStore {
             roughness_factor: material_data.roughness_factor,
             occulusion_factor: material_data.occulusion_factor,
             
+            alpha_cutoff: material_data.alpha_cutoff,
+
             base_texture_index,
             normal_texture_index,
             metallic_roughness_texture_index,
             occulusion_texture_index,
             emissive_texture_index,
-            
-            _padding: 0,
         };
 
         context.immediate_write_buffer(

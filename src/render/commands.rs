@@ -570,21 +570,22 @@ impl<'a> CommandRecorder<'a> {
             };
         }
         
-        self.barrier(&[], &[render::image_subresource_barrier(
-            &image,
-            mip_levels - 1..mip_levels, 
-            target_layers.clone(),
-            render::AccessKind::TransferWrite,
-            target_access,
-        )], &[]);
-
-        self.barrier(&[], &[render::image_subresource_barrier(
-            &image,
-            ..mip_levels - 1, 
-            target_layers.clone(),
-            render::AccessKind::TransferRead,
-            target_access,
-        )], &[]);
+        self.barrier(&[], &[
+            render::image_subresource_barrier(
+                &image,
+                ..mip_levels - 1, 
+                target_layers.clone(),
+                render::AccessKind::TransferRead,
+                target_access,
+            ),
+            render::image_subresource_barrier(
+                &image,
+                mip_levels - 1..mip_levels, 
+                target_layers.clone(),
+                render::AccessKind::TransferWrite,
+                target_access,
+            ),
+        ], &[]);
     }
 }
 

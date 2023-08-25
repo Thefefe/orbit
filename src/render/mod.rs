@@ -27,3 +27,6 @@ pub use pipeline::*;
 
 mod graph;
 pub use graph::*;
+
+mod recreatable_resource;
+pub use recreatable_resource::*;

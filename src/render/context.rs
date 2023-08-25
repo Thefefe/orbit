@@ -301,7 +301,7 @@ impl Context {
 }
 
 #[derive(Debug)]
-pub struct GraphHandle<T> {
+pub struct GraphHandle<T: ?Sized> {
     pub resource_index: render::GraphResourceIndex,
     pub _phantom: PhantomData<T>,
 }

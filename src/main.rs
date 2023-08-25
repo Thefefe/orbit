@@ -185,6 +185,10 @@ struct App {
     gpu_assets: GpuAssetStore,
     scene: SceneData,
 
+    main_color_image: render::RecreatableImage,
+    main_color_resolve_image: Option<render::RecreatableImage>,
+    main_depth_image: render::RecreatableImage,
+
     forward_renderer: ForwardRenderer,
     debug_line_renderer: DebugLineRenderer,
     scene_draw_gen: SceneDrawGen,
@@ -293,6 +297,42 @@ impl App {
             None
         };
 
+        let screen_extent = context.swapchain.extent();
+
+        let main_color_image = render::RecreatableImage::new(context, "main_color_image".into(), render::ImageDesc {
+            ty: render::ImageType::Single2D,
+            format: Self::COLOR_FORMAT,
+            dimensions: [screen_extent.width, screen_extent.height, 1],
+            mip_levels: 1,
+            samples: Self::MULTISAMPLING,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::COLOR,
+        });
+
+        let main_color_resolve_image = if Self::MULTISAMPLING != render::MultisampleCount::None {
+            Some(render::RecreatableImage::new(context, "main_color_resolve_image".into(), render::ImageDesc {
+                ty: render::ImageType::Single2D,
+                format: Self::COLOR_FORMAT,
+                dimensions: [screen_extent.width, screen_extent.height, 1],
+                mip_levels: 1,
+                samples: render::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+            },))
+        } else {
+            None
+        };
+
+        let main_depth_image = render::RecreatableImage::new(context, "main_depth_target".into(), render::ImageDesc {
+            ty: render::ImageType::Single2D,
+            format: Self::DEPTH_FORMAT,
+            dimensions: [screen_extent.width, screen_extent.height, 1],
+            mip_levels: 1,
+            samples: Self::MULTISAMPLING,
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            aspect: vk::ImageAspectFlags::DEPTH,
+        });
+
         let camera = Camera {
             transform: Transform {
                 position: vec3(0.0, 2.0, 0.0),
@@ -307,6 +347,10 @@ impl App {
         Self {
             gpu_assets,
             scene,
+
+            main_color_image,
+            main_color_resolve_image,
+            main_depth_image,
 
             forward_renderer: ForwardRenderer::new(context),
             debug_line_renderer: DebugLineRenderer::new(context),
@@ -528,54 +572,79 @@ impl App {
             self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
-        let mut color_target_desc = render::ImageDesc {
+        // let mut color_target_desc = render::ImageDesc {
+        //     ty: render::ImageType::Single2D,
+        //     format: Self::COLOR_FORMAT,
+        //     dimensions: [screen_extent.width, screen_extent.height, 1],
+        //     mip_levels: 1,
+        //     samples: Self::MULTISAMPLING,
+        //     usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+        //     aspect: vk::ImageAspectFlags::COLOR,
+        // };
+
+        // if App::MULTISAMPLING == render::MultisampleCount::None {
+        //     color_target_desc.usage |= vk::ImageUsageFlags::SAMPLED;
+        // }
+
+        // let color_target = context.create_transient_image(
+        //     "color_target",
+        //     color_target_desc,
+        // );
+
+        // let color_resolve_target = if Self::MULTISAMPLING != render::MultisampleCount::None {
+        //     Some(context.create_transient_image(
+        //         "color_resolve_target",
+        //         render::ImageDesc {
+        //             ty: render::ImageType::Single2D,
+        //             format: Self::COLOR_FORMAT,
+        //             dimensions: [screen_extent.width, screen_extent.height, 1],
+        //             mip_levels: 1,
+        //             samples: render::MultisampleCount::None,
+        //             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+        //             aspect: vk::ImageAspectFlags::COLOR,
+        //         },
+        //     ))
+        // } else {
+        //     None
+        // };
+
+        self.main_color_image.recreate(context, render::ImageDesc {
             ty: render::ImageType::Single2D,
             format: Self::COLOR_FORMAT,
             dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
             samples: Self::MULTISAMPLING,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::COLOR,
-        };
+        });
+        let color_target = self.main_color_image.get_current(context);
 
-        if App::MULTISAMPLING == render::MultisampleCount::None {
-            color_target_desc.usage |= vk::ImageUsageFlags::SAMPLED;
-        }
+        let color_resolve_target = if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
+            main_color_resolve_image.recreate(context, render::ImageDesc {
+                ty: render::ImageType::Single2D,
+                format: Self::COLOR_FORMAT,
+                dimensions: [screen_extent.width, screen_extent.height, 1],
+                mip_levels: 1,
+                samples: render::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+            });
 
-        let color_target = context.create_transient_image(
-            "color_target",
-            color_target_desc,
-        );
-
-        let color_resolve_target = if Self::MULTISAMPLING != render::MultisampleCount::None {
-            Some(context.create_transient_image(
-                "color_resolve_target",
-                render::ImageDesc {
-                    ty: render::ImageType::Single2D,
-                    format: Self::COLOR_FORMAT,
-                    dimensions: [screen_extent.width, screen_extent.height, 1],
-                    mip_levels: 1,
-                    samples: render::MultisampleCount::None,
-                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-                    aspect: vk::ImageAspectFlags::COLOR,
-                },
-            ))
+            Some(main_color_resolve_image.get_current(context))
         } else {
             None
         };
 
-        let depth_target = context.create_transient_image(
-            "depth_target",
-            render::ImageDesc {
-                ty: render::ImageType::Single2D,
-                format: Self::DEPTH_FORMAT,
-                dimensions: [screen_extent.width, screen_extent.height, 1],
-                mip_levels: 1,
-                samples: Self::MULTISAMPLING,
-                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-                aspect: vk::ImageAspectFlags::DEPTH,
-            },
-        );
+        self.main_depth_image.recreate(context, render::ImageDesc {
+            ty: render::ImageType::Single2D,
+            format: Self::DEPTH_FORMAT,
+            dimensions: [screen_extent.width, screen_extent.height, 1],
+            mip_levels: 1,
+            samples: Self::MULTISAMPLING,
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            aspect: vk::ImageAspectFlags::DEPTH,
+        });
+        let depth_target = self.main_depth_image.get_current(context);
 
         let directional_light = self.shadow_map_renderer.render_directional_light(
             context,
@@ -703,9 +772,15 @@ impl App {
         }
     }
 
-    fn destroy(&self, context: &render::Context) {
+    fn destroy(&mut self, context: &render::Context) {
         self.gpu_assets.destroy(context);
         self.scene.destroy(context);
+
+        self.main_color_image.destroy(context);
+        self.main_depth_image.destroy(context);
+        if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
+            main_color_resolve_image.destroy(context);
+        }
 
         self.forward_renderer.destroy(context);
         self.debug_line_renderer.destroy(context);

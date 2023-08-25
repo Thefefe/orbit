@@ -13,13 +13,47 @@ pub trait RenderResource {
     type View;
     type Desc;
 
+    fn create(
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+        name: Cow<'static, str>,
+        desc: &Self::Desc,
+        descriptor_index: Option<render::DescriptorIndex>
+    ) -> Self;
+    
+    fn destroy(
+        &self,
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+    );
+
     fn view(&self) -> Self::View;
     fn descriptor_index(&self) -> Option<render::DescriptorIndex>;
+
+    fn import_to_graph(&self, context: &mut render::Context) -> render::GraphHandle<Self>;
 }
 
 impl RenderResource for render::Buffer {
     type View = render::BufferView;
     type Desc = render::BufferDesc;
+    
+    fn create(
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+        name: Cow<'static, str>,
+        desc: &Self::Desc,
+        descriptor_index: Option<render::DescriptorIndex>
+    ) -> Self {
+        render::Buffer::create_impl(device, descriptors, name, desc, descriptor_index)
+    }
+    
+    fn destroy(
+        &self,
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+    ) {
+        render::Buffer::destroy_impl(device, descriptors, self);
+    }
 
     fn view(&self) -> Self::View {
         self.buffer_view
@@ -28,12 +62,33 @@ impl RenderResource for render::Buffer {
     fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
         self.descriptor_index
     }
-    
+
+    fn import_to_graph(&self, context: &mut render::Context) -> render::GraphHandle<Self> {
+        context.import_buffer(&self)
+    }
 }
 
 impl RenderResource for render::Image {
     type View = render::ImageView;
     type Desc = render::ImageDesc;
+    
+    fn create(
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+        name: Cow<'static, str>,
+        desc: &Self::Desc,
+        descriptor_index: Option<render::DescriptorIndex>
+    ) -> Self {
+        render::Image::create_impl(device, descriptors, name, desc, descriptor_index)
+    }
+    
+    fn destroy(
+        &self,
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+    ) {
+        render::Image::destroy_impl(device, descriptors, self);
+    }
 
     fn view(&self) -> Self::View {
         self.full_view
@@ -41,6 +96,10 @@ impl RenderResource for render::Image {
 
     fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
         self.descriptor_index
+    }
+
+    fn import_to_graph(&self, context: &mut render::Context) -> render::GraphHandle<Self> {
+        context.import_image(&self)
     }
 }
 
@@ -97,6 +156,30 @@ impl RenderResource for AnyResource {
     type View = AnyResourceView;
     type Desc = AnyResourceDesc;
 
+    fn create(
+        device: &render::Device,
+        descriptors: &render::BindlessDescriptors,
+        name: Cow<'static, str>,
+        desc: &Self::Desc,
+        descriptor_index: Option<render::DescriptorIndex>
+    ) -> Self {
+        match desc {
+            AnyResourceDesc::Buffer(desc) => AnyResource::Buffer(
+                render::Buffer::create_impl(device, descriptors, name, desc, descriptor_index)
+            ),
+            AnyResourceDesc::Image(desc) => AnyResource::Image(
+                render::Image::create_impl(device, descriptors, name, desc, descriptor_index)
+            ),
+        }
+    }
+
+    fn destroy(&self, device: &render::Device, descriptors: &render::BindlessDescriptors) {
+        match self {
+            AnyResource::Buffer(buffer) => buffer.destroy(device, descriptors),
+            AnyResource::Image(image) => image.destroy(device, descriptors),
+        }
+    }
+
     fn view(&self) -> Self::View {
         match self {
             AnyResource::Buffer(buffer) => AnyResourceView::Buffer(buffer.view()),
@@ -109,6 +192,10 @@ impl RenderResource for AnyResource {
             AnyResource::Buffer(buffer) => buffer.descriptor_index,
             AnyResource::Image(image) => image.descriptor_index,
         }
+    }
+
+    fn import_to_graph(&self, _: &mut render::Context) -> render::GraphHandle<Self> {
+        panic!("attempted to import an 'AnyResource', that's a bad idea")
     }
 }
 

@@ -16,7 +16,7 @@ enum DescriptorTableType {
 
 impl DescriptorTableType {
     fn all_types() -> impl Iterator<Item = Self> {
-        [Self::StorageBuffer, Self::SampledImage].into_iter()
+        [Self::StorageBuffer, Self::SampledImage, Self::StorageImage].into_iter()
     }
 
     fn set_index(self) -> u32 {
@@ -199,7 +199,11 @@ impl BindlessDescriptors {
 
         let descriptor_sets = unsafe { device.raw.allocate_descriptor_sets(&alloc_info).unwrap() };
 
-        let names = ["buffer_descriptor_set", "image_descriptor_set"];
+        let names = [
+            "buffer_descriptor_set",
+            "sampled_image_descriptor_set",
+            "storage_image_descriptor_index",
+        ];
 
         for (i, descriptor_set) in descriptor_sets.iter().enumerate() {
             device.set_debug_name(*descriptor_set, names[i]);
@@ -295,7 +299,7 @@ impl BindlessDescriptors {
     ) {
         unsafe {
             let image_info = vk::DescriptorImageInfo::builder()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_layout(vk::ImageLayout::GENERAL)
                 .image_view(handle)
                 .build();
 

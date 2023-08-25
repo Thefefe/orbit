@@ -493,11 +493,13 @@ impl Device {
             .build();
 
         let mut vulkan12_features = vk::PhysicalDeviceVulkan12Features::builder()
-            .shader_sampled_image_array_non_uniform_indexing(true)
-            .descriptor_binding_sampled_image_update_after_bind(true)
-            .shader_storage_buffer_array_non_uniform_indexing(true)
             .runtime_descriptor_array(true)
+            .shader_sampled_image_array_non_uniform_indexing(true)
+            .shader_storage_buffer_array_non_uniform_indexing(true)
+            .shader_storage_image_array_non_uniform_indexing(true)
+            .descriptor_binding_sampled_image_update_after_bind(true)
             .descriptor_binding_storage_buffer_update_after_bind(true)
+            .descriptor_binding_storage_image_update_after_bind(true)
             .descriptor_binding_partially_bound(true)
             .descriptor_binding_variable_descriptor_count(true)
             .buffer_device_address(true)

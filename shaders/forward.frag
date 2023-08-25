@@ -175,7 +175,7 @@ const vec3 CASCADE_COLORS[6] = vec3[](
 void main() {
     uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).data.render_mode;
 
-    out_color.a = 1.0;
+    out_color = vec4(1.0);
 
     vec4  base_color;
     vec3  normal;
@@ -199,7 +199,7 @@ void main() {
 
             vec2 lods = textureQueryLod(GetSampledTexture2D(material.base_texture_index), vout.uv);
             float alpha_mip_level = max(lods.x, lods.y);
-
+            
             out_color.a = (base_color.a - alpha_cutoff) / max(fwidth(base_color.a), EPSILON) + 0.5;
             out_color.a *= 1 + alpha_mip_level * MIP_SCALE;
         }

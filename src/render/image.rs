@@ -263,10 +263,16 @@ impl Image {
         };
         device.set_debug_name(view, &format!("{}_full_view", name));
 
-        let descriptor_index = if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
-            let index = preallocated_descriptor_index
-                .unwrap_or_else(|| descriptors.alloc_index());
-            descriptors.write_sampled_image(device, index, view);
+        let descriptor_index = if desc.usage.intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE) {
+            let index = preallocated_descriptor_index.unwrap_or_else(|| descriptors.alloc_index());
+
+            if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
+                descriptors.write_sampled_image(device, index, view);
+            };
+    
+            if desc.usage.contains(vk::ImageUsageFlags::STORAGE) {
+                descriptors.write_storage_image(device, index, view);
+            }
             Some(index)
         } else {
             None

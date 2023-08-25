@@ -140,7 +140,7 @@ impl AnyResource {
                     descriptors,
                     name,
                     desc,
-                    preallocated_descriptor_index
+                    preallocated_descriptor_index,
                 ))
             },
             AnyResourceDesc::Image(desc) => {
@@ -149,7 +149,7 @@ impl AnyResource {
                     descriptors,
                     name,
                     desc,
-                    preallocated_descriptor_index
+                    preallocated_descriptor_index,
                 ))
             },
         }

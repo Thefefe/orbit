@@ -120,7 +120,7 @@ impl ForwardRenderer {
                 }),
                 multisample_state: render::MultisampleState {
                     sample_count: App::MULTISAMPLING,
-                    alpha_to_coverage: true
+                    alpha_to_coverage: false,
                 },
                 dynamic_states: &[],
             });

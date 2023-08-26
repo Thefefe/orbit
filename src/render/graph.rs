@@ -27,6 +27,8 @@ pub trait RenderResource {
         descriptors: &render::BindlessDescriptors,
     );
 
+    
+    fn desc(&self) -> &Self::Desc;
     fn view(&self) -> Self::View;
     fn descriptor_index(&self) -> Option<render::DescriptorIndex>;
 
@@ -53,6 +55,10 @@ impl RenderResource for render::Buffer {
         descriptors: &render::BindlessDescriptors,
     ) {
         render::Buffer::destroy_impl(device, descriptors, self);
+    }
+
+    fn desc(&self) -> &Self::Desc {
+        &self.desc
     }
 
     fn view(&self) -> Self::View {
@@ -88,6 +94,10 @@ impl RenderResource for render::Image {
         descriptors: &render::BindlessDescriptors,
     ) {
         render::Image::destroy_impl(device, descriptors, self);
+    }
+
+    fn desc(&self) -> &Self::Desc {
+        &self.desc
     }
 
     fn view(&self) -> Self::View {
@@ -178,6 +188,10 @@ impl RenderResource for AnyResource {
             AnyResource::Buffer(buffer) => buffer.destroy(device, descriptors),
             AnyResource::Image(image) => image.destroy(device, descriptors),
         }
+    }
+
+    fn desc(&self) -> &Self::Desc {
+        todo!()
     }
 
     fn view(&self) -> Self::View {

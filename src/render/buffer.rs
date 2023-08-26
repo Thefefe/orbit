@@ -16,8 +16,8 @@ pub struct BufferView {
 pub struct Buffer {
     pub name: Cow<'static, str>,
     pub(super) buffer_view: render::BufferView,
+    pub desc: BufferDesc,
     pub alloc_index: render::AllocIndex,
-    pub usage: vk::BufferUsageFlags,
     pub mapped_ptr: Option<NonNull<u8>>,
 }
 
@@ -88,7 +88,7 @@ impl Buffer {
                 size: desc.size as u64,
             },
             alloc_index,
-            usage: desc.usage,
+            desc: desc.clone(),
             mapped_ptr,
         }
     }

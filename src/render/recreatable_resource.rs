@@ -35,13 +35,13 @@ where
         }
     }
 
-    pub fn recreate(&mut self, context: &render::Context, desc: R::Desc) {
-        if desc == self.current_desc {
+    pub fn recreate(&mut self, context: &render::Context) {
+        if self.current_desc == *self.current_resource.desc() {
             return;
         }
 
         // slow but only happens on resizes so it's fine
-        let mut tmp = R::create(&context.device, &context.descriptors, self.name.clone(), &desc, None);
+        let mut tmp = R::create(&context.device, &context.descriptors, self.name.clone(), &self.current_desc, None);
         std::mem::swap(&mut tmp, &mut self.current_resource);
         
         self.old.push_back(OldResource {
@@ -54,7 +54,12 @@ where
         &self.current_desc
     }
 
+    pub fn desc_mut(&mut self) -> &mut R::Desc {
+        &mut self.current_desc
+    }
+
     pub fn get_current(&mut self, context: &mut render::Context) -> render::GraphHandle<R> {
+        self.recreate(context);
         if let Some(old_resource) = self.old.front() {
             if old_resource.last_used_frame_index.is_none() ||
                old_resource.last_used_frame_index == Some(context.frame_index())

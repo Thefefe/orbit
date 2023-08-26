@@ -575,81 +575,17 @@ impl App {
             self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
-        // let mut color_target_desc = render::ImageDesc {
-        //     ty: render::ImageType::Single2D,
-        //     format: Self::COLOR_FORMAT,
-        //     dimensions: [screen_extent.width, screen_extent.height, 1],
-        //     mip_levels: 1,
-        //     samples: Self::MULTISAMPLING,
-        //     usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        //     aspect: vk::ImageAspectFlags::COLOR,
-        // };
-
-        // if App::MULTISAMPLING == render::MultisampleCount::None {
-        //     color_target_desc.usage |= vk::ImageUsageFlags::SAMPLED;
-        // }
-
-        // let color_target = context.create_transient_image(
-        //     "color_target",
-        //     color_target_desc,
-        // );
-
-        // let color_resolve_target = if Self::MULTISAMPLING != render::MultisampleCount::None {
-        //     Some(context.create_transient_image(
-        //         "color_resolve_target",
-        //         render::ImageDesc {
-        //             ty: render::ImageType::Single2D,
-        //             format: Self::COLOR_FORMAT,
-        //             dimensions: [screen_extent.width, screen_extent.height, 1],
-        //             mip_levels: 1,
-        //             samples: render::MultisampleCount::None,
-        //             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        //             aspect: vk::ImageAspectFlags::COLOR,
-        //         },
-        //     ))
-        // } else {
-        //     None
-        // };
-
-        self.main_color_image.recreate(context, render::ImageDesc {
-            ty: render::ImageType::Single2D,
-            format: Self::COLOR_FORMAT,
-            dimensions: [screen_extent.width, screen_extent.height, 1],
-            mip_levels: 1,
-            samples: Self::MULTISAMPLING,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: render::ImageSubresourceViewDesc::default(),
-        });
+        self.main_color_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
         let color_target = self.main_color_image.get_current(context);
 
         let color_resolve_target = if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
-            main_color_resolve_image.recreate(context, render::ImageDesc {
-                ty: render::ImageType::Single2D,
-                format: Self::COLOR_FORMAT,
-                dimensions: [screen_extent.width, screen_extent.height, 1],
-                mip_levels: 1,
-                samples: render::MultisampleCount::None,
-                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-                aspect: vk::ImageAspectFlags::COLOR,
-                subresource_desc: render::ImageSubresourceViewDesc::default(),
-            });
-
+            main_color_resolve_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
             Some(main_color_resolve_image.get_current(context))
         } else {
             None
         };
 
-        self.main_depth_image.recreate(context, render::ImageDesc {
-            ty: render::ImageType::Single2D,
-            format: Self::DEPTH_FORMAT,
-            dimensions: [screen_extent.width, screen_extent.height, 1],
-            mip_levels: 1,
-            samples: Self::MULTISAMPLING,
-            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-            aspect: vk::ImageAspectFlags::DEPTH,
-            subresource_desc: render::ImageSubresourceViewDesc::default(),
-        });
+        self.main_depth_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
         let depth_target = self.main_depth_image.get_current(context);
 
         let directional_light = self.shadow_map_renderer.render_directional_light(

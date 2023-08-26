@@ -34,7 +34,11 @@ impl SceneDrawGen {
             samples: render::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
             aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: render::ImageSubresourceViewDesc::default(),
+            subresource_desc: render::ImageSubresourceViewDesc {
+                mip_count: u32::MAX,
+                mip_descriptors: render::ImageDescriptorFlags::STORAGE,
+                ..Default::default()
+            },
         });
 
         Self { pipeline, depth_pyramid }
@@ -90,16 +94,7 @@ impl SceneDrawGen {
         let screen_extent = context.swapchain_extent();
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(screen_extent.width, screen_extent.height));
 
-        self.depth_pyramid.recreate(context, render::ImageDesc {
-            ty: render::ImageType::Single2D,
-            format: vk::Format::R32_SFLOAT,
-            dimensions: [screen_extent.width, screen_extent.height, 1],
-            mip_levels,
-            samples: render::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
-            aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: render::ImageSubresourceViewDesc::default(),
-        });
+        self.depth_pyramid.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
         let depth_pyramid = self.depth_pyramid.get_current(context);
         
         

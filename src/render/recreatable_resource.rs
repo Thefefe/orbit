@@ -50,6 +50,10 @@ where
         });
     }
 
+    pub fn desc(&self) -> &R::Desc {
+        &self.current_desc
+    }
+
     pub fn get_current(&mut self, context: &mut render::Context) -> render::GraphHandle<R> {
         if let Some(old_resource) = self.old.front() {
             if old_resource.last_used_frame_index.is_none() ||

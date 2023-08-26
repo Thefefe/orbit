@@ -67,11 +67,12 @@ impl SwapchainInner {
 
                 render::ImageView {
                     handle: image,
-                    descriptor_index: None,
+                    _descriptor_index: 0,
+                    _descriptor_flags: render::ImageDescriptorFlags::empty(),
+                    subresource_range,
                     format: config.surface_format.format,
                     view,
                     extent,
-                    subresource_range,
                 }
             })
             .collect();

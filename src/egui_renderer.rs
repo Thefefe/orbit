@@ -260,6 +260,7 @@ impl EguiRenderer {
                 samples: render::MultisampleCount::None,
                 usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
+                subresource_desc: render::ImageSubresourceViewDesc::default(),
             });
             let image_view = image.full_view;
             self.textures.insert(id, image);
@@ -362,7 +363,7 @@ impl EguiRenderer {
 
                     cmd.build_constants()
                         .vec2(screen_size)
-                        .image(&texture);
+                        .sampled_image(&texture);
 
                     cmd.draw_indexed(batch.index_range.clone(), 0..1, batch.vertex_offset);                    
                 }

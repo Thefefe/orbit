@@ -307,6 +307,7 @@ impl App {
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc::default(),
         });
 
         let main_color_resolve_image = if Self::MULTISAMPLING != render::MultisampleCount::None {
@@ -318,6 +319,7 @@ impl App {
                 samples: render::MultisampleCount::None,
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
+                subresource_desc: render::ImageSubresourceViewDesc::default(),
             },))
         } else {
             None
@@ -331,6 +333,7 @@ impl App {
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             aspect: vk::ImageAspectFlags::DEPTH,
+            subresource_desc: render::ImageSubresourceViewDesc::default(),
         });
 
         let camera = Camera {
@@ -616,6 +619,7 @@ impl App {
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc::default(),
         });
         let color_target = self.main_color_image.get_current(context);
 
@@ -628,6 +632,7 @@ impl App {
                 samples: render::MultisampleCount::None,
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
+                subresource_desc: render::ImageSubresourceViewDesc::default(),
             });
 
             Some(main_color_resolve_image.get_current(context))
@@ -643,6 +648,7 @@ impl App {
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             aspect: vk::ImageAspectFlags::DEPTH,
+            subresource_desc: render::ImageSubresourceViewDesc::default(),
         });
         let depth_target = self.main_depth_image.get_current(context);
 

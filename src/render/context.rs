@@ -449,7 +449,7 @@ impl Context {
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,
             source: graph::ResourceSource::Import { view },
-            descriptor_index: image.descriptor_index,
+            descriptor_index: image.descriptor_index(),
 
             initial_access: desc.initial_access,
             target_access: desc.target_access,

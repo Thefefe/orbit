@@ -95,7 +95,7 @@ impl RenderResource for render::Image {
     }
 
     fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
-        self.descriptor_index
+        (!self._descriptor_flags.is_empty()).then_some(self._descriptor_index)
     }
 
     fn import_to_graph(&self, context: &mut render::Context) -> render::GraphHandle<Self> {
@@ -190,7 +190,8 @@ impl RenderResource for AnyResource {
     fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
         match self {
             AnyResource::Buffer(buffer) => buffer.descriptor_index,
-            AnyResource::Image(image) => image.descriptor_index,
+            AnyResource::Image(image) =>
+                (!image._descriptor_flags.is_empty()).then_some(image._descriptor_index),
         }
     }
 

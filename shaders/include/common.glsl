@@ -16,6 +16,7 @@ layout(set = 1, binding = 0) uniform samplerShadow _u_sampler_comparisson_regist
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2D _u_texture2d_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2DMS _u_texture2dms_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_texture_cube_registry[];
+layout(set = 2, binding = 0) uniform writeonly image2D _u_image2d_registry[];
 
 #define GetBufferRegistryName(Name) _u_##Name##Registry
 

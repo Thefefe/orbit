@@ -247,11 +247,12 @@ impl GpuAssetStore {
     }
 
     pub fn import_texture(&mut self, image: render::Image)-> TextureHandle {
+        assert!(image.sampled_index().is_some());
         self.textures.insert(image)
     }
 
     fn get_texture_desc_index(&self, handle: TextureHandle) -> u32 {
-        self.textures[handle].descriptor_index.unwrap()
+        self.textures[handle]._descriptor_index
     }
 
     pub fn add_material(&mut self, context: &render::Context, material_data: MaterialData) -> MaterialHandle {

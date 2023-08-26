@@ -218,6 +218,7 @@ impl ShadowMapRenderer {
             samples: render::MultisampleCount::None,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::DEPTH,
+            subresource_desc: render::ImageSubresourceViewDesc::default(),
         });
 
         let pipeline = self.pipeline;

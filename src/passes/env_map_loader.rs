@@ -220,6 +220,12 @@ impl EnvironmentMapLoader {
                 vk::ImageUsageFlags::TRANSFER_SRC |
                 vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc {
+                layer_mip_count: 1,
+                layer_count: 6,
+                layer_descrptors: render::ImageDescriptorFlags::NONE,
+                ..Default::default()
+            }
         });
 
         let irradiance = context.create_image(format!("{name}_convoluted"), &render::ImageDesc {
@@ -230,6 +236,12 @@ impl EnvironmentMapLoader {
             samples: render::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
             aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc {
+                layer_mip_count: 1,
+                layer_count: 6,
+                layer_descrptors: render::ImageDescriptorFlags::NONE,
+                ..Default::default()
+            }
         });
 
         let prefiltered = context.create_image(format!("{name}_prefilterd"), &render::ImageDesc {
@@ -240,6 +252,7 @@ impl EnvironmentMapLoader {
             samples: render::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc::default()
         });
 
         let view_matrices = [
@@ -259,6 +272,7 @@ impl EnvironmentMapLoader {
             samples: render::MultisampleCount::None,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
             aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc::default()
         });
 
         context.record_and_submit(|cmd| {
@@ -268,7 +282,7 @@ impl EnvironmentMapLoader {
 
             for i in 0..6 {
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(skybox.layer_views[i])
+                    .image_view(skybox.layer_view(0, i).unwrap().view)
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {                    
@@ -288,8 +302,8 @@ impl EnvironmentMapLoader {
                 cmd.bind_raster_pipeline(self.equirectangular_to_cube_pipeline);
 
                 cmd.build_constants()
-                    .mat4(&view_matrices[i])
-                    .image(&equirectangular_image);
+                    .mat4(&view_matrices[i as usize])
+                    .sampled_image(&equirectangular_image);
 
                 cmd.draw(0..36, 0..1);
 
@@ -323,7 +337,7 @@ impl EnvironmentMapLoader {
 
             for i in 0..6 {
                 let color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(irradiance.layer_views[i])
+                    .image_view(irradiance.layer_view(0, i).unwrap().view)
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
@@ -343,8 +357,8 @@ impl EnvironmentMapLoader {
                 cmd.bind_raster_pipeline(self.cube_map_convolution_pipeline);
                 
                 cmd.build_constants()
-                    .mat4(&view_matrices[i])
-                    .image(&skybox);
+                    .mat4(&view_matrices[i as usize])
+                    .sampled_image(&skybox);
 
                 cmd.draw(0..36, 0..1);
 
@@ -386,7 +400,7 @@ impl EnvironmentMapLoader {
 
                     cmd.build_constants()
                         .mat4(&view_matrices[face as usize])
-                        .image(&skybox)
+                        .sampled_image(&skybox)
                         .float(roughness);
     
                     cmd.draw(0..36, 0..1);

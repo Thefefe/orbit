@@ -132,6 +132,7 @@ pub fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin:
         samples: render::MultisampleCount::None,
         usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
         aspect: vk::ImageAspectFlags::COLOR,
+        subresource_desc: render::ImageSubresourceViewDesc::default(),
     });
 
     let data = dds.get_data(0).unwrap();
@@ -235,6 +236,7 @@ pub fn upload_image_and_generate_mipmaps(
         samples: render::MultisampleCount::None,
         usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
         aspect: vk::ImageAspectFlags::COLOR,
+        subresource_desc: render::ImageSubresourceViewDesc::default(),
     });
 
     let scratch_buffer = if hdr {

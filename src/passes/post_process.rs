@@ -87,7 +87,7 @@ impl ScreenPostProcess {
                 cmd.bind_raster_pipeline(pipeline);
 
                 cmd.build_constants()
-                    .image(&src_image)
+                    .sampled_image(&src_image)
                     .float(exposure);
 
                 cmd.draw(0..6, 0..1);

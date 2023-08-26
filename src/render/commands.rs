@@ -678,8 +678,15 @@ impl<'a> PushConstantBuilder<'a> {
     
     #[track_caller]
     #[inline(always)]
-    pub fn image(self, image: &render::ImageView) -> Self {
-        let descriptor_index = image.descriptor_index.unwrap();
+    pub fn sampled_image(self, image: &render::ImageView) -> Self {
+        let descriptor_index = image.sampled_index().
+            expect("image doesn't have sampled descriptor index");
+        self.push_bytes_with_align(bytemuck::bytes_of(&descriptor_index), std::mem::align_of_val(&descriptor_index))
+    }
+
+    pub fn storage_image(self, image: &render::ImageView) -> Self {
+        let descriptor_index = image.storage_index()
+            .expect("image doesn't have storage descriptor index");
         self.push_bytes_with_align(bytemuck::bytes_of(&descriptor_index), std::mem::align_of_val(&descriptor_index))
     }
     

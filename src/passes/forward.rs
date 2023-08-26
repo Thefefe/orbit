@@ -184,6 +184,7 @@ impl ForwardRenderer {
             samples: render::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
             aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc::default(),
         });
 
         context.record_and_submit(|cmd| {
@@ -340,7 +341,7 @@ impl ForwardRenderer {
 
                     cmd.build_constants()
                         .mat4(&skybox_view_projection_matrix)
-                        .image(environment_map.skybox);
+                        .sampled_image(environment_map.skybox);
     
                     cmd.draw(0..36, 0..1);    
                 }
@@ -362,15 +363,15 @@ impl ForwardRenderer {
 
                 if let Some(environment_map) = &environment_map {
                     push_constants = push_constants
-                        .image(environment_map.irradiance)
-                        .image(environment_map.prefiltered)
+                        .sampled_image(environment_map.irradiance)
+                        .sampled_image(environment_map.prefiltered)
                 } else {
                     push_constants = push_constants
                         .uint(u32::MAX)
                         .uint(u32::MAX)
                 };
 
-                push_constants = push_constants.image(&brdf_integration_map);
+                push_constants = push_constants.sampled_image(&brdf_integration_map);
 
                 drop(push_constants);
 

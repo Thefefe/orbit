@@ -8,6 +8,7 @@ use crate::{render, utils, assets::AssetGraphData, scene::{SceneGraphData, GpuDr
 
 pub struct SceneDrawGen {
     pipeline: render::ComputePipeline,
+    depth_pyramid: render::RecreatableImage,
 }
 
 impl SceneDrawGen {
@@ -22,7 +23,21 @@ impl SceneDrawGen {
 
         context.destroy_shader_module(module);
 
-        Self { pipeline }
+        let screen_extent = context.swapchain.extent();
+        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(screen_extent.width, screen_extent.height));
+
+        let depth_pyramid = render::RecreatableImage::new(context, "depth_pyramid".into(), render::ImageDesc {
+            ty: render::ImageType::Single2D,
+            format: vk::Format::R32_SFLOAT,
+            dimensions: [screen_extent.width, screen_extent.height, 1],
+            mip_levels,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc::default(),
+        });
+
+        Self { pipeline, depth_pyramid }
 
     }
 
@@ -71,8 +86,28 @@ impl SceneDrawGen {
         draw_commands
     }
 
-    pub fn destroy(&self, context: &render::Context) {
+    pub fn update_depth_pyramid(&mut self, context: &mut render::Context, depth_image: &render::GraphImageHandle) {
+        let screen_extent = context.swapchain_extent();
+        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(screen_extent.width, screen_extent.height));
+
+        self.depth_pyramid.recreate(context, render::ImageDesc {
+            ty: render::ImageType::Single2D,
+            format: vk::Format::R32_SFLOAT,
+            dimensions: [screen_extent.width, screen_extent.height, 1],
+            mip_levels,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc::default(),
+        });
+        let depth_pyramid = self.depth_pyramid.get_current(context);
+        
+        
+    }
+
+    pub fn destroy(&mut self, context: &render::Context) {
         context.destroy_pipeline(&self.pipeline);
+        self.depth_pyramid.destroy(context);
     }
 }
 

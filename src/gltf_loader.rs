@@ -114,7 +114,12 @@ fn tex_level_size(width: usize, height: usize, min_mip_size: usize) -> usize {
     usize::max(1, (width + 3) / 4 ) * usize::max(1, (height + 3) / 4 ) * min_mip_size
 }
 
-pub fn upload_dds_image(context: &graphics::Context, name: Cow<'static, str>, bin: &[u8]) -> graphics::Image {
+pub fn upload_dds_image(
+    context: &graphics::Context,
+    name: Cow<'static, str>,
+    bin: &[u8],
+    sampler: graphics::SamplerKind,
+) -> graphics::Image {
     let dds = ddsfile::Dds::read(bin).unwrap();
 
     let dxgi_format = dds.get_dxgi_format().unwrap();
@@ -133,6 +138,7 @@ pub fn upload_dds_image(context: &graphics::Context, name: Cow<'static, str>, bi
         usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
         aspect: vk::ImageAspectFlags::COLOR,
         subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+        default_sampler: Some(sampler),
     });
 
     let data = dds.get_data(0).unwrap();
@@ -219,6 +225,7 @@ pub fn upload_image_and_generate_mipmaps(
     image_data: image::DynamicImage,
     srgb: bool,
     hdr: bool,
+    sampler: graphics::SamplerKind,
 ) -> graphics::Image {
     let (width, height) = (image_data.width(), image_data.height());
     let max_size = u32::max(width, height);
@@ -237,6 +244,7 @@ pub fn upload_image_and_generate_mipmaps(
         usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
         aspect: vk::ImageAspectFlags::COLOR,
         subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+        default_sampler: Some(sampler),
     });
 
     let scratch_buffer = if hdr {
@@ -307,10 +315,11 @@ pub fn load_image(
     image_format: image::ImageFormat,
     srgb: bool,
     hdr: bool,
+    sampler: graphics::SamplerKind,
 ) -> graphics::Image {
     match image_format {
         image::ImageFormat::Dds => {
-            upload_dds_image(context, name, &image_binary)
+            upload_dds_image(context, name, &image_binary, sampler)
         },
         format => {
             // https://github.com/image-rs/image/issues/1936
@@ -327,7 +336,7 @@ pub fn load_image(
             } else {
                 image::load_from_memory_with_format(&image_binary, format).unwrap()
             };
-            upload_image_and_generate_mipmaps(context, name, image_data, srgb, hdr)
+            upload_image_and_generate_mipmaps(context, name, image_data, srgb, hdr, sampler)
         },
     }
 }
@@ -367,11 +376,6 @@ pub fn load_gltf(
             return *texture_id;
         }
 
-        let (image_binary, image_format) = image_data_from_gltf(base_path, gltf_texture.source().source(), &buffers)
-            .unwrap();
-        let mut texture =
-            load_image(context, format!("gltf_image_{index}").into(), &image_binary, image_format, srgb, false);
-        
         use gltf::texture::{MagFilter, WrappingMode};
         let mag_filter = gltf_texture.sampler().mag_filter().unwrap_or(MagFilter::Linear);
         let wrapping_mode = gltf_texture.sampler().wrap_s();
@@ -383,8 +387,24 @@ pub fn load_gltf(
             (MagFilter::Linear,  WrappingMode::MirroredRepeat   ) => graphics::SamplerKind::LinearRepeat,
             (MagFilter::Linear,  WrappingMode::Repeat           ) => graphics::SamplerKind::LinearRepeat,
         };
-        texture.set_sampler_flags(sampler_flags);
-            let handle = assets.import_texture(texture);
+        
+        let (image_binary, image_format) = image_data_from_gltf(
+            base_path,
+            gltf_texture.source().source(),
+            &buffers
+        ).unwrap();
+
+        let texture = load_image(
+            context,
+            format!("gltf_image_{index}").into(),
+            &image_binary,
+            image_format,
+            srgb,
+            false,
+            sampler_flags
+        );
+
+        let handle = assets.import_texture(texture);
             texture_lookup_table.insert(index, handle);
             handle
         };

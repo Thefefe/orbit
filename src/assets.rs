@@ -311,12 +311,6 @@ impl GpuAssetStore {
             materials_buffer: context.import_buffer(&self.material_buffer),
         }
     }
-
-    pub fn destroy(&self, context: &graphics::Context) {
-        for (_, image) in self.textures.iter() {
-            context.destroy_image(&image);
-        }
-    }
 }
 
 struct SepVertexIter<'a> {

@@ -71,7 +71,7 @@ impl RenderResource for graphics::BufferRaw {
     }
 }
 
-impl RenderResource for graphics::Image {
+impl RenderResource for graphics::ImageRaw {
     type View = graphics::ImageView;
     type Desc = graphics::ImageDesc;
     
@@ -81,11 +81,11 @@ impl RenderResource for graphics::Image {
         desc: &Self::Desc,
         descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self {
-        graphics::Image::create_impl(device, name, desc, descriptor_index)
+        graphics::ImageRaw::create_impl(device, name, desc, descriptor_index)
     }
     
     fn destroy(&self, device: &graphics::Device) {
-        graphics::Image::destroy_impl(device, self);
+        graphics::ImageRaw::destroy_impl(device, self);
     }
 
     fn desc(&self) -> &Self::Desc {
@@ -112,7 +112,7 @@ impl RenderResource for graphics::Image {
 #[derive(Debug, Clone)]
 pub enum AnyResource {
     Buffer(graphics::BufferRaw),
-    Image(graphics::Image),
+    Image(graphics::ImageRaw),
 }
 
 impl AnyResource {
@@ -123,7 +123,7 @@ impl AnyResource {
         }
     }
 
-    pub fn get_image(&self) -> Option<&graphics::Image> {
+    pub fn get_image(&self) -> Option<&graphics::ImageRaw> {
         match self {
             AnyResource::Buffer(_) => None,
             AnyResource::Image(image) => Some(image),
@@ -173,7 +173,7 @@ impl RenderResource for AnyResource {
                 graphics::BufferRaw::create_impl(device, name, desc, descriptor_index)
             ),
             AnyResourceDesc::Image(desc) => AnyResource::Image(
-                graphics::Image::create_impl(device, name, desc, descriptor_index)
+                graphics::ImageRaw::create_impl(device, name, desc, descriptor_index)
             ),
         }
     }
@@ -239,7 +239,7 @@ impl AnyResource {
                 ))
             },
             AnyResourceDesc::Image(desc) => {
-                AnyResource::Image(graphics::Image::create_impl(
+                AnyResource::Image(graphics::ImageRaw::create_impl(
                     device,
                     name,
                     desc,
@@ -255,7 +255,7 @@ impl AnyResource {
                 graphics::BufferRaw::destroy_impl(device, buffer);
             },
             AnyResource::Image(image) => {
-                graphics::Image::destroy_impl(device, image);
+                graphics::ImageRaw::destroy_impl(device, image);
             },
         }
     }
@@ -614,7 +614,7 @@ impl CompiledRenderGraph {
         }
     }
 
-    pub fn get_image(&self, handle: graphics::GraphHandle<graphics::Image>) -> &graphics::ImageView {
+    pub fn get_image(&self, handle: graphics::GraphHandle<graphics::ImageRaw>) -> &graphics::ImageView {
         match &self.resources[handle.resource_index].resource_view {
             AnyResourceView::Image(image) => image,
             _ => unreachable!(),

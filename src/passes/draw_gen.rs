@@ -100,6 +100,7 @@ impl DepthPyramid {
                 mip_descriptors: graphics::ImageDescriptorFlags::STORAGE,
                 ..Default::default()
             },
+            ..Default::default()
         });
 
         Self {

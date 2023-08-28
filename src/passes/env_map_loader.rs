@@ -43,12 +43,6 @@ impl EnvironmentMap {
             prefiltered: context.import_image(&self.prefiltered),
         }
     }
-
-    pub fn destroy(&self, context: &graphics::Context) {
-        context.destroy_image(&self.skybox);
-        context.destroy_image(&self.irradiance);
-        context.destroy_image(&self.prefiltered);
-    }
 }
 
 pub struct EnvironmentMapLoader {
@@ -225,7 +219,8 @@ impl EnvironmentMapLoader {
                 layer_count: 6,
                 layer_descrptors: graphics::ImageDescriptorFlags::NONE,
                 ..Default::default()
-            }
+            },
+            ..Default::default()
         });
 
         let irradiance = context.create_image(format!("{name}_convoluted"), &graphics::ImageDesc {
@@ -241,7 +236,8 @@ impl EnvironmentMapLoader {
                 layer_count: 6,
                 layer_descrptors: graphics::ImageDescriptorFlags::NONE,
                 ..Default::default()
-            }
+            },
+            ..Default::default()
         });
 
         let prefiltered = context.create_image(format!("{name}_prefilterd"), &graphics::ImageDesc {
@@ -252,7 +248,8 @@ impl EnvironmentMapLoader {
             samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: graphics::ImageSubresourceViewDesc::default()
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+            ..Default::default()
         });
 
         let view_matrices = [
@@ -272,7 +269,8 @@ impl EnvironmentMapLoader {
             samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
             aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: graphics::ImageSubresourceViewDesc::default()
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+            ..Default::default()
         });
 
         context.record_and_submit(|cmd| {
@@ -446,9 +444,7 @@ impl EnvironmentMapLoader {
                 ),
             ], &[]);
         });
-
-        context.destroy_image(&scratch_image);
-
+        
         EnvironmentMap {
             skybox,
             irradiance,

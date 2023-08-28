@@ -271,16 +271,15 @@ impl App {
             let equirectangular_environment_image = {
                 let (image_binary, image_format) =
                     gltf_loader::load_image_data(&env_map_path).unwrap();
-                let mut image = gltf_loader::load_image(
+                let image = gltf_loader::load_image(
                     context,
                     "environment_map".into(),
                     &image_binary,
                     image_format,
                     true,
                     true,
+                    graphics::SamplerKind::LinearRepeat
                 );
-
-                image.set_sampler_flags(graphics::SamplerKind::LinearRepeat);
 
                 image
             };
@@ -292,7 +291,6 @@ impl App {
                 &equirectangular_environment_image,
             );
 
-            context.destroy_image(&equirectangular_environment_image);
             Some(environment_map)
         } else {
             None
@@ -309,6 +307,7 @@ impl App {
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::COLOR,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+            ..Default::default()
         });
 
         let main_color_resolve_image = if Self::MULTISAMPLING != graphics::MultisampleCount::None {
@@ -321,6 +320,7 @@ impl App {
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
                 subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+                ..Default::default()
             },))
         } else {
             None
@@ -335,6 +335,7 @@ impl App {
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             aspect: vk::ImageAspectFlags::DEPTH,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+            ..Default::default()
         });
 
         let camera = Camera {
@@ -729,8 +730,6 @@ impl App {
     }
 
     fn destroy(&mut self, context: &graphics::Context) {
-        self.gpu_assets.destroy(context);
-
         self.main_color_image.destroy(context);
         self.main_depth_image.destroy(context);
         if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
@@ -744,9 +743,6 @@ impl App {
         self.shadow_map_renderer.destroy(context);
         self.post_process.destroy(context);
         self.equirectangular_cube_map_loader.destroy(context);
-        if let Some(environment_map) = &self.environment_map {
-            environment_map.destroy(context);
-        }
     }
 }
 

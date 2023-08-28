@@ -318,10 +318,10 @@ impl<T> Clone for GraphHandle<T> {
 impl<T> Copy for GraphHandle<T> { }
 
 pub type GraphBufferHandle = GraphHandle<graphics::BufferRaw>;
-pub type GraphImageHandle = GraphHandle<graphics::Image>;
+pub type GraphImageHandle = GraphHandle<graphics::ImageRaw>;
 
-impl From<GraphHandle<graphics::Image>> for egui::TextureId {
-    fn from(value: GraphHandle<graphics::Image>) -> Self {
+impl From<GraphHandle<graphics::ImageRaw>> for egui::TextureId {
+    fn from(value: GraphHandle<graphics::ImageRaw>) -> Self {
         Self::User(value.resource_index as u64)
     }
 }
@@ -400,7 +400,7 @@ impl Context {
         }
     }
 
-    pub fn import_image(&mut self, image: &graphics::Image) -> GraphHandle<graphics::Image> {
+    pub fn import_image(&mut self, image: &graphics::ImageRaw) -> GraphHandle<graphics::ImageRaw> {
         let cache = self.graph.import_cache.get(&graphics::AnyResourceHandle::Image(image.handle));
         if let Some(resource_index) = cache.copied() {
             GraphHandle { resource_index, _phantom: PhantomData }
@@ -437,7 +437,7 @@ impl Context {
         name: impl Into<Cow<'static, str>>,
         image: &graphics::ImageView,
         desc: graphics::GraphResourceImportDesc,
-    ) -> GraphHandle<graphics::Image> {
+    ) -> GraphHandle<graphics::ImageRaw> {
         let name = name.into();
         let view = graphics::AnyResourceView::Image(*image);
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
@@ -532,7 +532,7 @@ impl Context {
         &mut self,
         name: impl Into<Cow<'static, str>>,
         image_desc: graphics::ImageDesc
-    ) -> GraphHandle<graphics::Image> {
+    ) -> GraphHandle<graphics::ImageRaw> {
         let name = name.into();
         let desc = graphics::AnyResourceDesc::Image(image_desc);
         let cache = self.transient_resource_cache.get_by_descriptor(&desc);

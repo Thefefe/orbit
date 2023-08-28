@@ -185,6 +185,7 @@ impl ForwardRenderer {
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
             aspect: vk::ImageAspectFlags::COLOR,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+            ..Default::default()
         });
 
         context.record_and_submit(|cmd| {
@@ -389,7 +390,6 @@ impl ForwardRenderer {
     }
 
     pub fn destroy(&self, context: &graphics::Context) {
-        context.destroy_image(&self.brdf_integration_map);
         context.destroy_pipeline(&self.forward_pipeline);
         context.destroy_pipeline(&self.skybox_pipeline);
         context.destroy_pipeline(&self.brdf_integration_pipeline);

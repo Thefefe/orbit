@@ -998,7 +998,7 @@ impl DescriptorTableType {
 pub type DescriptorIndex = u32;
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SamplerKind {
     LinearClamp      = 0,
     LinearRepeat     = 1,

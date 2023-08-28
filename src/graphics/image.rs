@@ -1,4 +1,4 @@
-use std::{ops::{Range, RangeBounds}, borrow::Cow};
+use std::{ops::{Range, RangeBounds}, borrow::Cow, sync::Arc};
 
 use crate::graphics;
 use ash::vk;
@@ -111,10 +111,10 @@ struct SubresourceView {
     descriptor_index: Option<graphics::DescriptorIndex>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ImageType {
     Single1D,
-    Single2D,
+    #[default] Single2D,
     Single3D,
     Array1D(u32),
     Array2D(u32),
@@ -220,7 +220,7 @@ pub struct ImageSubresourceViewDesc {
     pub layer_descrptors: ImageDescriptorFlags,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ImageDesc {
     pub ty: ImageType,
     pub format: vk::Format,
@@ -230,10 +230,11 @@ pub struct ImageDesc {
     pub usage: vk::ImageUsageFlags,
     pub aspect: vk::ImageAspectFlags,
     pub subresource_desc: ImageSubresourceViewDesc,
+    pub default_sampler: Option<graphics::SamplerKind>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Image {
+pub struct ImageRaw {
     pub name: Cow<'static, str>,
     pub full_view: graphics::ImageView,
     subresource_views: Vec<SubresourceView>,
@@ -241,7 +242,7 @@ pub struct Image {
     alloc_index: graphics::AllocIndex,
 }
 
-impl std::ops::Deref for Image {
+impl std::ops::Deref for ImageRaw {
     type Target = graphics::ImageView;
 
     fn deref(&self) -> &Self::Target {
@@ -249,13 +250,13 @@ impl std::ops::Deref for Image {
     }
 }
 
-impl Image {
+impl ImageRaw {
     pub(super) fn create_impl(
         device: &graphics::Device,
         name: Cow<'static, str>,
         desc: &ImageDesc,
         preallocated_descriptor_index: Option<graphics::DescriptorIndex>,
-    ) -> Image {
+    ) -> ImageRaw {
         puffin::profile_function!(&name);
 
         let extent = vk::Extent3D {
@@ -428,11 +429,16 @@ impl Image {
             }
         }
 
-        Image {
+        let _descriptor_index = graphics::descriptor_index_with_sampler(
+            descriptor_index.unwrap_or(0),
+            desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)
+        );
+
+        ImageRaw {
             name,
             full_view: graphics::ImageView {
                 handle,
-                _descriptor_index: descriptor_index.unwrap_or(0),
+                _descriptor_index,
                 _descriptor_flags: descriptor_flags,
                 format: desc.format,
                 view,
@@ -445,7 +451,7 @@ impl Image {
         }
     }
 
-    pub(super) fn destroy_impl(device: &graphics::Device, image: &graphics::Image) {
+    pub(super) fn destroy_impl(device: &graphics::Device, image: &graphics::ImageRaw) {
         puffin::profile_function!(&image.name);
         if !image._descriptor_flags.is_empty() {
             device.free_descriptor_index(image._descriptor_index);
@@ -463,11 +469,6 @@ impl Image {
             }
         }
         device.deallocate(image.alloc_index);
-    }
-
-    pub fn set_sampler_flags(&mut self, sampler_flags: graphics::SamplerKind) {
-        self.full_view._descriptor_index =
-            graphics::descriptor_index_with_sampler(self._descriptor_index, sampler_flags);
     }
 
     pub fn mip_view_count(&self) -> usize {
@@ -495,11 +496,15 @@ impl Image {
         let SubresourceView { view, descriptor_index } = self.subresource_views[mip_level];
 
         let [width, height, depth] = self.desc.dimensions;
+        let _descriptor_index = graphics::descriptor_index_with_sampler(
+            descriptor_index.unwrap_or(0),
+            self.desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)
+        );
 
         Some(ImageView {
             handle: self.handle,
             view,
-            _descriptor_index: descriptor_index.unwrap_or(0),
+            _descriptor_index,
             _descriptor_flags: self.desc.subresource_desc.mip_descriptors,
             format: self.desc.format,
             extent: vk::Extent3D { width, height, depth },
@@ -528,11 +533,15 @@ impl Image {
             self.subresource_views[self.mip_view_count() + layer_view_index as usize];
 
         let [width, height, depth] = self.desc.dimensions;
+        let _descriptor_index = graphics::descriptor_index_with_sampler(
+            descriptor_index.unwrap_or(0),
+            self.desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)
+        );
 
         Some(ImageView {
             handle: self.handle,
             view,
-            _descriptor_index: descriptor_index.unwrap_or(0),
+            _descriptor_index,
             _descriptor_flags: self.desc.subresource_desc.layer_descrptors,
             format: self.desc.format,
             extent: vk::Extent3D { width, height, depth },
@@ -547,9 +556,29 @@ impl Image {
     }
 }
 
+pub struct Image {
+    image: Arc<graphics::ImageRaw>,
+    device: Arc<graphics::Device>,
+}
+
+impl std::ops::Deref for graphics::Image {
+    type Target = graphics::ImageRaw;
+
+    fn deref(&self) -> &Self::Target {
+        &self.image
+    }
+}
+
+impl Drop for graphics::Image {
+    fn drop(&mut self) {
+        ImageRaw::destroy_impl(&self.device, &self.image);
+    }
+}
+
 impl graphics::Context {
     pub fn create_image(&self, name: impl Into<Cow<'static, str>>, desc: &ImageDesc) -> Image {
-        Image::create_impl(&self.device, name.into(), desc, None)
+        let image = ImageRaw::create_impl(&self.device, name.into(), desc, None);
+        Image { image: Arc::new(image), device: self.device.clone() }
     }
 
     pub fn immediate_write_image(
@@ -602,9 +631,5 @@ impl graphics::Context {
         });
 
         drop(scratch_buffer);
-    }
-
-    pub fn destroy_image(&self, image: &Image) {
-        Image::destroy_impl(&self.device, image)
     }
 }

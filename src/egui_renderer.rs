@@ -6,7 +6,7 @@ use gpu_allocator::MemoryLocation;
 
 struct ClippedBatch {
     clip_rect: vk::Rect2D,
-    texture: graphics::GraphHandle<graphics::Image>,
+    texture: graphics::GraphImageHandle,
     index_range: Range<u32>,
     vertex_offset: i32,
 }
@@ -144,9 +144,7 @@ impl EguiRenderer {
 
         for id in textures_delta.free.iter() {
             if let egui::TextureId::Managed(id) = id {
-                if let Some(image) = self.textures.remove(id) {
-                    context.destroy_image(&image);
-                }
+                self.textures.remove(id);
             }
         }
 
@@ -261,6 +259,7 @@ impl EguiRenderer {
                 usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
                 subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+                ..Default::default()
             });
             let image_view = image.full_view;
             self.textures.insert(id, image);
@@ -304,7 +303,7 @@ impl EguiRenderer {
         context: &mut graphics::Context,
         clipped_primitives: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
-        target_image: graphics::GraphHandle<graphics::Image>,
+        target_image: graphics::GraphHandle<graphics::ImageRaw>,
     ) {
         puffin::profile_function!();
 
@@ -374,8 +373,5 @@ impl EguiRenderer {
 
     pub fn destroy(&self, context: &graphics::Context) {
         context.destroy_pipeline(&self.pipeline);
-        for image in self.textures.values() {
-            context.destroy_image(image);
-        }
     }
 }

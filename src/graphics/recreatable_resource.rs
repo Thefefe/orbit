@@ -1,16 +1,16 @@
 use std::{collections::VecDeque, borrow::Cow};
 
-use crate::render;
+use crate::graphics;
 
-pub type RecreatableBuffer = Recreatable<render::Buffer>;
-pub type RecreatableImage = Recreatable<render::Image>;
+pub type RecreatableBuffer = Recreatable<graphics::Buffer>;
+pub type RecreatableImage = Recreatable<graphics::Image>;
 
 struct OldResource<R> {
     resource: R,
     last_used_frame_index: Option<usize>,
 }
 
-pub struct Recreatable<R: render::RenderResource> {
+pub struct Recreatable<R: graphics::RenderResource> {
     name: Cow<'static, str>,
     current_resource: R,
     current_desc: R::Desc,
@@ -21,10 +21,10 @@ pub struct Recreatable<R: render::RenderResource> {
 
 impl<R> Recreatable<R>
 where 
-    R: render::RenderResource,
+    R: graphics::RenderResource,
     R::Desc: std::cmp::Eq,
 {
-    pub fn new(context: &render::Context, name: Cow<'static, str>, desc: R::Desc) -> Self {   
+    pub fn new(context: &graphics::Context, name: Cow<'static, str>, desc: R::Desc) -> Self {   
         let current = R::create(&context.device, &context.descriptors, name.clone(), &desc, None);
         Self {
             last_used_frame_index: None,
@@ -35,7 +35,7 @@ where
         }
     }
 
-    pub fn recreate(&mut self, context: &render::Context) -> bool {
+    pub fn recreate(&mut self, context: &graphics::Context) -> bool {
         puffin::profile_function!(&self.name);
         if self.current_desc == *self.current_resource.desc() {
             return false;
@@ -61,7 +61,7 @@ where
         &mut self.current_desc
     }
 
-    pub fn get_current(&mut self,context: &mut render::Context) -> &R {
+    pub fn get_current(&mut self,context: &mut graphics::Context) -> &R {
         puffin::profile_function!(&self.name);
         if let Some(old_resource) = self.old.front() {
             if old_resource.last_used_frame_index.is_none() ||
@@ -77,7 +77,7 @@ where
         &self.current_resource
     }
 
-    pub fn destroy(&mut self, context: &render::Context) {
+    pub fn destroy(&mut self, context: &graphics::Context) {
         puffin::profile_function!(&self.name);
         self.current_resource.destroy(&context.device, &context.descriptors);
 

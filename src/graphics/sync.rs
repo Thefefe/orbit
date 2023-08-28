@@ -1,6 +1,6 @@
 use std::{ops::RangeBounds, borrow::Cow};
 
-use crate::render;
+use crate::graphics;
 use ash::vk;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,9 +147,9 @@ impl AccessKind {
 
 #[inline]
 pub fn buffer_barrier(
-    buffer: &render::BufferView,
-    src_access: render::AccessKind,
-    dst_access: render::AccessKind,
+    buffer: &graphics::BufferView,
+    src_access: graphics::AccessKind,
+    dst_access: graphics::AccessKind,
 ) -> vk::BufferMemoryBarrier2 {
     vk::BufferMemoryBarrier2 {
         src_stage_mask: src_access.stage_mask(),
@@ -167,7 +167,7 @@ pub fn buffer_barrier(
 
 #[inline]
 pub fn image_barrier(
-    image: &render::ImageView,
+    image: &graphics::ImageView,
     src_access: AccessKind,
     dst_access: AccessKind,
 ) -> vk::ImageMemoryBarrier2 {
@@ -188,7 +188,7 @@ pub fn image_barrier(
 
 #[inline]
 pub fn image_subresource_barrier(
-    image: &render::ImageView,
+    image: &graphics::ImageView,
     mip_level: impl RangeBounds<u32>,
     layers: impl RangeBounds<u32>,
     src_access: AccessKind,
@@ -211,7 +211,7 @@ pub fn image_subresource_barrier(
 
 pub fn extend_memory_barrier(barrier: &mut vk::MemoryBarrier2, src_access: AccessKind, dst_access: AccessKind) {
     barrier.src_stage_mask |= src_access.stage_mask();
-    if src_access.read_write_kind() == render::ReadWriteKind::Write {
+    if src_access.read_write_kind() == graphics::ReadWriteKind::Write {
         barrier.src_access_mask |= src_access.access_mask();
     }
 
@@ -239,11 +239,11 @@ impl std::fmt::Debug for Semaphore {
     }
 }
 
-impl render::Device {
-    pub fn create_semaphore(&self, name: impl Into<Cow<'static, str>>) -> render::Semaphore {
+impl graphics::Device {
+    pub fn create_semaphore(&self, name: impl Into<Cow<'static, str>>) -> graphics::Semaphore {
         let name = name.into();
         let handle =  unsafe { self.raw.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap() };
         self.set_debug_name(handle, &name);
-        render::Semaphore { name, handle }
+        graphics::Semaphore { name, handle }
     }
 }

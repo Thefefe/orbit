@@ -1,4 +1,4 @@
-use crate::render;
+use crate::graphics;
 
 use ash::vk;
 use std::collections::VecDeque;
@@ -14,14 +14,14 @@ pub struct SwapchainConfig {
 
 struct SwapchainInner {
     handle: vk::SwapchainKHR,
-    images: Vec<render::ImageView>,
+    images: Vec<graphics::ImageView>,
 
     config: SwapchainConfig,
     last_frame_index: Option<usize>,
 }
 
 impl SwapchainInner {
-    fn new(device: &render::Device, old_swapchain: Option<vk::SwapchainKHR>, config: SwapchainConfig) -> Self {
+    fn new(device: &graphics::Device, old_swapchain: Option<vk::SwapchainKHR>, config: SwapchainConfig) -> Self {
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(device.surface)
             .min_image_count(config.image_count)
@@ -65,10 +65,10 @@ impl SwapchainInner {
                     depth: 1,
                 };
 
-                render::ImageView {
+                graphics::ImageView {
                     handle: image,
                     _descriptor_index: 0,
-                    _descriptor_flags: render::ImageDescriptorFlags::empty(),
+                    _descriptor_flags: graphics::ImageDescriptorFlags::empty(),
                     subresource_range,
                     format: config.surface_format.format,
                     view,
@@ -85,7 +85,7 @@ impl SwapchainInner {
         }
     }
 
-    fn destroy(&self, device: &render::Device) {
+    fn destroy(&self, device: &graphics::Device) {
         unsafe {
             for image in self.images.iter() {
                 device.raw.destroy_image_view(image.view, None);
@@ -96,7 +96,7 @@ impl SwapchainInner {
     }
 }
 
-impl render::SurfaceInfo {
+impl graphics::SurfaceInfo {
     pub fn choose_surface_format(&self) -> vk::SurfaceFormatKHR {
         for surface_format in self.formats.iter().copied() {
             if surface_format.format == vk::Format::B8G8R8A8_SRGB
@@ -157,13 +157,13 @@ impl render::SurfaceInfo {
 
 #[derive(Debug, Clone)]
 pub struct AcquiredImage {
-    pub image_view: render::ImageView,
+    pub image_view: graphics::ImageView,
     pub image_index: u32,
     pub suboptimal: bool,
 }
 
 impl std::ops::Deref for AcquiredImage {
-    type Target = render::ImageView;
+    type Target = graphics::ImageView;
 
     fn deref(&self) -> &Self::Target {
         &self.image_view
@@ -181,7 +181,7 @@ pub struct Swapchain {
 }
 
 impl Swapchain {
-    pub fn new(device: &render::Device, config: SwapchainConfig) -> Self {
+    pub fn new(device: &graphics::Device, config: SwapchainConfig) -> Self {
         Self {
             inner: SwapchainInner::new(device, None, config),
             old: VecDeque::new(),
@@ -204,7 +204,7 @@ impl Swapchain {
         self.config.surface_format.format
     }
 
-    fn recreate_if_needed(&mut self, device: &mut render::Device) {
+    fn recreate_if_needed(&mut self, device: &mut graphics::Device) {
         if self.config == self.inner.config {
             return;
         }
@@ -220,7 +220,7 @@ impl Swapchain {
 
     pub fn acquire_image(
         &mut self,
-        device: &mut render::Device,
+        device: &mut graphics::Device,
         frame_index: usize, // used for old swapchain lifetime management
         acquired_semaphore: vk::Semaphore,
     ) -> Result<AcquiredImage, SwapchainOutOfDate> {
@@ -261,7 +261,7 @@ impl Swapchain {
 
     pub fn queue_present(
         &mut self,
-        device: &render::Device,
+        device: &graphics::Device,
         image: AcquiredImage,
         finished_semaphore: vk::Semaphore,
     ) {
@@ -275,7 +275,7 @@ impl Swapchain {
         }
     }
 
-    pub fn destroy(&self, device: &render::Device) {
+    pub fn destroy(&self, device: &graphics::Device) {
         for swapchain in self.old.iter() {
             swapchain.destroy(&device);
         }

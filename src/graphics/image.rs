@@ -1,35 +1,35 @@
 use std::{ops::{Range, RangeBounds}, borrow::Cow};
 
-use crate::render;
+use crate::graphics;
 use ash::vk;
 use gpu_allocator::{MemoryLocation, vulkan::{AllocationCreateDesc, AllocationScheme}};
-use render::AccessKind;
+use graphics::AccessKind;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImageView {
     pub handle: vk::Image,
     pub view: vk::ImageView,
-    pub _descriptor_index: render::DescriptorIndex,
-    pub _descriptor_flags: render::ImageDescriptorFlags,
+    pub _descriptor_index: graphics::DescriptorIndex,
+    pub _descriptor_flags: graphics::ImageDescriptorFlags,
     pub format: vk::Format,
     pub extent: vk::Extent3D,
     pub subresource_range: vk::ImageSubresourceRange,
 }
 
 impl ImageView {
-    pub fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
+    pub fn descriptor_index(&self) -> Option<graphics::DescriptorIndex> {
         (!self._descriptor_flags.is_empty()).then_some(self._descriptor_index)
     }
 
     #[inline(always)]
-    pub fn sampled_index(&self) -> Option<render::DescriptorIndex> {
+    pub fn sampled_index(&self) -> Option<graphics::DescriptorIndex> {
         self._descriptor_flags.contains(ImageDescriptorFlags::SAMPLED).then_some(self._descriptor_index)
     }
     
     #[inline(always)]
-    pub fn storage_index(&self) -> Option<render::DescriptorIndex> {
+    pub fn storage_index(&self) -> Option<graphics::DescriptorIndex> {
         self._descriptor_flags.contains(ImageDescriptorFlags::STORAGE)
-            .then_some(render::strip_sampler(self._descriptor_index))
+            .then_some(graphics::strip_sampler(self._descriptor_index))
     }
 
     #[inline(always)]
@@ -108,7 +108,7 @@ impl ImageView {
 #[derive(Debug, Clone, Copy)]
 struct SubresourceView {
     view: vk::ImageView,
-    descriptor_index: Option<render::DescriptorIndex>,
+    descriptor_index: Option<graphics::DescriptorIndex>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -226,7 +226,7 @@ pub struct ImageDesc {
     pub format: vk::Format,
     pub dimensions: [u32; 3],
     pub mip_levels: u32,
-    pub samples: render::MultisampleCount,
+    pub samples: graphics::MultisampleCount,
     pub usage: vk::ImageUsageFlags,
     pub aspect: vk::ImageAspectFlags,
     pub subresource_desc: ImageSubresourceViewDesc,
@@ -235,14 +235,14 @@ pub struct ImageDesc {
 #[derive(Debug, Clone)]
 pub struct Image {
     pub name: Cow<'static, str>,
-    pub full_view: render::ImageView,
+    pub full_view: graphics::ImageView,
     subresource_views: Vec<SubresourceView>,
     pub desc: ImageDesc,
-    alloc_index: render::AllocIndex,
+    alloc_index: graphics::AllocIndex,
 }
 
 impl std::ops::Deref for Image {
-    type Target = render::ImageView;
+    type Target = graphics::ImageView;
 
     fn deref(&self) -> &Self::Target {
         &self.full_view
@@ -251,11 +251,11 @@ impl std::ops::Deref for Image {
 
 impl Image {
     pub(super) fn create_impl(
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &ImageDesc,
-        preallocated_descriptor_index: Option<render::DescriptorIndex>,
+        preallocated_descriptor_index: Option<graphics::DescriptorIndex>,
     ) -> Image {
         puffin::profile_function!(&name);
 
@@ -431,7 +431,7 @@ impl Image {
 
         Image {
             name,
-            full_view: render::ImageView {
+            full_view: graphics::ImageView {
                 handle,
                 _descriptor_index: descriptor_index.unwrap_or(0),
                 _descriptor_flags: descriptor_flags,
@@ -446,7 +446,7 @@ impl Image {
         }
     }
 
-    pub(super) fn destroy_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, image: &render::Image) {
+    pub(super) fn destroy_impl(device: &graphics::Device, descriptors: &graphics::BindlessDescriptors, image: &graphics::Image) {
         puffin::profile_function!(&image.name);
         if !image._descriptor_flags.is_empty() {
             descriptors.free_descriptor_index(image._descriptor_index);
@@ -466,9 +466,9 @@ impl Image {
         device.deallocate(image.alloc_index);
     }
 
-    pub fn set_sampler_flags(&mut self, sampler_flags: render::SamplerKind) {
+    pub fn set_sampler_flags(&mut self, sampler_flags: graphics::SamplerKind) {
         self.full_view._descriptor_index =
-            render::descriptor_index_with_sampler(self._descriptor_index, sampler_flags);
+            graphics::descriptor_index_with_sampler(self._descriptor_index, sampler_flags);
     }
 
     pub fn mip_view_count(&self) -> usize {
@@ -548,14 +548,14 @@ impl Image {
     }
 }
 
-impl render::Context {
+impl graphics::Context {
     pub fn create_image(&self, name: impl Into<Cow<'static, str>>, desc: &ImageDesc) -> Image {
         Image::create_impl(&self.device, &self.descriptors, name.into(), desc, None)
     }
 
     pub fn immediate_write_image(
         &self,
-        image: &render::ImageView,
+        image: &graphics::ImageView,
         mip_level: u32,
         layers: Range<u32>,
         prev_access: AccessKind,
@@ -565,7 +565,7 @@ impl render::Context {
     ) {
         puffin::profile_function!();
 
-        let scratch_buffer = self.create_buffer_init("scratch_buffer", &render::BufferDesc {
+        let scratch_buffer = self.create_buffer_init("scratch_buffer", &graphics::BufferDesc {
             size: bytes.len(),
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             memory_location: MemoryLocation::CpuToGpu,
@@ -586,7 +586,7 @@ impl render::Context {
         };
         
         self.record_and_submit(|cmd| {
-            cmd.barrier(&[], &[render::image_barrier(image, prev_access, AccessKind::TransferWrite)], &[]);
+            cmd.barrier(&[], &[graphics::image_barrier(image, prev_access, AccessKind::TransferWrite)], &[]);
 
             cmd.copy_buffer_to_image(&scratch_buffer, &image, &[vk::BufferImageCopy {
                 buffer_offset: 0,
@@ -598,7 +598,7 @@ impl render::Context {
             }]);
 
             if let Some(target_access) = target_access {
-                cmd.barrier(&[], &[render::image_barrier(image, AccessKind::TransferWrite, target_access)], &[]);
+                cmd.barrier(&[], &[graphics::image_barrier(image, AccessKind::TransferWrite, target_access)], &[]);
             }
         });
 

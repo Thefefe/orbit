@@ -2,63 +2,63 @@ use std::{collections::HashMap, ops::Range, borrow::Cow};
 
 use ash::vk;
 
-use crate::{render, collections::arena};
+use crate::{graphics, collections::arena};
 pub type GraphResourceIndex = usize;
 pub type GraphPassIndex = arena::Index;
 pub type GraphDependencyIndex = usize;
 
-type PassFn = Box<dyn Fn(&render::CommandRecorder, &render::CompiledRenderGraph)>;
+type PassFn = Box<dyn Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph)>;
 
 pub trait RenderResource {
     type View;
     type Desc;
 
     fn create(
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &Self::Desc,
-        descriptor_index: Option<render::DescriptorIndex>
+        descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self;
     
     fn destroy(
         &self,
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
     );
 
     
     fn desc(&self) -> &Self::Desc;
     fn view(&self) -> Self::View;
-    fn descriptor_index(&self) -> Option<render::DescriptorIndex>;
+    fn descriptor_index(&self) -> Option<graphics::DescriptorIndex>;
 
     fn import_to_graph(
         &self,
-        context: &mut render::Context,
-        desc: render::GraphResourceImportDesc
-    ) -> render::GraphHandle<Self>;
+        context: &mut graphics::Context,
+        desc: graphics::GraphResourceImportDesc
+    ) -> graphics::GraphHandle<Self>;
 }
 
-impl RenderResource for render::Buffer {
-    type View = render::BufferView;
-    type Desc = render::BufferDesc;
+impl RenderResource for graphics::Buffer {
+    type View = graphics::BufferView;
+    type Desc = graphics::BufferDesc;
     
     fn create(
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &Self::Desc,
-        descriptor_index: Option<render::DescriptorIndex>
+        descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self {
-        render::Buffer::create_impl(device, descriptors, name, desc, descriptor_index)
+        graphics::Buffer::create_impl(device, descriptors, name, desc, descriptor_index)
     }
     
     fn destroy(
         &self,
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
     ) {
-        render::Buffer::destroy_impl(device, descriptors, self);
+        graphics::Buffer::destroy_impl(device, descriptors, self);
     }
 
     fn desc(&self) -> &Self::Desc {
@@ -69,39 +69,39 @@ impl RenderResource for render::Buffer {
         self.buffer_view
     }
 
-    fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
+    fn descriptor_index(&self) -> Option<graphics::DescriptorIndex> {
         self.descriptor_index
     }
 
     fn import_to_graph(
         &self,
-        context: &mut render::Context,
-        desc: render::GraphResourceImportDesc
-    ) -> render::GraphHandle<Self> {
+        context: &mut graphics::Context,
+        desc: graphics::GraphResourceImportDesc
+    ) -> graphics::GraphHandle<Self> {
         context.import_buffer_with(self.name.clone(), &self, desc)
     }
 }
 
-impl RenderResource for render::Image {
-    type View = render::ImageView;
-    type Desc = render::ImageDesc;
+impl RenderResource for graphics::Image {
+    type View = graphics::ImageView;
+    type Desc = graphics::ImageDesc;
     
     fn create(
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &Self::Desc,
-        descriptor_index: Option<render::DescriptorIndex>
+        descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self {
-        render::Image::create_impl(device, descriptors, name, desc, descriptor_index)
+        graphics::Image::create_impl(device, descriptors, name, desc, descriptor_index)
     }
     
     fn destroy(
         &self,
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
     ) {
-        render::Image::destroy_impl(device, descriptors, self);
+        graphics::Image::destroy_impl(device, descriptors, self);
     }
 
     fn desc(&self) -> &Self::Desc {
@@ -112,34 +112,34 @@ impl RenderResource for render::Image {
         self.full_view
     }
 
-    fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
+    fn descriptor_index(&self) -> Option<graphics::DescriptorIndex> {
         (!self._descriptor_flags.is_empty()).then_some(self._descriptor_index)
     }
 
     fn import_to_graph(
         &self,
-        context: &mut render::Context,
-        desc: render::GraphResourceImportDesc
-    ) -> render::GraphHandle<Self> {
+        context: &mut graphics::Context,
+        desc: graphics::GraphResourceImportDesc
+    ) -> graphics::GraphHandle<Self> {
         context.import_image_with(self.name.clone(), self, desc)
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum AnyResource {
-    Buffer(render::Buffer),
-    Image(render::Image),
+    Buffer(graphics::Buffer),
+    Image(graphics::Image),
 }
 
 impl AnyResource {
-    pub fn get_buffer(&self) -> Option<&render::Buffer> {
+    pub fn get_buffer(&self) -> Option<&graphics::Buffer> {
         match self {
             AnyResource::Buffer(buffer) => Some(buffer),
             AnyResource::Image(_) => None,
         }
     }
 
-    pub fn get_image(&self) -> Option<&render::Image> {
+    pub fn get_image(&self) -> Option<&graphics::Image> {
         match self {
             AnyResource::Buffer(_) => None,
             AnyResource::Image(image) => Some(image),
@@ -149,8 +149,8 @@ impl AnyResource {
 
 #[derive(Debug, Clone, Copy)]
 pub enum AnyResourceView {
-    Buffer(render::BufferView),
-    Image(render::ImageView),
+    Buffer(graphics::BufferView),
+    Image(graphics::ImageView),
 }
 
 impl AnyResourceView {
@@ -170,8 +170,8 @@ pub enum AnyResourceHandle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AnyResourceDesc {
-    Buffer(render::BufferDesc),
-    Image(render::ImageDesc),
+    Buffer(graphics::BufferDesc),
+    Image(graphics::ImageDesc),
 }
 
 impl RenderResource for AnyResource {
@@ -179,23 +179,23 @@ impl RenderResource for AnyResource {
     type Desc = AnyResourceDesc;
 
     fn create(
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &Self::Desc,
-        descriptor_index: Option<render::DescriptorIndex>
+        descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self {
         match desc {
             AnyResourceDesc::Buffer(desc) => AnyResource::Buffer(
-                render::Buffer::create_impl(device, descriptors, name, desc, descriptor_index)
+                graphics::Buffer::create_impl(device, descriptors, name, desc, descriptor_index)
             ),
             AnyResourceDesc::Image(desc) => AnyResource::Image(
-                render::Image::create_impl(device, descriptors, name, desc, descriptor_index)
+                graphics::Image::create_impl(device, descriptors, name, desc, descriptor_index)
             ),
         }
     }
 
-    fn destroy(&self, device: &render::Device, descriptors: &render::BindlessDescriptors) {
+    fn destroy(&self, device: &graphics::Device, descriptors: &graphics::BindlessDescriptors) {
         match self {
             AnyResource::Buffer(buffer) => buffer.destroy(device, descriptors),
             AnyResource::Image(image) => image.destroy(device, descriptors),
@@ -213,7 +213,7 @@ impl RenderResource for AnyResource {
         }
     }
 
-    fn descriptor_index(&self) -> Option<render::DescriptorIndex> {
+    fn descriptor_index(&self) -> Option<graphics::DescriptorIndex> {
         match self {
             AnyResource::Buffer(buffer) => buffer.descriptor_index,
             AnyResource::Image(image) =>
@@ -221,7 +221,7 @@ impl RenderResource for AnyResource {
         }
     }
 
-    fn import_to_graph(&self, _: &mut render::Context, _: render::GraphResourceImportDesc) -> render::GraphHandle<Self> {
+    fn import_to_graph(&self, _: &mut graphics::Context, _: graphics::GraphResourceImportDesc) -> graphics::GraphHandle<Self> {
         panic!("attempted to import an 'AnyResource', that's a bad idea")
     }
 }
@@ -241,15 +241,15 @@ impl AnyResource {
     }
 
     pub fn create(
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &AnyResourceDesc,
-        preallocated_descriptor_index: Option<render::DescriptorIndex>,
+        preallocated_descriptor_index: Option<graphics::DescriptorIndex>,
     ) -> Self {
         match desc {
             AnyResourceDesc::Buffer(desc) => {
-                AnyResource::Buffer(render::Buffer::create_impl(
+                AnyResource::Buffer(graphics::Buffer::create_impl(
                     device,
                     descriptors,
                     name,
@@ -258,7 +258,7 @@ impl AnyResource {
                 ))
             },
             AnyResourceDesc::Image(desc) => {
-                AnyResource::Image(render::Image::create_impl(
+                AnyResource::Image(graphics::Image::create_impl(
                     device,
                     descriptors,
                     name,
@@ -271,15 +271,15 @@ impl AnyResource {
 
     pub fn destroy(
         &self,
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors
     ) {
         match self {
             AnyResource::Buffer(buffer) => {
-                render::Buffer::destroy_impl(device, descriptors, buffer);
+                graphics::Buffer::destroy_impl(device, descriptors, buffer);
             },
             AnyResource::Image(image) => {
-                render::Image::destroy_impl(device, descriptors, image);
+                graphics::Image::destroy_impl(device, descriptors, image);
             },
         }
     }
@@ -316,7 +316,7 @@ pub enum ResourceSource {
 
 #[derive(Debug)]
 pub struct ResourceVersion {
-    last_access: render::AccessKind,
+    last_access: graphics::AccessKind,
     source_pass: GraphPassIndex,
 }
 
@@ -325,18 +325,18 @@ pub struct GraphResourceData {
     pub name: Cow<'static, str>,
 
     pub source: ResourceSource,
-    pub descriptor_index: Option<render::DescriptorIndex>,
+    pub descriptor_index: Option<graphics::DescriptorIndex>,
 
-    pub initial_access: render::AccessKind,
-    pub target_access: render::AccessKind,
-    pub wait_semaphore: Option<render::Semaphore>,
-    pub finish_semaphore: Option<render::Semaphore>,
+    pub initial_access: graphics::AccessKind,
+    pub target_access: graphics::AccessKind,
+    pub wait_semaphore: Option<graphics::Semaphore>,
+    pub finish_semaphore: Option<graphics::Semaphore>,
 
     pub versions: Vec<ResourceVersion>,
 }
 
 impl GraphResourceData {
-    fn kind(&self) -> render::ResourceKind {
+    fn kind(&self) -> graphics::ResourceKind {
         match self.source {
             ResourceSource::Create { desc, .. } => desc.kind(),
             ResourceSource::Import { view } => view.kind(),
@@ -347,7 +347,7 @@ impl GraphResourceData {
         self.versions.len()
     }
 
-    fn last_access(&self, version: usize) -> render::AccessKind {
+    fn last_access(&self, version: usize) -> graphics::AccessKind {
         assert!(version <= self.versions.len());
         if version == 0 {
             self.initial_access
@@ -384,7 +384,7 @@ impl std::fmt::Debug for PassData {
 
 #[derive(Debug)]
 struct DependencyData {
-    access: render::AccessKind,
+    access: graphics::AccessKind,
     pass_handle: GraphPassIndex,
     resource_handle: GraphResourceIndex,
     resource_version: usize,
@@ -392,10 +392,10 @@ struct DependencyData {
 
 #[derive(Debug, Clone, Default)]
 pub struct GraphResourceImportDesc {
-    pub initial_access: render::AccessKind,
-    pub target_access: render::AccessKind,
-    pub wait_semaphore: Option<render::Semaphore>,
-    pub finish_semaphore: Option<render::Semaphore>,
+    pub initial_access: graphics::AccessKind,
+    pub target_access: graphics::AccessKind,
+    pub wait_semaphore: Option<graphics::Semaphore>,
+    pub finish_semaphore: Option<graphics::Semaphore>,
 }
 
 #[derive(Debug)]
@@ -453,7 +453,7 @@ impl RenderGraph {
         &mut self,
         pass_handle: GraphPassIndex,
         resource_handle: GraphResourceIndex,
-        access: render::AccessKind,
+        access: graphics::AccessKind,
     ) -> usize {
         let resource_version = self.resources[resource_handle].current_version();
 
@@ -467,7 +467,7 @@ impl RenderGraph {
 
         self.passes[pass_handle].dependencies.push(dependency);
 
-        if access.read_write_kind() == render::ReadWriteKind::Write {
+        if access.read_write_kind() == graphics::ReadWriteKind::Write {
             self.resources[resource_handle].versions.push(ResourceVersion {
                 last_access: access,
                 source_pass: pass_handle,
@@ -561,8 +561,8 @@ pub struct BatchData {
 #[derive(Debug, Clone, Copy)]
 pub struct BatchDependecy {
     pub resoure_index: usize,
-    pub src_access: render::AccessKind,
-    pub dst_access: render::AccessKind,
+    pub src_access: graphics::AccessKind,
+    pub dst_access: graphics::AccessKind,
 }
 
 pub struct CompiledPassData {
@@ -592,18 +592,18 @@ pub struct CompiledRenderGraph {
     pub resources: Vec<CompiledGraphResource>,
     pub passes: Vec<CompiledPassData>,
     pub dependencies: Vec<BatchDependecy>,
-    pub semaphores: Vec<(render::Semaphore, vk::PipelineStageFlags2)>,
+    pub semaphores: Vec<(graphics::Semaphore, vk::PipelineStageFlags2)>,
     pub batches: Vec<BatchData>,
 }
 
 pub struct BatchRef<'a> {
-    pub wait_semaphores: &'a [(render::Semaphore, vk::PipelineStageFlags2)],
+    pub wait_semaphores: &'a [(graphics::Semaphore, vk::PipelineStageFlags2)],
     pub begin_dependencies: &'a [BatchDependecy],
 
     pub passes: &'a [CompiledPassData],
 
     pub finish_dependencies: &'a [BatchDependecy],
-    pub signal_semaphores: &'a [(render::Semaphore, vk::PipelineStageFlags2)],
+    pub signal_semaphores: &'a [(graphics::Semaphore, vk::PipelineStageFlags2)],
 }
 
 impl CompiledRenderGraph {
@@ -631,14 +631,14 @@ impl CompiledRenderGraph {
         self.batches.clear();
     }
 
-    pub fn get_buffer(&self, handle: render::GraphHandle<render::Buffer>) -> &render::BufferView {
+    pub fn get_buffer(&self, handle: graphics::GraphHandle<graphics::Buffer>) -> &graphics::BufferView {
         match &self.resources[handle.resource_index].resource_view {
             AnyResourceView::Buffer(buffer) => buffer,
             _ => unreachable!(),
         }
     }
 
-    pub fn get_image(&self, handle: render::GraphHandle<render::Image>) -> &render::ImageView {
+    pub fn get_image(&self, handle: graphics::GraphHandle<graphics::Image>) -> &graphics::ImageView {
         match &self.resources[handle.resource_index].resource_view {
             AnyResourceView::Image(image) => image,
             _ => unreachable!(),
@@ -649,8 +649,8 @@ impl CompiledRenderGraph {
 impl RenderGraph {
     pub fn compile_and_flush(
         &mut self,
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
         compiled: &mut CompiledRenderGraph,
         to_be_used_transient_resource_cache: &mut TransientResourceCache,
     ) {
@@ -732,7 +732,7 @@ impl RenderGraph {
                     let resource_data = &mut self.resources[dependency.resource_handle];
 
                     // source of the last version of the resource
-                    if dependency.access.read_write_kind() == render::ReadWriteKind::Write
+                    if dependency.access.read_write_kind() == graphics::ReadWriteKind::Write
                         && dependency.resource_version == resource_data.current_version() - 1
                     {
                         if let Some(semaphore) = resource_data.finish_semaphore.take() {
@@ -740,7 +740,7 @@ impl RenderGraph {
                         }
 
                         if resource_data.kind() == ResourceKind::Image &&
-                           resource_data.target_access != render::AccessKind::None &&
+                           resource_data.target_access != graphics::AccessKind::None &&
                            dependency.access.image_layout() != resource_data.target_access.image_layout()
                         {
                             compiled.dependencies.push(BatchDependecy {

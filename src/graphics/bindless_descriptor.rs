@@ -1,4 +1,4 @@
-use crate::render;
+use crate::graphics;
 
 use std::sync::{
     atomic::{self, AtomicU32},
@@ -47,7 +47,7 @@ impl DescriptorTableType {
         }
     }
 
-    fn max_count(self, device: &render::Device) -> u32 {
+    fn max_count(self, device: &graphics::Device) -> u32 {
         let props = &device.gpu.properties.properties12;
         match self {
             DescriptorTableType::StorageBuffer => u32::min(
@@ -107,7 +107,7 @@ pub struct BindlessDescriptors {
 }
 
 impl BindlessDescriptors {
-    pub fn new(device: &render::Device) -> Self {
+    pub fn new(device: &graphics::Device) -> Self {
         let immutable_samplers = SamplerKind::ALL.map(|sampler_kind| unsafe {
             device.raw.create_sampler(&sampler_kind.create_info(), None).unwrap()
         });
@@ -228,7 +228,7 @@ impl BindlessDescriptors {
 
     pub fn bind_descriptors(
         &self,
-        recorder: &render::CommandRecorder,
+        recorder: &graphics::CommandRecorder,
         bind_point: vk::PipelineBindPoint
     ) {
         unsafe {
@@ -249,7 +249,7 @@ impl BindlessDescriptors {
 
     pub fn write_storage_buffer_resource(
         &self,
-        device: &render::Device,
+        device: &graphics::Device,
         index: DescriptorIndex,
         handle: vk::Buffer
     ) {
@@ -270,7 +270,7 @@ impl BindlessDescriptors {
 
     pub fn write_sampled_image(
         &self,
-        device: &render::Device,
+        device: &graphics::Device,
         index: DescriptorIndex,
         handle: vk::ImageView
     ) {
@@ -293,7 +293,7 @@ impl BindlessDescriptors {
 
     pub fn write_storage_image(
         &self,
-        device: &render::Device,
+        device: &graphics::Device,
         index: DescriptorIndex,
         handle: vk::ImageView,
     ) {
@@ -318,7 +318,7 @@ impl BindlessDescriptors {
         self.global_index_allocator.free(strip_sampler(index));
     }
 
-    pub fn destroy(&self, device: &render::Device) {
+    pub fn destroy(&self, device: &graphics::Device) {
         unsafe {
             for sampler in self.immutable_samplers.iter() {
                 device.raw.destroy_sampler(*sampler, None);

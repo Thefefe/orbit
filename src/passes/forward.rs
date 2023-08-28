@@ -1,7 +1,7 @@
 use ash::vk;
 use glam::{Mat4, Vec3};
 
-use crate::{render, utils, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App};
+use crate::{graphics, utils, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App};
 
 use super::shadow_renderer::DirectionalLightGraphData;
 
@@ -15,15 +15,15 @@ pub struct ForwardFrameData {
 }
 
 pub struct ForwardRenderer {
-    forward_pipeline: render::RasterPipeline,
-    skybox_pipeline: render::RasterPipeline,
+    forward_pipeline: graphics::RasterPipeline,
+    skybox_pipeline: graphics::RasterPipeline,
 
-    brdf_integration_pipeline: render::RasterPipeline,
-    brdf_integration_map: render::Image,
+    brdf_integration_pipeline: graphics::RasterPipeline,
+    brdf_integration_map: graphics::Image,
 }
 
 impl ForwardRenderer {
-    pub fn new(context: &render::Context) -> Self {
+    pub fn new(context: &graphics::Context) -> Self {
         let forward_pipeline = {
             let vertex_shader = utils::load_spv("shaders/forward.vert.spv").unwrap();
             let fragment_shader = utils::load_spv("shaders/forward.frag.spv").unwrap();
@@ -33,17 +33,17 @@ impl ForwardRenderer {
 
             let entry = cstr::cstr!("main");
 
-            let pipeline = context.create_raster_pipeline("forward_pipeline", &render::RasterPipelineDesc {
-                vertex_stage: render::ShaderStage {
+            let pipeline = context.create_raster_pipeline("forward_pipeline", &graphics::RasterPipelineDesc {
+                vertex_stage: graphics::ShaderStage {
                     module: vertex_module,
                     entry,
                 },
-                fragment_stage: Some(render::ShaderStage {
+                fragment_stage: Some(graphics::ShaderStage {
                     module: fragment_module,
                     entry,
                 }),
-                vertex_input: render::VertexInput::default(),
-                rasterizer: render::RasterizerDesc {
+                vertex_input: graphics::VertexInput::default(),
+                rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
                     line_width: 1.0,
@@ -52,18 +52,18 @@ impl ForwardRenderer {
                     depth_bias: None,
                     depth_clamp: false,
                 },
-                color_attachments: &[render::PipelineColorAttachment {
+                color_attachments: &[graphics::PipelineColorAttachment {
                     format: App::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
                 }],
-                depth_state: Some(render::DepthState {
+                depth_state: Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
                     test: true,
                     write: true,
                     compare: vk::CompareOp::GREATER,
                 }),
-                multisample_state: render::MultisampleState {
+                multisample_state: graphics::MultisampleState {
                     sample_count: App::MULTISAMPLING,
                     alpha_to_coverage: true
                 },
@@ -88,17 +88,17 @@ impl ForwardRenderer {
 
             let entry = cstr::cstr!("main");
 
-            let pipeline = context.create_raster_pipeline("skybox_pipeline", &render::RasterPipelineDesc {
-                vertex_stage: render::ShaderStage {
+            let pipeline = context.create_raster_pipeline("skybox_pipeline", &graphics::RasterPipelineDesc {
+                vertex_stage: graphics::ShaderStage {
                     module: vertex_module,
                     entry,
                 },
-                fragment_stage: Some(render::ShaderStage {
+                fragment_stage: Some(graphics::ShaderStage {
                     module: fragment_module,
                     entry,
                 }),
-                vertex_input: render::VertexInput::default(),
-                rasterizer: render::RasterizerDesc {
+                vertex_input: graphics::VertexInput::default(),
+                rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
                     line_width: 1.0,
@@ -107,18 +107,18 @@ impl ForwardRenderer {
                     depth_bias: None,
                     depth_clamp: false,
                 },
-                color_attachments: &[render::PipelineColorAttachment {
+                color_attachments: &[graphics::PipelineColorAttachment {
                     format: App::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
                 }],
-                depth_state: Some(render::DepthState {
+                depth_state: Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
                     test: false,
                     write: false,
                     compare: vk::CompareOp::GREATER,
                 }),
-                multisample_state: render::MultisampleState {
+                multisample_state: graphics::MultisampleState {
                     sample_count: App::MULTISAMPLING,
                     alpha_to_coverage: false,
                 },
@@ -141,17 +141,17 @@ impl ForwardRenderer {
 
             let entry = cstr::cstr!("main");
 
-            let pipeline = context.create_raster_pipeline("brdf_integration_pipeline", &render::RasterPipelineDesc {
-                vertex_stage: render::ShaderStage {
+            let pipeline = context.create_raster_pipeline("brdf_integration_pipeline", &graphics::RasterPipelineDesc {
+                vertex_stage: graphics::ShaderStage {
                     module: vertex_module,
                     entry,
                 },
-                fragment_stage: Some(render::ShaderStage {
+                fragment_stage: Some(graphics::ShaderStage {
                     module: fragment_module,
                     entry,
                 }),
-                vertex_input: render::VertexInput::default(),
-                rasterizer: render::RasterizerDesc {
+                vertex_input: graphics::VertexInput::default(),
+                rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
                     line_width: 1.0,
@@ -160,7 +160,7 @@ impl ForwardRenderer {
                     depth_bias: None,
                     depth_clamp: false,
                 },
-                color_attachments: &[render::PipelineColorAttachment {
+                color_attachments: &[graphics::PipelineColorAttachment {
                     format: vk::Format::R16G16B16A16_SFLOAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
@@ -176,22 +176,22 @@ impl ForwardRenderer {
             pipeline
         };
 
-        let brdf_integration_map = context.create_image("brdf_integration_map", &render::ImageDesc {
-            ty: render::ImageType::Single2D,
+        let brdf_integration_map = context.create_image("brdf_integration_map", &graphics::ImageDesc {
+            ty: graphics::ImageType::Single2D,
             format: vk::Format::R16G16B16A16_SFLOAT,
             dimensions: [512, 512, 1],
             mip_levels: 1,
-            samples: render::MultisampleCount::None,
+            samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
             aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: render::ImageSubresourceViewDesc::default(),
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
         });
 
         context.record_and_submit(|cmd| {
-            cmd.barrier(&[], &[render::image_barrier(
+            cmd.barrier(&[], &[graphics::image_barrier(
                 &brdf_integration_map,
-                render::AccessKind::None,
-                render::AccessKind::ColorAttachmentWrite
+                graphics::AccessKind::None,
+                graphics::AccessKind::ColorAttachmentWrite
             )], &[]);
 
             let color_attachment = vk::RenderingAttachmentInfo::builder()
@@ -210,10 +210,10 @@ impl ForwardRenderer {
             cmd.draw(0..6, 0..1);
             cmd.end_rendering();
 
-            cmd.barrier(&[], &[render::image_barrier(
+            cmd.barrier(&[], &[graphics::image_barrier(
                 &brdf_integration_map,
-                render::AccessKind::ColorAttachmentWrite,
-                render::AccessKind::AllGraphicsRead
+                graphics::AccessKind::ColorAttachmentWrite,
+                graphics::AccessKind::AllGraphicsRead
             )], &[]);
         });
 
@@ -228,12 +228,12 @@ impl ForwardRenderer {
 
     pub fn render(
         &mut self,
-        context: &mut render::Context,
+        context: &mut graphics::Context,
         
-        draw_commands: render::GraphBufferHandle,
-        color_target: render::GraphImageHandle,
-        color_resolve: Option<render::GraphImageHandle>,
-        depth_target: render::GraphImageHandle,
+        draw_commands: graphics::GraphBufferHandle,
+        color_target: graphics::GraphImageHandle,
+        color_resolve: Option<graphics::GraphImageHandle>,
+        depth_target: graphics::GraphImageHandle,
         
         camera: &Camera,
         focused_camera: &Camera,
@@ -273,11 +273,11 @@ impl ForwardRenderer {
         let skybox_pipeline = self.skybox_pipeline;
 
         context.add_pass("forward_pass")
-            .with_dependency(color_target, render::AccessKind::ColorAttachmentWrite)
-            .with_dependencies(color_resolve.map(|i| (i, render::AccessKind::ColorAttachmentWrite)))
-            .with_dependency(depth_target, render::AccessKind::DepthAttachmentWrite)
-            .with_dependency(draw_commands, render::AccessKind::IndirectBuffer)
-            .with_dependencies(directional_light.shadow_maps.map(|h| (h, render::AccessKind::FragmentShaderRead)))    
+            .with_dependency(color_target, graphics::AccessKind::ColorAttachmentWrite)
+            .with_dependencies(color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
+            .with_dependency(depth_target, graphics::AccessKind::DepthAttachmentWrite)
+            .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
+            .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)))    
             .render(move |cmd, graph| {
                 let color_target = graph.get_image(color_target);
                 let color_resolve = color_resolve.map(|i| graph.get_image(i));
@@ -388,7 +388,7 @@ impl ForwardRenderer {
             });
     }
 
-    pub fn destroy(&self, context: &render::Context) {
+    pub fn destroy(&self, context: &graphics::Context) {
         context.destroy_image(&self.brdf_integration_map);
         context.destroy_pipeline(&self.forward_pipeline);
         context.destroy_pipeline(&self.skybox_pipeline);

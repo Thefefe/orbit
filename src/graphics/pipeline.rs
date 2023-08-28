@@ -1,4 +1,4 @@
-use crate::render;
+use crate::graphics;
 
 use std::ffi::CStr;
 use ash::vk;
@@ -149,7 +149,7 @@ pub struct RasterPipelineDesc<'a> {
 
 impl RasterPipeline {
     pub fn create_impl(
-        device: &render::Device,
+        device: &graphics::Device,
         bindless_layout: vk::PipelineLayout,
         name: &str,
         desc: &RasterPipelineDesc,
@@ -248,7 +248,7 @@ impl RasterPipeline {
     }
 }
 
-pub fn create_shader_module(device: &render::Device, spv: &[u32], name: &str) -> vk::ShaderModule {
+pub fn create_shader_module(device: &graphics::Device, spv: &[u32], name: &str) -> vk::ShaderModule {
     let create_info = vk::ShaderModuleCreateInfo::builder().code(spv);
     let handle = unsafe { device.raw.create_shader_module(&create_info, None).unwrap() };
     device.set_debug_name(handle, name);
@@ -262,7 +262,7 @@ pub struct ComputePipeline {
 
 impl ComputePipeline {
     pub fn create_impl(
-        device: &render::Device,
+        device: &graphics::Device,
         bindless_layout: vk::PipelineLayout,
         name: &str,
         shader: &ShaderStage,
@@ -299,7 +299,7 @@ impl Pipeline for ComputePipeline {
     }
 }
 
-impl render::Context {
+impl graphics::Context {
     pub fn create_raster_pipeline(&self, name: &str, desc: &RasterPipelineDesc) -> RasterPipeline {
         RasterPipeline::create_impl(&self.device, self.descriptors.layout(), name, desc)
     }

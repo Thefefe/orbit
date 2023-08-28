@@ -2,27 +2,27 @@ use std::{ptr::NonNull, borrow::Cow};
 
 use ash::vk;
 use gpu_allocator::{vulkan::{AllocationScheme, AllocationCreateDesc}, MemoryLocation};
-use crate::render;
+use crate::graphics;
 
 #[derive(Debug, Clone, Copy)]
 pub struct BufferView {
     pub handle: vk::Buffer,
     pub device_address: u64,
-    pub descriptor_index: Option<render::DescriptorIndex>,
+    pub descriptor_index: Option<graphics::DescriptorIndex>,
     pub size: u64
 }
 
 #[derive(Debug, Clone)]
 pub struct Buffer {
     pub name: Cow<'static, str>,
-    pub(super) buffer_view: render::BufferView,
+    pub(super) buffer_view: graphics::BufferView,
     pub desc: BufferDesc,
-    pub alloc_index: render::AllocIndex,
+    pub alloc_index: graphics::AllocIndex,
     pub mapped_ptr: Option<NonNull<u8>>,
 }
 
 impl std::ops::Deref for Buffer {
-    type Target = render::BufferView;
+    type Target = graphics::BufferView;
 
     fn deref(&self) -> &Self::Target {
         &self.buffer_view
@@ -38,11 +38,11 @@ pub struct BufferDesc {
 
 impl Buffer {
     pub(super) fn create_impl(
-        device: &render::Device,
-        descriptors: &render::BindlessDescriptors,
+        device: &graphics::Device,
+        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &BufferDesc,
-        preallocated_descriptor_index: Option<render::DescriptorIndex>,
+        preallocated_descriptor_index: Option<graphics::DescriptorIndex>,
     ) -> Buffer {
         puffin::profile_function!(&name);
         let create_info = vk::BufferCreateInfo::builder()
@@ -81,7 +81,7 @@ impl Buffer {
 
         Buffer {
             name,
-            buffer_view: render::BufferView {
+            buffer_view: graphics::BufferView {
                 handle,
                 device_address,
                 descriptor_index,
@@ -93,7 +93,7 @@ impl Buffer {
         }
     }
 
-    pub(super) fn destroy_impl(device: &render::Device, descriptors: &render::BindlessDescriptors, buffer: &Buffer) {
+    pub(super) fn destroy_impl(device: &graphics::Device, descriptors: &graphics::BindlessDescriptors, buffer: &Buffer) {
         puffin::profile_function!(&buffer.name);
         if let Some(index) = buffer.descriptor_index {
             descriptors.free_descriptor_index(index);
@@ -106,7 +106,7 @@ impl Buffer {
     }
 }
 
-impl render::Context {
+impl graphics::Context {
     pub fn create_buffer(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc) -> Buffer {
         Buffer::create_impl(&self.device, &self.descriptors, name.into(), desc, None)
     }
@@ -124,7 +124,7 @@ impl render::Context {
         buffer
     }
 
-    pub fn immediate_write_buffer(&self, buffer: &render::Buffer, data: &[u8], offset: usize) {
+    pub fn immediate_write_buffer(&self, buffer: &graphics::Buffer, data: &[u8], offset: usize) {
         puffin::profile_function!();
         
         if data.is_empty() {

@@ -1,13 +1,13 @@
 use ash::vk;
 
-use crate::{render, utils};
+use crate::{graphics, utils};
 
 pub struct ScreenPostProcess {
-    pipeline: render::RasterPipeline,
+    pipeline: graphics::RasterPipeline,
 }
 
 impl ScreenPostProcess {
-    pub fn new(context: &render::Context) -> Self {
+    pub fn new(context: &graphics::Context) -> Self {
         let pipeline = {
             let vertex_shader = utils::load_spv("shaders/blit.vert.spv").unwrap();
             let fragment_shader = utils::load_spv("shaders/blit.frag.spv").unwrap();
@@ -17,17 +17,17 @@ impl ScreenPostProcess {
 
             let entry = cstr::cstr!("main");
 
-            let pipeline = context.create_raster_pipeline("blit_pipeline", &render::RasterPipelineDesc {
-                vertex_stage: render::ShaderStage {
+            let pipeline = context.create_raster_pipeline("blit_pipeline", &graphics::RasterPipelineDesc {
+                vertex_stage: graphics::ShaderStage {
                     module: vertex_module,
                     entry,
                 },
-                fragment_stage: Some(render::ShaderStage {
+                fragment_stage: Some(graphics::ShaderStage {
                     module: fragment_module,
                     entry,
                 }),
-                vertex_input: render::VertexInput::default(),
-                rasterizer: render::RasterizerDesc {
+                vertex_input: graphics::VertexInput::default(),
+                rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
                     line_width: 1.0,
@@ -36,7 +36,7 @@ impl ScreenPostProcess {
                     depth_bias: None,
                     depth_clamp: false,
                 },
-                color_attachments: &[render::PipelineColorAttachment {
+                color_attachments: &[graphics::PipelineColorAttachment {
                     format: context.swapchain.format(),
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
@@ -57,16 +57,16 @@ impl ScreenPostProcess {
 
     pub fn render(
         &self,
-        context: &mut render::Context,
-        src_image: render::GraphImageHandle,
+        context: &mut graphics::Context,
+        src_image: graphics::GraphImageHandle,
         exposure: f32,
     ) {
         let swapchain_image = context.get_swapchain_image();
         let pipeline = self.pipeline;
 
         context.add_pass("blit_present_pass")
-            .with_dependency(swapchain_image, render::AccessKind::ColorAttachmentWrite)
-            .with_dependency(src_image, render::AccessKind::FragmentShaderRead)
+            .with_dependency(swapchain_image, graphics::AccessKind::ColorAttachmentWrite)
+            .with_dependency(src_image, graphics::AccessKind::FragmentShaderRead)
             .render(move |cmd, graph| {
                 let swapchain_image = graph.get_image(swapchain_image);
                 let src_image = graph.get_image(src_image);
@@ -96,7 +96,7 @@ impl ScreenPostProcess {
             });
     }
 
-    pub fn destroy(&self, context: &render::Context) {
+    pub fn destroy(&self, context: &graphics::Context) {
         context.destroy_pipeline(&self.pipeline);
     }
 }

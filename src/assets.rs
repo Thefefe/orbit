@@ -1,4 +1,4 @@
-use crate::{render, collections::arena};
+use crate::{graphics, collections::arena};
 use crate::collections::freelist_alloc::*;
 
 #[allow(unused_imports)]
@@ -136,51 +136,51 @@ const MAX_MATERIAL_COUNT: usize = 1_000;
 
 #[derive(Clone, Copy)]
 pub struct AssetGraphData {
-    pub vertex_buffer: render::GraphBufferHandle,
-    pub index_buffer: render::GraphBufferHandle,
-    pub mesh_info_buffer: render::GraphBufferHandle,
-    pub materials_buffer: render::GraphBufferHandle,
+    pub vertex_buffer: graphics::GraphBufferHandle,
+    pub index_buffer: graphics::GraphBufferHandle,
+    pub mesh_info_buffer: graphics::GraphBufferHandle,
+    pub materials_buffer: graphics::GraphBufferHandle,
 }
 
 pub struct GpuAssetStore {
-    pub vertex_buffer: render::Buffer,
-    pub index_buffer: render::Buffer,
+    pub vertex_buffer: graphics::Buffer,
+    pub index_buffer: graphics::Buffer,
 
     // INDICES!!! not bytes
     vertex_allocator: FreeListAllocator,
     index_allocator: FreeListAllocator,
 
-    pub mesh_info_buffer: render::Buffer,
+    pub mesh_info_buffer: graphics::Buffer,
     pub mesh_infos: arena::Arena<MeshInfo>,
     pub models: arena::Arena<ModelData>,
 
-    pub textures: arena::Arena<render::Image>,
+    pub textures: arena::Arena<graphics::Image>,
 
-    pub material_buffer: render::Buffer,
+    pub material_buffer: graphics::Buffer,
     pub material_indices: arena::Arena<MaterialData>,
 }
 
 impl GpuAssetStore {
-    pub fn new(context: &render::Context) -> Self {
-        let vertex_buffer = context.create_buffer("mesh_vertex_buffer", &render::BufferDesc {
+    pub fn new(context: &graphics::Context) -> Self {
+        let vertex_buffer = context.create_buffer("mesh_vertex_buffer", &graphics::BufferDesc {
             size: MAX_VERTEX_COUNT * std::mem::size_of::<GpuMeshVertex>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
         });
 
-        let index_buffer = context.create_buffer("mesh_index_buffer", &render::BufferDesc {
+        let index_buffer = context.create_buffer("mesh_index_buffer", &graphics::BufferDesc {
             size: MAX_INDEX_COUNT * std::mem::size_of::<u32>(),
             usage: vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
         });
 
-        let mesh_info_buffer = context.create_buffer("mesh_info_buffer", &render::BufferDesc {
+        let mesh_info_buffer = context.create_buffer("mesh_info_buffer", &graphics::BufferDesc {
             size: MAX_INDEX_COUNT * std::mem::size_of::<GpuMeshInfo>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
         });
 
-        let material_buffer = context.create_buffer("material_buffer", &render::BufferDesc {
+        let material_buffer = context.create_buffer("material_buffer", &graphics::BufferDesc {
             size: MAX_MATERIAL_COUNT * std::mem::size_of::<GpuMaterialData>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
@@ -204,7 +204,7 @@ impl GpuAssetStore {
         }
     }
 
-    pub fn add_mesh(&mut self, context: &render::Context, mesh: &MeshData) -> MeshHandle {
+    pub fn add_mesh(&mut self, context: &graphics::Context, mesh: &MeshData) -> MeshHandle {
         let vertex_bytes: &[u8] = bytemuck::cast_slice(&mesh.vertices);
         let index_bytes: &[u8] = bytemuck::cast_slice(&mesh.indices);
 
@@ -246,7 +246,7 @@ impl GpuAssetStore {
         })
     }
 
-    pub fn import_texture(&mut self, image: render::Image)-> TextureHandle {
+    pub fn import_texture(&mut self, image: graphics::Image)-> TextureHandle {
         assert!(image.sampled_index().is_some());
         self.textures.insert(image)
     }
@@ -255,7 +255,7 @@ impl GpuAssetStore {
         self.textures[handle]._descriptor_index
     }
 
-    pub fn add_material(&mut self, context: &render::Context, material_data: MaterialData) -> MaterialHandle {
+    pub fn add_material(&mut self, context: &graphics::Context, material_data: MaterialData) -> MaterialHandle {
         let index = self.material_indices.insert(material_data);
         
         let base_texture_index = material_data.base_texture
@@ -303,7 +303,7 @@ impl GpuAssetStore {
         self.models[model].submeshes.iter().map(|submesh| &self.mesh_infos[submesh.mesh_handle])
     }
 
-    pub fn import_to_graph(&self, context: &mut render::Context) -> AssetGraphData {
+    pub fn import_to_graph(&self, context: &mut graphics::Context) -> AssetGraphData {
         AssetGraphData {
             vertex_buffer:    context.import_buffer(&self.vertex_buffer),
             index_buffer:     context.import_buffer(&self.index_buffer),
@@ -312,7 +312,7 @@ impl GpuAssetStore {
         }
     }
 
-    pub fn destroy(&self, context: &render::Context) {
+    pub fn destroy(&self, context: &graphics::Context) {
         context.destroy_buffer(&self.vertex_buffer);
         context.destroy_buffer(&self.index_buffer);
         context.destroy_buffer(&self.mesh_info_buffer);

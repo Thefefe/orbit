@@ -4,18 +4,18 @@ use ash::vk;
 use glam::Mat4;
 use gpu_allocator::MemoryLocation;
 
-use crate::{render, utils, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
+use crate::{graphics, utils, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
 
 pub struct SceneDrawGen {
-    pipeline: render::ComputePipeline,
+    pipeline: graphics::ComputePipeline,
 }
 
 impl SceneDrawGen {
-    pub fn new(context: &render::Context) -> Self {
+    pub fn new(context: &graphics::Context) -> Self {
         let spv = utils::load_spv("shaders/scene_draw_gen.comp.spv").unwrap();
         let module = context.create_shader_module(&spv, "scene_draw_gen_module"); 
 
-        let pipeline = context.create_compute_pipeline("scene_draw_gen_pipeline", &render::ShaderStage {
+        let pipeline = context.create_compute_pipeline("scene_draw_gen_pipeline", &graphics::ShaderStage {
             module,
             entry: cstr::cstr!("main"),
         });
@@ -27,16 +27,16 @@ impl SceneDrawGen {
 
     pub fn create_draw_commands(
         &self,
-        context: &mut render::Context,
+        context: &mut graphics::Context,
         draw_commands_name: Cow<'static, str>,
         view_projection_matrix: &Mat4,
         cull_plane_mask: FrustumPlaneMask,
-        depth_pyramid: Option<render::GraphImageHandle>,
+        depth_pyramid: Option<graphics::GraphImageHandle>,
         assets: AssetGraphData,
         scene: SceneGraphData,
-    ) -> render::GraphBufferHandle {
+    ) -> graphics::GraphBufferHandle {
         let pass_name = format!("{draw_commands_name}_generation");
-        let draw_commands = context.create_transient_buffer(draw_commands_name, render::BufferDesc {
+        let draw_commands = context.create_transient_buffer(draw_commands_name, graphics::BufferDesc {
             size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
             memory_location: MemoryLocation::GpuOnly,
@@ -49,7 +49,7 @@ impl SceneDrawGen {
         context.add_pass(pass_name)
             // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
             // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
-            .with_dependency(draw_commands, render::AccessKind::ComputeShaderWrite)
+            .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
             .render(move |cmd, graph| {
                 let mesh_infos = graph.get_buffer(assets.mesh_info_buffer);
                 let scene_submeshes = graph.get_buffer(scene.submesh_buffer);
@@ -72,32 +72,32 @@ impl SceneDrawGen {
         draw_commands
     }
 
-    pub fn destroy(&mut self, context: &render::Context) {
+    pub fn destroy(&mut self, context: &graphics::Context) {
         context.destroy_pipeline(&self.pipeline);
     }
 }
 
 pub struct DepthPyramid {
-    pyramid: render::RecreatableImage,
+    pyramid: graphics::RecreatableImage,
     usable: bool,
-    current_access: render::AccessKind,
+    current_access: graphics::AccessKind,
 }
 
 impl DepthPyramid {
-    pub fn new(context: &render::Context, [width, height]: [u32; 2]) -> Self {
+    pub fn new(context: &graphics::Context, [width, height]: [u32; 2]) -> Self {
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
 
-        let pyramid = render::RecreatableImage::new(context, "depth_pyramid".into(), render::ImageDesc {
-            ty: render::ImageType::Single2D,
+        let pyramid = graphics::RecreatableImage::new(context, "depth_pyramid".into(), graphics::ImageDesc {
+            ty: graphics::ImageType::Single2D,
             format: vk::Format::R32_SFLOAT,
             dimensions: [width, height, 1],
             mip_levels,
-            samples: render::MultisampleCount::None,
+            samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
             aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: render::ImageSubresourceViewDesc {
+            subresource_desc: graphics::ImageSubresourceViewDesc {
                 mip_count: u32::MAX,
-                mip_descriptors: render::ImageDescriptorFlags::STORAGE,
+                mip_descriptors: graphics::ImageDescriptorFlags::STORAGE,
                 ..Default::default()
             },
         });
@@ -105,48 +105,48 @@ impl DepthPyramid {
         Self {
             pyramid,
             usable: false,
-            current_access: render::AccessKind::None,
+            current_access: graphics::AccessKind::None,
         }
     }
 
-    pub fn resize(&mut self, context: &render::Context, [width, height]: [u32; 2]) {
+    pub fn resize(&mut self, context: &graphics::Context, [width, height]: [u32; 2]) {
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
         self.pyramid.desc_mut().dimensions = [width, height, 1];
         self.pyramid.desc_mut().mip_levels = mip_levels;
         if self.pyramid.recreate(context) {
             self.usable = false;
-            self.current_access = render::AccessKind::None;
+            self.current_access = graphics::AccessKind::None;
         }
     }
 
-    pub fn get_current(&mut self, context: &mut render::Context) -> Option<render::GraphImageHandle> {
+    pub fn get_current(&mut self, context: &mut graphics::Context) -> Option<graphics::GraphImageHandle> {
         if !self.usable {
             return None;
         }
 
         let image = self.pyramid.get_current(context);
-        Some(context.import_image_with(image.name.clone(), image, render::GraphResourceImportDesc {
-            initial_access: render::AccessKind::ComputeShaderRead,
-            target_access: render::AccessKind::ComputeShaderRead,
+        Some(context.import_image_with(image.name.clone(), image, graphics::GraphResourceImportDesc {
+            initial_access: graphics::AccessKind::ComputeShaderRead,
+            target_access: graphics::AccessKind::ComputeShaderRead,
             ..Default::default()
         }))
     }
 
-    pub fn update(&mut self, context: &mut render::Context) {
+    pub fn update(&mut self, context: &mut graphics::Context) {
         let image = self.pyramid.get_current(context);
         let pyramid = if self.usable {
             context.import_image(image)
         } else {
             self.usable = true;
-            context.import_image_with(image.name.clone(), image, render::GraphResourceImportDesc {
-                initial_access: render::AccessKind::None,
-                target_access: render::AccessKind::ComputeShaderRead,
+            context.import_image_with(image.name.clone(), image, graphics::GraphResourceImportDesc {
+                initial_access: graphics::AccessKind::None,
+                target_access: graphics::AccessKind::ComputeShaderRead,
                 ..Default::default()
             })
         };
     }
 
-    pub fn destroy(&mut self, context: &render::Context) {
+    pub fn destroy(&mut self, context: &graphics::Context) {
         self.pyramid.destroy(context);
     }
 }

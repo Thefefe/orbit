@@ -18,7 +18,7 @@ use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 mod assets;
 mod input;
-mod render;
+mod graphics;
 mod scene;
 mod time;
 
@@ -185,9 +185,9 @@ struct App {
     gpu_assets: GpuAssetStore,
     scene: SceneData,
 
-    main_color_image: render::RecreatableImage,
-    main_color_resolve_image: Option<render::RecreatableImage>,
-    main_depth_image: render::RecreatableImage,
+    main_color_image: graphics::RecreatableImage,
+    main_color_resolve_image: Option<graphics::RecreatableImage>,
+    main_depth_image: graphics::RecreatableImage,
     depth_pyramid: DepthPyramid,
 
     forward_renderer: ForwardRenderer,
@@ -228,10 +228,10 @@ struct App {
 impl App {
     pub const COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    pub const MULTISAMPLING: render::MultisampleCount = render::MultisampleCount::X4;
+    pub const MULTISAMPLING: graphics::MultisampleCount = graphics::MultisampleCount::X4;
 
     fn new(
-        context: &render::Context,
+        context: &graphics::Context,
         gltf_path: Option<std::path::PathBuf>,
         env_map_path: Option<std::path::PathBuf>
     ) -> Self {
@@ -280,7 +280,7 @@ impl App {
                     true,
                 );
 
-                image.set_sampler_flags(render::SamplerKind::LinearRepeat);
+                image.set_sampler_flags(graphics::SamplerKind::LinearRepeat);
 
                 image
             };
@@ -300,41 +300,41 @@ impl App {
 
         let screen_extent = context.swapchain.extent();
 
-        let main_color_image = render::RecreatableImage::new(context, "main_color_image".into(), render::ImageDesc {
-            ty: render::ImageType::Single2D,
+        let main_color_image = graphics::RecreatableImage::new(context, "main_color_image".into(), graphics::ImageDesc {
+            ty: graphics::ImageType::Single2D,
             format: Self::COLOR_FORMAT,
             dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: render::ImageSubresourceViewDesc::default(),
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
         });
 
-        let main_color_resolve_image = if Self::MULTISAMPLING != render::MultisampleCount::None {
-            Some(render::RecreatableImage::new(context, "main_color_resolve_image".into(), render::ImageDesc {
-                ty: render::ImageType::Single2D,
+        let main_color_resolve_image = if Self::MULTISAMPLING != graphics::MultisampleCount::None {
+            Some(graphics::RecreatableImage::new(context, "main_color_resolve_image".into(), graphics::ImageDesc {
+                ty: graphics::ImageType::Single2D,
                 format: Self::COLOR_FORMAT,
                 dimensions: [screen_extent.width, screen_extent.height, 1],
                 mip_levels: 1,
-                samples: render::MultisampleCount::None,
+                samples: graphics::MultisampleCount::None,
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::COLOR,
-                subresource_desc: render::ImageSubresourceViewDesc::default(),
+                subresource_desc: graphics::ImageSubresourceViewDesc::default(),
             },))
         } else {
             None
         };
 
-        let main_depth_image = render::RecreatableImage::new(context, "main_depth_target".into(), render::ImageDesc {
-            ty: render::ImageType::Single2D,
+        let main_depth_image = graphics::RecreatableImage::new(context, "main_depth_target".into(), graphics::ImageDesc {
+            ty: graphics::ImageType::Single2D,
             format: Self::DEPTH_FORMAT,
             dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
             samples: Self::MULTISAMPLING,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             aspect: vk::ImageAspectFlags::DEPTH,
-            subresource_desc: render::ImageSubresourceViewDesc::default(),
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
         });
 
         let camera = Camera {
@@ -407,7 +407,7 @@ impl App {
         input: &Input,
         time: &Time,
         egui_ctx: &egui::Context,
-        context: &render::Context,
+        context: &graphics::Context,
         control_flow: &mut ControlFlow,
     ) {
         puffin::profile_function!();
@@ -553,7 +553,7 @@ impl App {
         }
     }
 
-    fn render(&mut self, context: &mut render::Context, egui_ctx: &egui::Context) {
+    fn render(&mut self, context: &mut graphics::Context, egui_ctx: &egui::Context) {
         puffin::profile_function!();
 
         let assets = self.gpu_assets.import_to_graph(context);
@@ -728,7 +728,7 @@ impl App {
         }
     }
 
-    fn destroy(&mut self, context: &render::Context) {
+    fn destroy(&mut self, context: &graphics::Context) {
         self.gpu_assets.destroy(context);
         self.scene.destroy(context);
 
@@ -766,9 +766,9 @@ fn main() {
     let mut input = Input::new(&window);
     let mut time = Time::new();
 
-    let mut context = render::Context::new(
+    let mut context = graphics::Context::new(
         window,
-        &render::ContextDesc {
+        &graphics::ContextDesc {
             present_mode: vk::PresentModeKHR::IMMEDIATE,
         },
     );

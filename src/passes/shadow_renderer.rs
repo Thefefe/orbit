@@ -6,7 +6,7 @@ use ash::vk;
 use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
 
 use crate::{
-    render,
+    graphics,
     math,
     utils,
     assets::AssetGraphData,
@@ -39,8 +39,8 @@ struct GpuDirectionalLight {
 
 #[derive(Clone, Copy)]
 pub struct DirectionalLightGraphData {
-    pub shadow_maps: [render::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT],
-    pub buffer: render::GraphBufferHandle
+    pub shadow_maps: [graphics::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT],
+    pub buffer: graphics::GraphBufferHandle
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -143,12 +143,12 @@ impl ShadowSettings {
 }
 
 pub struct ShadowMapRenderer {
-    pipeline: render::RasterPipeline,
+    pipeline: graphics::RasterPipeline,
     pub settings: ShadowSettings,
 }
 
 impl ShadowMapRenderer {
-    pub fn new(context: &render::Context) -> Self {
+    pub fn new(context: &graphics::Context) -> Self {
         let pipeline = {
             let vertex_shader = utils::load_spv("shaders/shadow.vert.spv").unwrap();
             let fragment_shader = utils::load_spv("shaders/shadow.frag.spv").unwrap();
@@ -158,27 +158,27 @@ impl ShadowMapRenderer {
             
             let entry = cstr::cstr!("main");
 
-            let pipeline = context.create_raster_pipeline("shadowmap_renderer_pipeline", &render::RasterPipelineDesc {
-                vertex_stage: render::ShaderStage {
+            let pipeline = context.create_raster_pipeline("shadowmap_renderer_pipeline", &graphics::RasterPipelineDesc {
+                vertex_stage: graphics::ShaderStage {
                     module: vertex_module,
                     entry,
                 },
-                fragment_stage: Some(render::ShaderStage {
+                fragment_stage: Some(graphics::ShaderStage {
                     module: fragment_module,
                     entry
                 }),
-                vertex_input: render::VertexInput::default(),
-                rasterizer: render::RasterizerDesc {
+                vertex_input: graphics::VertexInput::default(),
+                rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
                     line_width: 1.0,
                     front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                     cull_mode: vk::CullModeFlags::BACK,
-                    depth_bias: Some(render::DepthBias::default()),
+                    depth_bias: Some(graphics::DepthBias::default()),
                     depth_clamp: true,
                 },
                 color_attachments: &[],
-                depth_state: Some(render::DepthState {
+                depth_state: Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
                     test: true,
                     write: true,
@@ -200,25 +200,25 @@ impl ShadowMapRenderer {
     pub fn render_shadow_map(
         &self,
         name: Cow<'static, str>,
-        frame_ctx: &mut render::Context,
+        frame_ctx: &mut graphics::Context,
 
         resolution: u32,
         view_projection: Mat4,
-        draw_commands: render::GraphBufferHandle,
+        draw_commands: graphics::GraphBufferHandle,
 
         assets: AssetGraphData,
         scene: SceneGraphData,
-    ) -> render::GraphImageHandle {
+    ) -> graphics::GraphImageHandle {
         let pass_name = format!("shadow_pass_for_{name}");
-        let shadow_map = frame_ctx.create_transient_image(name, render::ImageDesc {
-            ty: render::ImageType::Single2D,
+        let shadow_map = frame_ctx.create_transient_image(name, graphics::ImageDesc {
+            ty: graphics::ImageType::Single2D,
             format: App::DEPTH_FORMAT,
             dimensions: [resolution, resolution, 1],
             mip_levels: 1,
-            samples: render::MultisampleCount::None,
+            samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::DEPTH,
-            subresource_desc: render::ImageSubresourceViewDesc::default(),
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
         });
 
         let pipeline = self.pipeline;
@@ -226,8 +226,8 @@ impl ShadowMapRenderer {
         let settings = self.settings;
 
         frame_ctx.add_pass(pass_name)
-            .with_dependency(shadow_map, render::AccessKind::DepthAttachmentWrite)
-            .with_dependency(draw_commands, render::AccessKind::IndirectBuffer)
+            .with_dependency(shadow_map, graphics::AccessKind::DepthAttachmentWrite)
+            .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
             .render(move |cmd, graph| {
                 let shadow_map = graph.get_image(shadow_map);
                 
@@ -288,7 +288,7 @@ impl ShadowMapRenderer {
 
     pub fn render_directional_light(
         &self,
-        context: &mut render::Context,
+        context: &mut graphics::Context,
         name: Cow<'static, str>,
         
         direction: Quat,
@@ -326,7 +326,7 @@ impl ShadowMapRenderer {
             _padding1: 0,
         };
 
-        let mut shadow_maps = [render::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];
+        let mut shadow_maps = [graphics::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];
         
         let lambda = self.settings.cascade_split_lambda;
 
@@ -468,7 +468,7 @@ impl ShadowMapRenderer {
         }
     }
 
-    pub fn destroy(&self, context: &render::Context) {
+    pub fn destroy(&self, context: &graphics::Context) {
         context.destroy_pipeline(&self.pipeline);
     }
 }

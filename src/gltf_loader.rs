@@ -7,7 +7,7 @@ use image::EncodableLayout;
 
 use crate::{
     assets::{sep_vertex_merge, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle, Aabb},
-    render,
+    graphics,
     scene::{EntityData, SceneData, Transform}, utils::OptionDefaultIterator,
 };
 
@@ -114,7 +114,7 @@ fn tex_level_size(width: usize, height: usize, min_mip_size: usize) -> usize {
     usize::max(1, (width + 3) / 4 ) * usize::max(1, (height + 3) / 4 ) * min_mip_size
 }
 
-pub fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin: &[u8]) -> render::Image {
+pub fn upload_dds_image(context: &graphics::Context, name: Cow<'static, str>, bin: &[u8]) -> graphics::Image {
     let dds = ddsfile::Dds::read(bin).unwrap();
 
     let dxgi_format = dds.get_dxgi_format().unwrap();
@@ -124,20 +124,20 @@ pub fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin:
     let mip_levels = dds.get_num_mipmap_levels().max(1);
     assert!(mip_levels >= 1);
 
-    let image = context.create_image(name, &render::ImageDesc {
-        ty: render::ImageType::Single2D,
+    let image = context.create_image(name, &graphics::ImageDesc {
+        ty: graphics::ImageType::Single2D,
         format,
         dimensions: [width, height, 1],
         mip_levels,
-        samples: render::MultisampleCount::None,
+        samples: graphics::MultisampleCount::None,
         usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
         aspect: vk::ImageAspectFlags::COLOR,
-        subresource_desc: render::ImageSubresourceViewDesc::default(),
+        subresource_desc: graphics::ImageSubresourceViewDesc::default(),
     });
 
     let data = dds.get_data(0).unwrap();
 
-    let scratch_buffer = context.create_buffer_init("scratch_buffer", &render::BufferDesc {
+    let scratch_buffer = context.create_buffer_init("scratch_buffer", &graphics::BufferDesc {
         size: data.len(),
         usage: vk::BufferUsageFlags::TRANSFER_SRC,
         memory_location: MemoryLocation::CpuToGpu,
@@ -146,8 +146,8 @@ pub fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin:
     let min_mip_size = dds.get_min_mipmap_size_in_bytes();
 
     context.record_and_submit(|cmd| {
-        use render::AccessKind;
-        cmd.barrier(&[], &[render::image_barrier(&image, AccessKind::None, AccessKind::TransferWrite)], &[]);
+        use graphics::AccessKind;
+        cmd.barrier(&[], &[graphics::image_barrier(&image, AccessKind::None, AccessKind::TransferWrite)], &[]);
 
         let mut buffer_offset = 0;
         let mut dimensions = [width, height];
@@ -169,7 +169,7 @@ pub fn upload_dds_image(context: &render::Context, name: Cow<'static, str>, bin:
         }
 
 
-        cmd.barrier(&[], &[render::image_barrier(&image, AccessKind::TransferWrite, AccessKind::AllGraphicsRead)], &[]);
+        cmd.barrier(&[], &[graphics::image_barrier(&image, AccessKind::TransferWrite, AccessKind::AllGraphicsRead)], &[]);
     });
 
     context.destroy_buffer(&scratch_buffer);
@@ -214,18 +214,18 @@ fn image_data_from_gltf<'a>(
 }
 
 pub fn upload_image_and_generate_mipmaps(
-    context: &render::Context,
+    context: &graphics::Context,
     name: Cow<'static, str>,
     image_data: image::DynamicImage,
     srgb: bool,
     hdr: bool,
-) -> render::Image {
+) -> graphics::Image {
     let (width, height) = (image_data.width(), image_data.height());
     let max_size = u32::max(width, height);
     let mip_levels = u32::max(1, f32::floor(f32::log2(max_size as f32)) as u32 + 1);
     
-    let image = context.create_image(name, &render::ImageDesc {
-        ty: render::ImageType::Single2D,
+    let image = context.create_image(name, &graphics::ImageDesc {
+        ty: graphics::ImageType::Single2D,
         format: match (srgb, hdr) {
             (true, false)  => vk::Format::R8G8B8A8_SRGB,
             (false, false) => vk::Format::R8G8B8A8_UNORM,
@@ -233,17 +233,17 @@ pub fn upload_image_and_generate_mipmaps(
         },
         dimensions: [width, height, 1],
         mip_levels,
-        samples: render::MultisampleCount::None,
+        samples: graphics::MultisampleCount::None,
         usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
         aspect: vk::ImageAspectFlags::COLOR,
-        subresource_desc: render::ImageSubresourceViewDesc::default(),
+        subresource_desc: graphics::ImageSubresourceViewDesc::default(),
     });
 
     let scratch_buffer = if hdr {
         let image = image_data.into_rgba32f();
         context.create_buffer_init(
             "scratch_buffer",
-            &render::BufferDesc {
+            &graphics::BufferDesc {
                 size: image.as_bytes().len(),
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: MemoryLocation::CpuToGpu,
@@ -254,7 +254,7 @@ pub fn upload_image_and_generate_mipmaps(
         let image = image_data.into_rgba8();
         context.create_buffer_init(
             "scratch_buffer",
-            &render::BufferDesc {
+            &graphics::BufferDesc {
                 size: image.len(),
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: MemoryLocation::CpuToGpu,
@@ -264,9 +264,9 @@ pub fn upload_image_and_generate_mipmaps(
     };
 
     context.record_and_submit(|cmd| {
-        use render::AccessKind;
+        use graphics::AccessKind;
 
-        cmd.barrier(&[], &[render::image_barrier(&image, AccessKind::None, AccessKind::TransferWrite)], &[]);
+        cmd.barrier(&[], &[graphics::image_barrier(&image, AccessKind::None, AccessKind::TransferWrite)], &[]);
         cmd.copy_buffer_to_image(
             &scratch_buffer,
             &image,
@@ -287,7 +287,7 @@ pub fn upload_image_and_generate_mipmaps(
         if mip_levels > 1 {
             cmd.generate_mipmaps(&image, 0..1, AccessKind::TransferWrite, AccessKind::AllGraphicsRead);
         } else {
-            cmd.barrier(&[], &[render::image_barrier(
+            cmd.barrier(&[], &[graphics::image_barrier(
                 &image,
                 AccessKind::TransferWrite,
                 AccessKind::AllGraphicsRead,
@@ -301,13 +301,13 @@ pub fn upload_image_and_generate_mipmaps(
 }
 
 pub fn load_image(
-    context: &render::Context,
+    context: &graphics::Context,
     name: Cow<'static, str>,
     image_binary: &[u8],
     image_format: image::ImageFormat,
     srgb: bool,
     hdr: bool,
-) -> render::Image {
+) -> graphics::Image {
     match image_format {
         image::ImageFormat::Dds => {
             upload_dds_image(context, name, &image_binary)
@@ -334,7 +334,7 @@ pub fn load_image(
 
 pub fn load_gltf(
     path: &Path,
-    context: &render::Context,
+    context: &graphics::Context,
     asset_store: &mut GpuAssetStore,
     scene: &mut SceneData,
 ) -> gltf::Result<()> {
@@ -376,12 +376,12 @@ pub fn load_gltf(
         let mag_filter = gltf_texture.sampler().mag_filter().unwrap_or(MagFilter::Linear);
         let wrapping_mode = gltf_texture.sampler().wrap_s();
         let sampler_flags = match (mag_filter, wrapping_mode) {
-            (MagFilter::Nearest, WrappingMode::ClampToEdge      ) => render::SamplerKind::NearestClamp,
-            (MagFilter::Nearest, WrappingMode::MirroredRepeat   ) => render::SamplerKind::NearestRepeat,
-            (MagFilter::Nearest, WrappingMode::Repeat           ) => render::SamplerKind::NearestRepeat,
-            (MagFilter::Linear,  WrappingMode::ClampToEdge      ) => render::SamplerKind::LinearClamp,
-            (MagFilter::Linear,  WrappingMode::MirroredRepeat   ) => render::SamplerKind::LinearRepeat,
-            (MagFilter::Linear,  WrappingMode::Repeat           ) => render::SamplerKind::LinearRepeat,
+            (MagFilter::Nearest, WrappingMode::ClampToEdge      ) => graphics::SamplerKind::NearestClamp,
+            (MagFilter::Nearest, WrappingMode::MirroredRepeat   ) => graphics::SamplerKind::NearestRepeat,
+            (MagFilter::Nearest, WrappingMode::Repeat           ) => graphics::SamplerKind::NearestRepeat,
+            (MagFilter::Linear,  WrappingMode::ClampToEdge      ) => graphics::SamplerKind::LinearClamp,
+            (MagFilter::Linear,  WrappingMode::MirroredRepeat   ) => graphics::SamplerKind::LinearRepeat,
+            (MagFilter::Linear,  WrappingMode::Repeat           ) => graphics::SamplerKind::LinearRepeat,
         };
         texture.set_sampler_flags(sampler_flags);
             let handle = assets.import_texture(texture);

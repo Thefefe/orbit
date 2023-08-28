@@ -18,6 +18,12 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2DMS _u_textur
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_texture_cube_registry[];
 layout(set = 2, binding = 0) uniform writeonly image2D _u_image2d_registry[];
 
+#define RegisterImageFormat(Format) \
+    layout(set = 2, binding = 0, Format) uniform writeonly image2D _u_image2d##Format##_registry[];
+
+#define GetImage(Format, Index) \
+    _u_image2d##Format##_registry[nonuniformEXT(Index)]
+
 #define GetBufferRegistryName(Name) _u_##Name##Registry
 
 #define RegisterBuffer(Name, Struct) \

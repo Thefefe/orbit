@@ -437,6 +437,7 @@ impl ShadowMapRenderer {
                 format!("{name}_{cascade_index}_draw_commands").into(),
                 &light_projection_matrix,
                 FrustumPlaneMask::SIDES,
+                None,
                 assets,
                 scene,
             );

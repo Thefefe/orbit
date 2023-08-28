@@ -35,9 +35,10 @@ where
         }
     }
 
-    pub fn recreate(&mut self, context: &render::Context) {
+    pub fn recreate(&mut self, context: &render::Context) -> bool {
+        puffin::profile_function!(&self.name);
         if self.current_desc == *self.current_resource.desc() {
-            return;
+            return false;
         }
 
         // slow but only happens on resizes so it's fine
@@ -48,6 +49,8 @@ where
             resource: tmp,
             last_used_frame_index: self.last_used_frame_index,
         });
+
+        true
     }
 
     pub fn desc(&self) -> &R::Desc {
@@ -58,8 +61,8 @@ where
         &mut self.current_desc
     }
 
-    pub fn get_current(&mut self, context: &mut render::Context) -> render::GraphHandle<R> {
-        self.recreate(context);
+    pub fn get_current(&mut self,context: &mut render::Context) -> &R {
+        puffin::profile_function!(&self.name);
         if let Some(old_resource) = self.old.front() {
             if old_resource.last_used_frame_index.is_none() ||
                old_resource.last_used_frame_index == Some(context.frame_index())
@@ -71,10 +74,11 @@ where
         }
 
         self.last_used_frame_index = Some(context.frame_index());
-        self.current_resource.import_to_graph(context)
+        &self.current_resource
     }
 
     pub fn destroy(&mut self, context: &render::Context) {
+        puffin::profile_function!(&self.name);
         self.current_resource.destroy(&context.device, &context.descriptors);
 
         while let Some(old_resource) = self.old.pop_front() {

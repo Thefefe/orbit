@@ -8,7 +8,6 @@ use crate::{render, utils, assets::AssetGraphData, scene::{SceneGraphData, GpuDr
 
 pub struct SceneDrawGen {
     pipeline: render::ComputePipeline,
-    depth_pyramid: render::RecreatableImage,
 }
 
 impl SceneDrawGen {
@@ -23,26 +22,7 @@ impl SceneDrawGen {
 
         context.destroy_shader_module(module);
 
-        let screen_extent = context.swapchain.extent();
-        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(screen_extent.width, screen_extent.height));
-
-        let depth_pyramid = render::RecreatableImage::new(context, "depth_pyramid".into(), render::ImageDesc {
-            ty: render::ImageType::Single2D,
-            format: vk::Format::R32_SFLOAT,
-            dimensions: [screen_extent.width, screen_extent.height, 1],
-            mip_levels,
-            samples: render::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
-            aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: render::ImageSubresourceViewDesc {
-                mip_count: u32::MAX,
-                mip_descriptors: render::ImageDescriptorFlags::STORAGE,
-                ..Default::default()
-            },
-        });
-
-        Self { pipeline, depth_pyramid }
-
+        Self { pipeline }
     }
 
     pub fn create_draw_commands(
@@ -51,6 +31,7 @@ impl SceneDrawGen {
         draw_commands_name: Cow<'static, str>,
         view_projection_matrix: &Mat4,
         cull_plane_mask: FrustumPlaneMask,
+        depth_pyramid: Option<render::GraphImageHandle>,
         assets: AssetGraphData,
         scene: SceneGraphData,
     ) -> render::GraphBufferHandle {
@@ -60,6 +41,7 @@ impl SceneDrawGen {
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
             memory_location: MemoryLocation::GpuOnly,
         });
+        
         let pipeline = self.pipeline;
 
         let view_projection_matrix = view_projection_matrix.clone();
@@ -90,19 +72,82 @@ impl SceneDrawGen {
         draw_commands
     }
 
-    pub fn update_depth_pyramid(&mut self, context: &mut render::Context, depth_image: &render::GraphImageHandle) {
-        let screen_extent = context.swapchain_extent();
-        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(screen_extent.width, screen_extent.height));
+    pub fn destroy(&mut self, context: &render::Context) {
+        context.destroy_pipeline(&self.pipeline);
+    }
+}
 
-        self.depth_pyramid.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
-        let depth_pyramid = self.depth_pyramid.get_current(context);
-        
-        
+pub struct DepthPyramid {
+    pyramid: render::RecreatableImage,
+    usable: bool,
+    current_access: render::AccessKind,
+}
+
+impl DepthPyramid {
+    pub fn new(context: &render::Context, [width, height]: [u32; 2]) -> Self {
+        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
+
+        let pyramid = render::RecreatableImage::new(context, "depth_pyramid".into(), render::ImageDesc {
+            ty: render::ImageType::Single2D,
+            format: vk::Format::R32_SFLOAT,
+            dimensions: [width, height, 1],
+            mip_levels,
+            samples: render::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: render::ImageSubresourceViewDesc {
+                mip_count: u32::MAX,
+                mip_descriptors: render::ImageDescriptorFlags::STORAGE,
+                ..Default::default()
+            },
+        });
+
+        Self {
+            pyramid,
+            usable: false,
+            current_access: render::AccessKind::None,
+        }
+    }
+
+    pub fn resize(&mut self, context: &render::Context, [width, height]: [u32; 2]) {
+        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
+        self.pyramid.desc_mut().dimensions = [width, height, 1];
+        self.pyramid.desc_mut().mip_levels = mip_levels;
+        if self.pyramid.recreate(context) {
+            self.usable = false;
+            self.current_access = render::AccessKind::None;
+        }
+    }
+
+    pub fn get_current(&mut self, context: &mut render::Context) -> Option<render::GraphImageHandle> {
+        if !self.usable {
+            return None;
+        }
+
+        let image = self.pyramid.get_current(context);
+        Some(context.import_image_with(image.name.clone(), image, render::GraphResourceImportDesc {
+            initial_access: render::AccessKind::ComputeShaderRead,
+            target_access: render::AccessKind::ComputeShaderRead,
+            ..Default::default()
+        }))
+    }
+
+    pub fn update(&mut self, context: &mut render::Context) {
+        let image = self.pyramid.get_current(context);
+        let pyramid = if self.usable {
+            context.import_image(image)
+        } else {
+            self.usable = true;
+            context.import_image_with(image.name.clone(), image, render::GraphResourceImportDesc {
+                initial_access: render::AccessKind::None,
+                target_access: render::AccessKind::ComputeShaderRead,
+                ..Default::default()
+            })
+        };
     }
 
     pub fn destroy(&mut self, context: &render::Context) {
-        context.destroy_pipeline(&self.pipeline);
-        self.depth_pyramid.destroy(context);
+        self.pyramid.destroy(context);
     }
 }
 

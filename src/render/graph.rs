@@ -32,7 +32,11 @@ pub trait RenderResource {
     fn view(&self) -> Self::View;
     fn descriptor_index(&self) -> Option<render::DescriptorIndex>;
 
-    fn import_to_graph(&self, context: &mut render::Context) -> render::GraphHandle<Self>;
+    fn import_to_graph(
+        &self,
+        context: &mut render::Context,
+        desc: render::GraphResourceImportDesc
+    ) -> render::GraphHandle<Self>;
 }
 
 impl RenderResource for render::Buffer {
@@ -69,8 +73,12 @@ impl RenderResource for render::Buffer {
         self.descriptor_index
     }
 
-    fn import_to_graph(&self, context: &mut render::Context) -> render::GraphHandle<Self> {
-        context.import_buffer(&self)
+    fn import_to_graph(
+        &self,
+        context: &mut render::Context,
+        desc: render::GraphResourceImportDesc
+    ) -> render::GraphHandle<Self> {
+        context.import_buffer_with(self.name.clone(), &self, desc)
     }
 }
 
@@ -108,8 +116,12 @@ impl RenderResource for render::Image {
         (!self._descriptor_flags.is_empty()).then_some(self._descriptor_index)
     }
 
-    fn import_to_graph(&self, context: &mut render::Context) -> render::GraphHandle<Self> {
-        context.import_image(&self)
+    fn import_to_graph(
+        &self,
+        context: &mut render::Context,
+        desc: render::GraphResourceImportDesc
+    ) -> render::GraphHandle<Self> {
+        context.import_image_with(self.name.clone(), self, desc)
     }
 }
 
@@ -209,7 +221,7 @@ impl RenderResource for AnyResource {
         }
     }
 
-    fn import_to_graph(&self, _: &mut render::Context) -> render::GraphHandle<Self> {
+    fn import_to_graph(&self, _: &mut render::Context, _: render::GraphResourceImportDesc) -> render::GraphHandle<Self> {
         panic!("attempted to import an 'AnyResource', that's a bad idea")
     }
 }

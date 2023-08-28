@@ -3,7 +3,12 @@
 #include "include/common.glsl"
 #include "include/types.glsl"
 
-// layout(push_constant, std430) uniform PushConstants {};
+RegisterImageFormat(r32f);
+
+layout(push_constant, std430) uniform PushConstants {
+    uint depth_buffer_index;
+    uint image_index;
+};
 
 layout (local_size_x = 256) in;
 

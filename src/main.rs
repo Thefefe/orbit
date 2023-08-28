@@ -38,7 +38,7 @@ use scene::{SceneData, Transform};
 
 use passes::{
     debug_line_renderer::DebugLineRenderer,
-    draw_gen::SceneDrawGen,
+    draw_gen::{SceneDrawGen, DepthPyramid},
     env_map_loader::{EnvironmentMap, EnvironmentMapLoader},
     forward::ForwardRenderer,
     post_process::ScreenPostProcess,
@@ -188,6 +188,7 @@ struct App {
     main_color_image: render::RecreatableImage,
     main_color_resolve_image: Option<render::RecreatableImage>,
     main_depth_image: render::RecreatableImage,
+    depth_pyramid: DepthPyramid,
 
     forward_renderer: ForwardRenderer,
     debug_line_renderer: DebugLineRenderer,
@@ -347,6 +348,8 @@ impl App {
             },
         };
 
+        let depth_pyramid = DepthPyramid::new(context, [screen_extent.width, screen_extent.height]);
+
         Self {
             gpu_assets,
             scene,
@@ -354,6 +357,7 @@ impl App {
             main_color_image,
             main_color_resolve_image,
             main_depth_image,
+            depth_pyramid,
 
             forward_renderer: ForwardRenderer::new(context),
             debug_line_renderer: DebugLineRenderer::new(context),
@@ -576,17 +580,23 @@ impl App {
         }
 
         self.main_color_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
+        self.main_color_image.recreate(context);
         let color_target = self.main_color_image.get_current(context);
+        let color_target = context.import_image(color_target);
 
         let color_resolve_target = if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
             main_color_resolve_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
-            Some(main_color_resolve_image.get_current(context))
+            main_color_resolve_image.recreate(context);
+            let resolve_image = main_color_resolve_image.get_current(context);
+            Some(context.import_image(resolve_image))
         } else {
             None
         };
 
         self.main_depth_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
+        self.main_depth_image.recreate(context);
         let depth_target = self.main_depth_image.get_current(context);
+        let depth_target = context.import_image(depth_target);
 
         let directional_light = self.shadow_map_renderer.render_directional_light(
             context,
@@ -605,11 +615,15 @@ impl App {
             &mut self.debug_line_renderer,
         );
 
+        self.depth_pyramid.resize(context, [screen_extent.width, screen_extent.height]);
+        let depth_pyramid = self.depth_pyramid.get_current(context);
+
         let forwad_draw_commands = self.scene_draw_gen.create_draw_commands(
             context,
             "forward_draw_commands".into(),
             &focused_camera_view_projection,
             FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR,
+            depth_pyramid,
             assets,
             scene,
         );
@@ -723,6 +737,7 @@ impl App {
         if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
             main_color_resolve_image.destroy(context);
         }
+        self.depth_pyramid.destroy(context);
 
         self.forward_renderer.destroy(context);
         self.debug_line_renderer.destroy(context);

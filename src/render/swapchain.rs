@@ -155,7 +155,7 @@ impl render::SurfaceInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AcquiredImage {
     pub image_view: render::ImageView,
     pub image_index: u32,

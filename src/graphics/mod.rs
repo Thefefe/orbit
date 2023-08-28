@@ -4,9 +4,6 @@ pub use device::*;
 mod swapchain;
 pub use swapchain::*;
 
-mod bindless_descriptor;
-pub use bindless_descriptor::*;
-
 mod commands;
 pub use commands::*;
 

@@ -252,7 +252,6 @@ impl std::ops::Deref for Image {
 impl Image {
     pub(super) fn create_impl(
         device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &ImageDesc,
         preallocated_descriptor_index: Option<graphics::DescriptorIndex>,
@@ -319,15 +318,15 @@ impl Image {
 
         let mut descriptor_flags = ImageDescriptorFlags::empty();
         let descriptor_index = if desc.usage.intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE) {
-            let index = preallocated_descriptor_index.unwrap_or_else(|| descriptors.alloc_index());
+            let index = preallocated_descriptor_index.unwrap_or_else(|| device.alloc_index());
 
             if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
-                descriptors.write_sampled_image(device, index, view);
+                device.write_sampled_image(index, view);
                 descriptor_flags |= ImageDescriptorFlags::SAMPLED;
             };
     
             if desc.usage.contains(vk::ImageUsageFlags::STORAGE) {
-                descriptors.write_storage_image(device, index, view);
+                device.write_storage_image(index, view);
                 descriptor_flags |= ImageDescriptorFlags::STORAGE;
             }
             Some(index)
@@ -369,18 +368,18 @@ impl Image {
                 device.set_debug_name(view, &format!("{name}_level_{mip_level}"));
 
                 if !desc.subresource_desc.mip_descriptors.is_empty() {
-                    let descriptor_index = descriptors.alloc_index();
+                    let descriptor_index = device.alloc_index();
 
                     if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::SAMPLED) |
                        desc.usage.contains(vk::ImageUsageFlags::SAMPLED)
                     {
-                        descriptors.write_sampled_image(device, descriptor_index, view);
+                        device.write_sampled_image(descriptor_index, view);
                     }
 
                     if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::STORAGE) |
                        desc.usage.contains(vk::ImageUsageFlags::STORAGE)
                     {
-                        descriptors.write_storage_image(device, descriptor_index, view);
+                        device.write_storage_image(descriptor_index, view);
                     }
                 }
 
@@ -409,18 +408,18 @@ impl Image {
                     device.set_debug_name(view, &format!("{name}_level_{mip_level}_layer_{layer}"));
     
                     if !desc.subresource_desc.mip_descriptors.is_empty() {
-                        let descriptor_index = descriptors.alloc_index();
+                        let descriptor_index = device.alloc_index();
     
                         if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::SAMPLED) |
                            desc.usage.contains(vk::ImageUsageFlags::SAMPLED)
                         {
-                            descriptors.write_sampled_image(device, descriptor_index, view);
+                            device.write_sampled_image(descriptor_index, view);
                         }
     
                         if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::STORAGE) |
                            desc.usage.contains(vk::ImageUsageFlags::STORAGE)
                         {
-                            descriptors.write_storage_image(device, descriptor_index, view);
+                            device.write_storage_image(descriptor_index, view);
                         }
                     }
 
@@ -446,10 +445,10 @@ impl Image {
         }
     }
 
-    pub(super) fn destroy_impl(device: &graphics::Device, descriptors: &graphics::BindlessDescriptors, image: &graphics::Image) {
+    pub(super) fn destroy_impl(device: &graphics::Device, image: &graphics::Image) {
         puffin::profile_function!(&image.name);
         if !image._descriptor_flags.is_empty() {
-            descriptors.free_descriptor_index(image._descriptor_index);
+            device.free_descriptor_index(image._descriptor_index);
         }
         unsafe {
             puffin::profile_scope!("free_vulkan_resources");
@@ -459,7 +458,7 @@ impl Image {
             for subresource_view in image.subresource_views.iter() {
                 device.raw.destroy_image_view(subresource_view.view, None);
                 if let Some(descriptor_index) = subresource_view.descriptor_index {
-                    descriptors.free_descriptor_index(descriptor_index);
+                    device.free_descriptor_index(descriptor_index);
                 }
             }
         }
@@ -550,7 +549,7 @@ impl Image {
 
 impl graphics::Context {
     pub fn create_image(&self, name: impl Into<Cow<'static, str>>, desc: &ImageDesc) -> Image {
-        Image::create_impl(&self.device, &self.descriptors, name.into(), desc, None)
+        Image::create_impl(&self.device, name.into(), desc, None)
     }
 
     pub fn immediate_write_image(
@@ -606,6 +605,6 @@ impl graphics::Context {
     }
 
     pub fn destroy_image(&self, image: &Image) {
-        Image::destroy_impl(&self.device, &self.descriptors, image)
+        Image::destroy_impl(&self.device, image)
     }
 }

@@ -31,7 +31,7 @@ impl SceneDrawGen {
         draw_commands_name: Cow<'static, str>,
         view_projection_matrix: &Mat4,
         cull_plane_mask: FrustumPlaneMask,
-        depth_pyramid: Option<graphics::GraphImageHandle>,
+        _depth_pyramid: Option<graphics::GraphImageHandle>,
         assets: AssetGraphData,
         scene: SceneGraphData,
     ) -> graphics::GraphBufferHandle {
@@ -134,7 +134,7 @@ impl DepthPyramid {
 
     pub fn update(&mut self, context: &mut graphics::Context) {
         let image = self.pyramid.get_current(context);
-        let pyramid = if self.usable {
+        let _pyramid = if self.usable {
             context.import_image(image)
         } else {
             self.usable = true;

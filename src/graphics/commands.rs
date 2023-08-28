@@ -50,13 +50,9 @@ impl CommandPool {
         }
     }
 
-    pub fn begin_new<'a>(&mut self, device: &graphics::Device, flags: vk::CommandBufferUsageFlags) -> &mut CommandBuffer {
+    pub fn begin_new<'a>(&mut self, device: &graphics::Device) -> &mut CommandBuffer {
         let index = self.get_next_command_buffer_index(device);
         let command_buffer = &mut self.command_buffers[index];
-
-        let begin_info = vk::CommandBufferBeginInfo::builder().flags(flags);
-
-        unsafe { device.raw.begin_command_buffer(command_buffer.handle(), &begin_info).unwrap() }
 
         command_buffer
     }
@@ -129,11 +125,18 @@ impl CommandBuffer {
     pub fn record<'a>(
         &'a mut self,
         device: &'a graphics::Device,
-        descriptor: &'a graphics::BindlessDescriptors,
+        flags: vk::CommandBufferUsageFlags
     ) -> CommandRecorder<'a> {
+        let begin_info = vk::CommandBufferBeginInfo::builder().flags(flags);
+
+        unsafe { device.raw.begin_command_buffer(self.handle(), &begin_info).unwrap() }
+
+        // temporary, this will be aware of the queue family it runs on
+        device.bind_descriptors(self.handle(), vk::PipelineBindPoint::COMPUTE);
+        device.bind_descriptors(self.handle(), vk::PipelineBindPoint::GRAPHICS);
+
         CommandRecorder {
             device,
-            descriptor,
             command_buffer: self,
         }
     }
@@ -150,7 +153,6 @@ impl graphics::Device {
 
 pub struct CommandRecorder<'a> {
     pub device: &'a graphics::Device,
-    pub descriptor: &'a graphics::BindlessDescriptors,
     pub command_buffer: &'a mut CommandBuffer,
 }
 
@@ -387,7 +389,7 @@ impl<'a> CommandRecorder<'a> {
         unsafe {
             self.device.raw.cmd_push_constants(
                 self.buffer(),
-                self.descriptor.layout(),
+                self.device.pipeline_layout,
                 vk::ShaderStageFlags::ALL,
                 offset,
                 constansts,

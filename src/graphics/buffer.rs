@@ -39,7 +39,6 @@ pub struct BufferDesc {
 impl Buffer {
     pub(super) fn create_impl(
         device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &BufferDesc,
         preallocated_descriptor_index: Option<graphics::DescriptorIndex>,
@@ -68,8 +67,8 @@ impl Buffer {
 
         let descriptor_index = if desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) {
             let index = preallocated_descriptor_index
-                .unwrap_or_else(|| descriptors.alloc_index());
-            descriptors.write_storage_buffer_resource(device, index, handle);
+                .unwrap_or_else(|| device.alloc_index());
+            device.write_storage_buffer_resource(index, handle);
             Some(index)
         } else {
             None
@@ -93,10 +92,10 @@ impl Buffer {
         }
     }
 
-    pub(super) fn destroy_impl(device: &graphics::Device, descriptors: &graphics::BindlessDescriptors, buffer: &Buffer) {
+    pub(super) fn destroy_impl(device: &graphics::Device, buffer: &Buffer) {
         puffin::profile_function!(&buffer.name);
         if let Some(index) = buffer.descriptor_index {
-            descriptors.free_descriptor_index(index);
+            device.free_descriptor_index(index);
         }
         unsafe {
             puffin::profile_scope!("free_vulkan_resources");
@@ -108,7 +107,7 @@ impl Buffer {
 
 impl graphics::Context {
     pub fn create_buffer(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc) -> Buffer {
-        Buffer::create_impl(&self.device, &self.descriptors, name.into(), desc, None)
+        Buffer::create_impl(&self.device, name.into(), desc, None)
     }
 
     pub fn create_buffer_init(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc, init: &[u8]) -> Buffer {
@@ -118,7 +117,7 @@ impl graphics::Context {
             desc.usage |= vk::BufferUsageFlags::TRANSFER_DST;
         }
 
-        let buffer = Buffer::create_impl(&self.device, &self.descriptors, name.into(), &desc, None);
+        let buffer = Buffer::create_impl(&self.device, name.into(), &desc, None);
         self.immediate_write_buffer(&buffer, init, 0);
 
         buffer
@@ -139,7 +138,6 @@ impl graphics::Context {
         } else {
             let scratch_buffer = Buffer::create_impl(
                 &self.device,
-                &self.descriptors,
                 "scratch_buffer".into(),
                 &BufferDesc {
                     size: copy_size,
@@ -163,11 +161,11 @@ impl graphics::Context {
                 ]);
             });
 
-            Buffer::destroy_impl(&self.device, &self.descriptors, &scratch_buffer);
+            Buffer::destroy_impl(&self.device, &scratch_buffer);
         }
     }
 
     pub fn destroy_buffer(&self, buffer: &Buffer) {
-        Buffer::destroy_impl(&self.device, &self.descriptors, buffer)
+        Buffer::destroy_impl(&self.device, buffer);
     }
 }

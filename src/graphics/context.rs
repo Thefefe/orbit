@@ -47,7 +47,6 @@ pub struct Context {
     pub window: Window,
 
     pub device: graphics::Device,
-    pub descriptors: graphics::BindlessDescriptors,
     pub swapchain: graphics::Swapchain,
 
     pub graph: RenderGraph,
@@ -70,7 +69,6 @@ pub struct ContextDesc {
 impl Context {
     pub fn new(window: Window, desc: &ContextDesc) -> Self {
         let device = graphics::Device::new(&window).expect("failed to create device");
-        let descriptors = graphics::BindlessDescriptors::new(&device);
 
         let swapchain = {
             let surface_info = &device.gpu.surface_info;
@@ -114,7 +112,7 @@ impl Context {
 
             let command_pool = graphics::CommandPool::new(&device, &format!("frame{frame_index}"));
 
-            let global_buffer = graphics::Buffer::create_impl(&device, &descriptors, "global_buffer".into(), &graphics::BufferDesc {
+            let global_buffer = graphics::Buffer::create_impl(&device, "global_buffer".into(), &graphics::BufferDesc {
                 size: std::mem::size_of::<GpuGlobalData>(),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                 memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
@@ -155,7 +153,6 @@ impl Context {
             window,
 
             device,
-            descriptors,
             swapchain,
             
             graph: RenderGraph::new(),
@@ -176,10 +173,8 @@ impl Context {
         puffin::profile_function!();
         let mut record_submit_stuff = self.record_submit_stuff.lock().unwrap();
         record_submit_stuff.command_pool.reset(&self.device);
-        let buffer = record_submit_stuff.command_pool.begin_new(&self.device, vk::CommandBufferUsageFlags::empty());
-        let recorder = buffer.record(&self.device, &self.descriptors);
-        self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
-        self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
+        let buffer = record_submit_stuff.command_pool.begin_new(&self.device);
+        let recorder = buffer.record(&self.device, vk::CommandBufferUsageFlags::empty());
         f(&recorder);
         drop(recorder);
         unsafe {
@@ -223,20 +218,19 @@ impl Drop for Context {
 
             frame.command_pool.destroy(&self.device);
 
-            graphics::Buffer::destroy_impl(&self.device, &self.descriptors, &frame.global_buffer);
+            graphics::Buffer::destroy_impl(&self.device, &frame.global_buffer);
             
             for resource in frame.in_use_transient_resources.resources() {
-                resource.destroy(&self.device, &self.descriptors);
+                resource.destroy(&self.device);
             }
         }
         
         for resource in self.transient_resource_cache.resources() {
-            resource.destroy(&self.device, &self.descriptors)
+            resource.destroy(&self.device)
         }
 
 
         self.swapchain.destroy(&self.device);
-        self.descriptors.destroy(&self.device);
         self.device.destroy();
     }
 }
@@ -477,7 +471,6 @@ impl Context {
             .get_by_descriptor(&desc)
             .unwrap_or_else(|| graphics::AnyResource::Buffer(graphics::Buffer::create_impl(
                 &self.device,
-                &self.descriptors,
                 name.clone(),
                 &buffer_desc,
                 None
@@ -515,7 +508,7 @@ impl Context {
         let descriptor_index = match &cache {
             Some(cache) => cache.descriptor_index(),
             None if buffer_desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER)
-                => Some(self.descriptors.alloc_index()),
+                => Some(self.device.alloc_index()),
             _ => None
         };
 
@@ -545,7 +538,7 @@ impl Context {
         let cache = self.transient_resource_cache.get_by_descriptor(&desc);
         let descriptor_index = match &cache {
             Some(cache) => cache.descriptor_index(),
-            None if image_desc.usage.contains(vk::ImageUsageFlags::SAMPLED) => Some(self.descriptors.alloc_index()),
+            None if image_desc.usage.contains(vk::ImageUsageFlags::SAMPLED) => Some(self.device.alloc_index()),
             _ => None
         };
 
@@ -594,7 +587,6 @@ impl Context {
         
         self.graph.compile_and_flush(
             &self.device,
-            &self.descriptors,
             &mut frame.compiled_graph,
             &mut frame.in_use_transient_resources,
         );
@@ -633,8 +625,7 @@ impl Context {
                     }
                 }
 
-                let cmd_buffer = frame.command_pool
-                    .begin_new(&self.device, vk::CommandBufferUsageFlags::empty());
+                let cmd_buffer = frame.command_pool.begin_new(&self.device);
 
                 for (semaphore, stage) in batch.wait_semaphores {
                     cmd_buffer.wait_semaphore(semaphore.handle, *stage);
@@ -644,14 +635,11 @@ impl Context {
                     cmd_buffer.signal_semaphore(semaphore.handle, *stage);
                 }
                 
-                let recorder = cmd_buffer.record(&self.device, &self.descriptors);
+                let recorder = cmd_buffer.record(&self.device, vk::CommandBufferUsageFlags::empty());
 
                 if batch_index == 0 {
                     recorder.reset_query_pool(frame.timestamp_query_pool, 0..MAX_TIMESTAMP_COUNT);
                 }
-                    
-                self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::GRAPHICS);
-                self.descriptors.bind_descriptors(&recorder, vk::PipelineBindPoint::COMPUTE);
 
                 if graphics::is_memory_barrier_not_useless(&memory_barrier) {
                     recorder.barrier(&[], &image_barriers, &[memory_barrier]);
@@ -709,7 +697,7 @@ impl Context {
         {
             puffin::profile_scope!("leftover_resource_releases");
             for resource in self.transient_resource_cache.resources() {
-                resource.destroy(&self.device, &self.descriptors)
+                resource.destroy(&self.device)
             }
             self.transient_resource_cache.clear();
         }

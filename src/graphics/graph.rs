@@ -15,18 +15,12 @@ pub trait RenderResource {
 
     fn create(
         device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &Self::Desc,
         descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self;
     
-    fn destroy(
-        &self,
-        device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
-    );
-
+    fn destroy(&self, device: &graphics::Device);
     
     fn desc(&self) -> &Self::Desc;
     fn view(&self) -> Self::View;
@@ -45,20 +39,15 @@ impl RenderResource for graphics::Buffer {
     
     fn create(
         device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &Self::Desc,
         descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self {
-        graphics::Buffer::create_impl(device, descriptors, name, desc, descriptor_index)
+        graphics::Buffer::create_impl(device, name, desc, descriptor_index)
     }
     
-    fn destroy(
-        &self,
-        device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
-    ) {
-        graphics::Buffer::destroy_impl(device, descriptors, self);
+    fn destroy(&self, device: &graphics::Device) {
+        graphics::Buffer::destroy_impl(device, self);
     }
 
     fn desc(&self) -> &Self::Desc {
@@ -88,20 +77,15 @@ impl RenderResource for graphics::Image {
     
     fn create(
         device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &Self::Desc,
         descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self {
-        graphics::Image::create_impl(device, descriptors, name, desc, descriptor_index)
+        graphics::Image::create_impl(device, name, desc, descriptor_index)
     }
     
-    fn destroy(
-        &self,
-        device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
-    ) {
-        graphics::Image::destroy_impl(device, descriptors, self);
+    fn destroy(&self, device: &graphics::Device) {
+        graphics::Image::destroy_impl(device, self);
     }
 
     fn desc(&self) -> &Self::Desc {
@@ -180,25 +164,24 @@ impl RenderResource for AnyResource {
 
     fn create(
         device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &Self::Desc,
         descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self {
         match desc {
             AnyResourceDesc::Buffer(desc) => AnyResource::Buffer(
-                graphics::Buffer::create_impl(device, descriptors, name, desc, descriptor_index)
+                graphics::Buffer::create_impl(device, name, desc, descriptor_index)
             ),
             AnyResourceDesc::Image(desc) => AnyResource::Image(
-                graphics::Image::create_impl(device, descriptors, name, desc, descriptor_index)
+                graphics::Image::create_impl(device, name, desc, descriptor_index)
             ),
         }
     }
 
-    fn destroy(&self, device: &graphics::Device, descriptors: &graphics::BindlessDescriptors) {
+    fn destroy(&self, device: &graphics::Device) {
         match self {
-            AnyResource::Buffer(buffer) => buffer.destroy(device, descriptors),
-            AnyResource::Image(image) => image.destroy(device, descriptors),
+            AnyResource::Buffer(buffer) => buffer.destroy(device),
+            AnyResource::Image(image) => image.destroy(device),
         }
     }
 
@@ -242,7 +225,6 @@ impl AnyResource {
 
     pub fn create(
         device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
         name: Cow<'static, str>,
         desc: &AnyResourceDesc,
         preallocated_descriptor_index: Option<graphics::DescriptorIndex>,
@@ -251,7 +233,6 @@ impl AnyResource {
             AnyResourceDesc::Buffer(desc) => {
                 AnyResource::Buffer(graphics::Buffer::create_impl(
                     device,
-                    descriptors,
                     name,
                     desc,
                     preallocated_descriptor_index,
@@ -260,7 +241,6 @@ impl AnyResource {
             AnyResourceDesc::Image(desc) => {
                 AnyResource::Image(graphics::Image::create_impl(
                     device,
-                    descriptors,
                     name,
                     desc,
                     preallocated_descriptor_index,
@@ -269,17 +249,13 @@ impl AnyResource {
         }
     }
 
-    pub fn destroy(
-        &self,
-        device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors
-    ) {
+    pub fn destroy(&self, device: &graphics::Device) {
         match self {
             AnyResource::Buffer(buffer) => {
-                graphics::Buffer::destroy_impl(device, descriptors, buffer);
+                graphics::Buffer::destroy_impl(device, buffer);
             },
             AnyResource::Image(image) => {
-                graphics::Image::destroy_impl(device, descriptors, image);
+                graphics::Image::destroy_impl(device, image);
             },
         }
     }
@@ -650,7 +626,6 @@ impl RenderGraph {
     pub fn compile_and_flush(
         &mut self,
         device: &graphics::Device,
-        descriptors: &graphics::BindlessDescriptors,
         compiled: &mut CompiledRenderGraph,
         to_be_used_transient_resource_cache: &mut TransientResourceCache,
     ) {
@@ -668,7 +643,6 @@ impl RenderGraph {
                 ResourceSource::Create { desc, cache, } => {
                     let resource = cache.take().unwrap_or_else(|| AnyResource::create(
                         device,
-                        descriptors,
                         name.clone(),
                         desc,
                         resource_data.descriptor_index,

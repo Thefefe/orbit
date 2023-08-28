@@ -1,5 +1,5 @@
 use ash::{
-    vk,
+    vk::{self, Handle},
     extensions::{khr, ext},
 };
 
@@ -18,7 +18,7 @@ use gpu_allocator::{
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::window::Window;
 
-use crate::collections::arena;
+use crate::collections::{arena, index_alloc::IndexAllocator};
 
 const VALIDATION_LAYER: &CStr = cstr::cstr!("VK_LAYER_KHRONOS_validation");
 
@@ -325,6 +325,14 @@ pub struct Device {
     allocator_stuff: Mutex<AllocatorStuff>,
 
     pub swapchain_fns: khr::Swapchain,
+
+    // descriptor stuff
+    descriptor_layouts: Vec<vk::DescriptorSetLayout>,
+    pub pipeline_layout: vk::PipelineLayout,
+    descriptor_pool: vk::DescriptorPool,
+    descriptor_sets: Vec<vk::DescriptorSet>,
+    global_descriptor_index_allocator: IndexAllocator,
+    immutable_samplers: [vk::Sampler; SAMPLER_COUNT],
 }
 
 impl Device {
@@ -534,6 +542,24 @@ impl Device {
             enabled_extensions: enabled_device_extensions,
         };
 
+        
+        // helper closure for simple debug name setting only for this function
+        // let device_handle = device.handle();
+        let set_debug_name = |ty: vk::ObjectType, handle: u64, name: &str| {
+                if let Some(ref debug_utils) = debug_utils_fns {
+                unsafe {
+                    let cname = CString::new(name).unwrap(); // TODO: cache allocation?
+                    let name_info = vk::DebugUtilsObjectNameInfoEXT::builder()
+                        .object_type(ty)
+                        .object_handle(handle)
+                        .object_name(cname.as_c_str());
+
+                    debug_utils.set_debug_utils_object_name(device.handle(), &name_info)
+                        .unwrap();
+                }
+            }
+        };
+
         let queue_family_index = universal_queue_family.index;
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
@@ -555,6 +581,110 @@ impl Device {
                 allocations,
             })
         };
+
+        // descriptor stuff
+        let immutable_samplers = SamplerKind::ALL.map(|sampler_kind| unsafe {
+            device.create_sampler(&sampler_kind.create_info(), None).unwrap()
+        });
+
+        let descriptor_layouts: Vec<_> = DescriptorTableType::all_types()
+            .map(|desc_type| {
+                let mut descriptor_binding_flags = vec![
+                    vk::DescriptorBindingFlags::PARTIALLY_BOUND
+                        | vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT
+                        | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+                ];
+
+                let mut set = vec![vk::DescriptorSetLayoutBinding {
+                    binding: 0,
+                    descriptor_type: desc_type.to_vk(),
+                    descriptor_count: desc_type.max_count(&gpu),
+                    stage_flags: vk::ShaderStageFlags::ALL,
+                    p_immutable_samplers: std::ptr::null(),
+                }];
+
+                if desc_type == DescriptorTableType::SampledImage && !immutable_samplers.is_empty() {
+                    descriptor_binding_flags.push(vk::DescriptorBindingFlags::empty());
+
+                    // Set texture binding start at the end of the immutable samplers.
+                    set[0].binding = immutable_samplers.len() as u32;
+                    set.push(vk::DescriptorSetLayoutBinding {
+                        binding: 0,
+                        descriptor_type: vk::DescriptorType::SAMPLER,
+                        descriptor_count: immutable_samplers.len() as u32,
+                        stage_flags: vk::ShaderStageFlags::ALL,
+                        p_immutable_samplers: immutable_samplers.as_ptr(),
+                    });
+                }
+
+                let mut ext_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder()
+                    .binding_flags(&descriptor_binding_flags);
+
+                let layout_create_info = vk::DescriptorSetLayoutCreateInfo::builder()
+                    .bindings(&set)
+                    .flags(
+                        vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+                    )
+                    .push_next(&mut ext_flags);
+
+                let layout = unsafe { device.create_descriptor_set_layout(&layout_create_info, None) }.unwrap();
+                set_debug_name(vk::DescriptorSetLayout::TYPE, layout.as_raw(), &format!("bindless_{}_layout", desc_type.name()));
+                layout
+            })
+            .collect();
+
+        let push_constant_range = vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::ALL,
+            offset: 0,
+            size: 128,
+        };
+
+        let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&descriptor_layouts)
+            .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+
+        let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_create_info, None).unwrap() };
+        set_debug_name(vk::PipelineLayout::TYPE, pipeline_layout.as_raw(), "bindless_pipeline_layout");
+
+        let pool_sizes: Vec<_> = DescriptorTableType::all_types()
+            .map(|desc_ty| vk::DescriptorPoolSize {
+                ty: desc_ty.to_vk(),
+                descriptor_count: desc_ty.max_count(&gpu),
+            })
+            .collect();
+
+        let pool_create_info = vk::DescriptorPoolCreateInfo::builder()
+            .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+            .max_sets(4)
+            .pool_sizes(&pool_sizes);
+
+        let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_create_info, None).unwrap() };
+
+        set_debug_name(vk::DescriptorPool::TYPE, descriptor_pool.as_raw(), "bindless_descriptor_pool");
+
+        let descriptor_counts: Vec<_> = DescriptorTableType::all_types()
+            .map(|ty| ty.max_count(&gpu))
+            .collect();
+
+        let mut variable_count =
+            vk::DescriptorSetVariableDescriptorCountAllocateInfo::builder().descriptor_counts(&descriptor_counts);
+
+        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&descriptor_layouts)
+            .push_next(&mut variable_count);
+
+        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_info).unwrap() };
+
+        let names = [
+            "buffer_descriptor_set",
+            "sampled_image_descriptor_set",
+            "storage_image_descriptor_index",
+        ];
+
+        for (i, descriptor_set) in descriptor_sets.iter().enumerate() {
+            set_debug_name(vk::DescriptorSet::TYPE, descriptor_set.as_raw(), names[i]);
+        }
 
         Ok(Self {
             entry,
@@ -578,6 +708,17 @@ impl Device {
             allocator_stuff,
 
             swapchain_fns,
+
+            //descriptor stuff
+            descriptor_layouts,
+            pipeline_layout,
+
+            descriptor_pool,
+            descriptor_sets,
+
+            global_descriptor_index_allocator: IndexAllocator::new(0),
+
+            immutable_samplers,
         })
     }
 
@@ -647,8 +788,92 @@ impl Device {
         }
     }
 
+    pub fn alloc_index(&self) -> DescriptorIndex {
+        self.global_descriptor_index_allocator.alloc()
+    }
+
+    pub fn free_descriptor_index(&self, index: DescriptorIndex) {
+        self.global_descriptor_index_allocator.free(strip_sampler(index));
+    }
+
+    pub fn bind_descriptors(&self, command_buffer: vk::CommandBuffer, bind_point: vk::PipelineBindPoint) {
+        unsafe {
+            self.raw.cmd_bind_descriptor_sets(
+                command_buffer,
+                bind_point,
+                self.pipeline_layout,
+                0,
+                &self.descriptor_sets,
+                &[],
+            );
+        }
+    }
+
+    pub fn write_storage_buffer_resource(&self, index: DescriptorIndex, handle: vk::Buffer) {
+        unsafe {
+            let buffer_info =
+                vk::DescriptorBufferInfo::builder().buffer(handle).offset(0).range(vk::WHOLE_SIZE).build();
+
+            let write_info = vk::WriteDescriptorSet::builder()
+                .dst_set(self.descriptor_sets[DescriptorTableType::StorageBuffer.set_index() as usize])
+                .dst_binding(0)
+                .dst_array_element(index)
+                .descriptor_type(DescriptorTableType::StorageBuffer.to_vk())
+                .buffer_info(std::slice::from_ref(&buffer_info));
+
+            self.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
+        }
+    }
+
+    pub fn write_sampled_image(&self, index: DescriptorIndex, handle: vk::ImageView) {
+        unsafe {
+            let image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(handle)
+                .build();
+
+            let write_info = vk::WriteDescriptorSet::builder()
+                .dst_set(self.descriptor_sets[DescriptorTableType::SampledImage.set_index() as usize])
+                .dst_binding(self.immutable_samplers.len() as u32)
+                .dst_array_element(index)
+                .descriptor_type(DescriptorTableType::SampledImage.to_vk())
+                .image_info(std::slice::from_ref(&image_info));
+
+            self.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
+        }
+    }
+
+    pub fn write_storage_image(&self, index: DescriptorIndex, handle: vk::ImageView) {
+        unsafe {
+            let image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::GENERAL)
+                .image_view(handle)
+                .build();
+
+            let write_info = vk::WriteDescriptorSet::builder()
+                .dst_set(self.descriptor_sets[DescriptorTableType::StorageImage.set_index() as usize])
+                .dst_binding(0)
+                .dst_array_element(index)
+                .descriptor_type(DescriptorTableType::StorageImage.to_vk())
+                .image_info(std::slice::from_ref(&image_info));
+
+            self.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
+        }
+    }
+
     pub fn destroy(&mut self) {
         unsafe {
+            for sampler in self.immutable_samplers.iter() {
+                self.raw.destroy_sampler(*sampler, None);
+            }
+
+            self.raw.destroy_descriptor_pool(self.descriptor_pool, None);
+            self.raw.destroy_pipeline_layout(self.pipeline_layout, None);
+
+            for descriptor_layout in &self.descriptor_layouts {
+                self.raw.destroy_descriptor_set_layout(*descriptor_layout, None);
+            }
+
             ManuallyDrop::drop(&mut self.allocator_stuff.lock().unwrap().allocator);
 
             self.raw.destroy_device(None);
@@ -701,4 +926,175 @@ unsafe extern "system" fn vk_debug_log_callback(
     }
 
     vk::FALSE
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DescriptorTableType {
+    StorageBuffer = 0,
+    SampledImage  = 1,
+    StorageImage  = 2,
+}
+
+impl DescriptorTableType {
+    fn all_types() -> impl Iterator<Item = Self> {
+        [Self::StorageBuffer, Self::SampledImage, Self::StorageImage].into_iter()
+    }
+
+    fn set_index(self) -> u32 {
+        self as u32
+    }
+
+    fn from_set_index(set_index: u32) -> Self {
+        match set_index {
+            0 => Self::StorageBuffer,
+            1 => Self::SampledImage,
+            _ => panic!("invalid set index"),
+        }
+    }
+
+    fn to_vk(self) -> vk::DescriptorType {
+        match self {
+            DescriptorTableType::StorageBuffer  => vk::DescriptorType::STORAGE_BUFFER,
+            DescriptorTableType::SampledImage   => vk::DescriptorType::SAMPLED_IMAGE,
+            DescriptorTableType::StorageImage   => vk::DescriptorType::STORAGE_IMAGE,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            DescriptorTableType::StorageBuffer  => "storage_buffer",
+            DescriptorTableType::SampledImage   => "sampled_image",
+            DescriptorTableType::StorageImage   => "storage_image",
+        }
+    }
+
+    fn max_count(self, gpu: &GpuInfo) -> u32 {
+        let props = &gpu.properties.properties12;
+        match self {
+            DescriptorTableType::StorageBuffer => u32::min(
+                props.max_descriptor_set_update_after_bind_storage_buffers,
+                props.max_per_stage_descriptor_update_after_bind_storage_buffers,
+            ),
+            DescriptorTableType::SampledImage => u32::min(
+                props.max_descriptor_set_update_after_bind_sampled_images,
+                props.max_per_stage_descriptor_update_after_bind_sampled_images,
+            ),
+            DescriptorTableType::StorageImage => u32::min(
+                props.max_descriptor_set_update_after_bind_storage_images,
+                props.max_per_stage_descriptor_update_after_bind_storage_images,
+            ),
+        }
+    }
+}
+
+pub type DescriptorIndex = u32;
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SamplerKind {
+    LinearClamp      = 0,
+    LinearRepeat     = 1,
+    NearestClamp     = 2,
+    NearestRepeat    = 3,
+    ShadowComparison = 4,
+    ShadowDepth      = 5,
+}
+
+const SAMPLER_COUNT: usize = 6;
+
+impl SamplerKind {
+    pub const ALL: [SamplerKind; SAMPLER_COUNT] = [
+        Self::LinearClamp,
+        Self::LinearRepeat,
+        Self::NearestClamp,
+        Self::NearestRepeat,
+        Self::ShadowComparison,
+        Self::ShadowDepth,
+    ];
+
+    fn create_info(self) -> vk::SamplerCreateInfo {
+        match self {
+            SamplerKind::LinearClamp => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_filter(vk::Filter::LINEAR)
+                .mag_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+            SamplerKind::LinearRepeat => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_filter(vk::Filter::LINEAR)
+                .mag_filter(vk::Filter::LINEAR)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+            SamplerKind::NearestClamp => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_filter(vk::Filter::NEAREST)
+                .mag_filter(vk::Filter::NEAREST)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+            SamplerKind::NearestRepeat => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                .anisotropy_enable(true)
+                .max_anisotropy(16.0)
+                .min_filter(vk::Filter::NEAREST)
+                .mag_filter(vk::Filter::NEAREST)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+            SamplerKind::ShadowComparison => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .min_filter(vk::Filter::NEAREST)
+                .mag_filter(vk::Filter::NEAREST)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .compare_enable(true)
+                .compare_op(vk::CompareOp::LESS_OR_EQUAL)
+                .build(),
+            SamplerKind::ShadowDepth => vk::SamplerCreateInfo::builder()
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .min_filter(vk::Filter::NEAREST)
+                .mag_filter(vk::Filter::NEAREST)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                .min_lod(0.0)
+                .max_lod(vk::LOD_CLAMP_NONE)
+                .build(),
+                
+        }
+    }
+}
+
+pub fn strip_sampler(index: DescriptorIndex) -> DescriptorIndex {
+    index << 8 >> 8
+}
+
+pub fn descriptor_index_with_sampler(index: DescriptorIndex, sampler: SamplerKind) -> DescriptorIndex {
+    assert!(index >> 24 == 0);
+    index | ((sampler as u32) << 24)
 }

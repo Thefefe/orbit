@@ -150,7 +150,6 @@ pub struct RasterPipelineDesc<'a> {
 impl RasterPipeline {
     pub fn create_impl(
         device: &graphics::Device,
-        bindless_layout: vk::PipelineLayout,
         name: &str,
         desc: &RasterPipelineDesc,
     ) -> RasterPipeline {
@@ -229,7 +228,7 @@ impl RasterPipeline {
             .color_blend_state(&color_blend_state)
             .depth_stencil_state(&depth_stencil_state)
             .dynamic_state(&dynamic_state)
-            .layout(bindless_layout)
+            .layout(device.pipeline_layout)
             .push_next(&mut rendering_info);
 
         let handle = unsafe {
@@ -263,14 +262,13 @@ pub struct ComputePipeline {
 impl ComputePipeline {
     pub fn create_impl(
         device: &graphics::Device,
-        bindless_layout: vk::PipelineLayout,
         name: &str,
         shader: &ShaderStage,
     ) -> ComputePipeline {
         let stage = shader.to_vk().stage(vk::ShaderStageFlags::COMPUTE).build();
         let create_info = vk::ComputePipelineCreateInfo::builder()
             .stage(stage)
-            .layout(bindless_layout);
+            .layout(device.pipeline_layout);
 
         let handle = unsafe {
             device.raw.create_compute_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&create_info), None)
@@ -301,11 +299,11 @@ impl Pipeline for ComputePipeline {
 
 impl graphics::Context {
     pub fn create_raster_pipeline(&self, name: &str, desc: &RasterPipelineDesc) -> RasterPipeline {
-        RasterPipeline::create_impl(&self.device, self.descriptors.layout(), name, desc)
+        RasterPipeline::create_impl(&self.device, name, desc)
     }
 
     pub fn create_compute_pipeline(&self, name: &str, shader: &ShaderStage) -> ComputePipeline {
-        ComputePipeline::create_impl(&self.device, self.descriptors.layout(), name, shader)
+        ComputePipeline::create_impl(&self.device, name, shader)
     }
 
     pub fn destroy_pipeline(&self, pipeline: &impl Pipeline) {

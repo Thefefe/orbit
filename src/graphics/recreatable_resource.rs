@@ -2,7 +2,7 @@ use std::{collections::VecDeque, borrow::Cow};
 
 use crate::graphics;
 
-pub type RecreatableBuffer = Recreatable<graphics::Buffer>;
+pub type RecreatableBuffer = Recreatable<graphics::BufferRaw>;
 pub type RecreatableImage = Recreatable<graphics::Image>;
 
 struct OldResource<R> {

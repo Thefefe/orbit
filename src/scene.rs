@@ -109,7 +109,7 @@ pub struct SceneGraphData {
     pub submesh_buffer: graphics::GraphBufferHandle,
     pub entity_buffer: graphics::GraphBufferHandle,
     pub light_count: usize, // temporary
-    pub light_data_buffer: graphics::GraphHandle<graphics::Buffer>,
+    pub light_data_buffer: graphics::GraphHandle<graphics::BufferRaw>,
 }
 
 const MAX_INSTANCE_COUNT: usize = 1_000_000;
@@ -230,11 +230,5 @@ impl SceneData {
             light_count: self.lights.len(),
             light_data_buffer: context.import_buffer(&self.light_data_buffer),
         }
-    }
-
-    pub fn destroy(&self, context: &graphics::Context) {
-        context.destroy_buffer(&self.entity_data_buffer);
-        context.destroy_buffer(&self.submesh_buffer);
-        context.destroy_buffer(&self.light_data_buffer);
     }
 }

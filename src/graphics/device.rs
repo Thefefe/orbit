@@ -124,7 +124,7 @@ pub struct SurfaceInfo {
 }
 
 impl SurfaceInfo {
-    fn new(surface_fns: &khr::Surface, physical_device: vk::PhysicalDevice, surface: vk::SurfaceKHR) -> Self {
+    fn query(surface_fns: &khr::Surface, physical_device: vk::PhysicalDevice, surface: vk::SurfaceKHR) -> Self {
         unsafe {
             let capabilities = surface_fns.get_physical_device_surface_capabilities(physical_device, surface).unwrap();
             let present_modes = surface_fns.get_physical_device_surface_present_modes(physical_device, surface).unwrap();
@@ -136,6 +136,20 @@ impl SurfaceInfo {
                 formats,
             }
         }
+    }
+
+    pub fn new(device: &Device) -> Self {
+        Self::query(&device.surface_fns, device.gpu.handle, device.surface)
+    }
+
+    pub fn refresh_capabilities(&mut self, device: &Device) {
+        unsafe {
+            (device.surface_fns.fp().get_physical_device_surface_capabilities_khr)(
+                device.gpu.handle,
+                device.surface,
+                &mut self.capabilities
+            ).result().unwrap();
+        };
     }
 }
 
@@ -239,7 +253,7 @@ fn enumerate_gpus<'a>(
                 .collect();
 
             let surface_info = if queue_families.iter().any(|queue| queue.present()) {
-                SurfaceInfo::new(surface_fns, handle, surface)
+                SurfaceInfo::query(surface_fns, handle, surface)
             } else {
                 SurfaceInfo::default() // SAFETY: we don't use it if not supported
             };
@@ -722,15 +736,6 @@ impl Device {
         })
     }
 
-    pub fn refresh_surface_info(&mut self) {
-        self.gpu.surface_info = SurfaceInfo::new(&self.surface_fns, self.gpu.handle, self.surface);
-    }
-    pub fn refresh_surface_capabilities(&mut self) {
-        self.gpu.surface_info.capabilities = unsafe {
-            self.surface_fns.get_physical_device_surface_capabilities(self.gpu.handle, self.surface).unwrap()
-        };
-    }
-
     pub fn create_fence(&self, name: &str, signaled: bool) -> vk::Fence {
         let create_info = vk::FenceCreateInfo::builder().flags(if signaled {
             vk::FenceCreateFlags::SIGNALED
@@ -860,8 +865,10 @@ impl Device {
             self.raw.update_descriptor_sets(std::slice::from_ref(&write_info), &[]);
         }
     }
+}
 
-    pub fn destroy(&mut self) {
+impl Drop for Device {
+    fn drop(&mut self) {
         unsafe {
             for sampler in self.immutable_samplers.iter() {
                 self.raw.destroy_sampler(*sampler, None);

@@ -730,7 +730,6 @@ impl App {
 
     fn destroy(&mut self, context: &graphics::Context) {
         self.gpu_assets.destroy(context);
-        self.scene.destroy(context);
 
         self.main_color_image.destroy(context);
         self.main_depth_image.destroy(context);

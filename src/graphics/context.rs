@@ -1,4 +1,4 @@
-use std::{sync::Mutex, borrow::Cow, time::Instant, marker::PhantomData};
+use std::{sync::{Mutex, Arc}, borrow::Cow, time::Instant, marker::PhantomData};
 
 use ash::vk;
 use winit::window::Window;
@@ -25,7 +25,7 @@ pub struct Frame {
     image_available_semaphore: graphics::Semaphore,
     render_finished_semaphore: graphics::Semaphore,
     command_pool: graphics::CommandPool,
-    global_buffer: graphics::Buffer,
+    global_buffer: graphics::BufferRaw,
 
     in_use_transient_resources: TransientResourceCache,
     compiled_graph: CompiledRenderGraph,
@@ -46,7 +46,7 @@ struct FrameContext {
 pub struct Context {
     pub window: Window,
 
-    pub device: graphics::Device,
+    pub device: Arc<graphics::Device>,
     pub swapchain: graphics::Swapchain,
 
     pub graph: RenderGraph,
@@ -69,6 +69,7 @@ pub struct ContextDesc {
 impl Context {
     pub fn new(window: Window, desc: &ContextDesc) -> Self {
         let device = graphics::Device::new(&window).expect("failed to create device");
+        let device = Arc::new(device);
 
         let swapchain = {
             let surface_info = &device.gpu.surface_info;
@@ -112,7 +113,7 @@ impl Context {
 
             let command_pool = graphics::CommandPool::new(&device, &format!("frame{frame_index}"));
 
-            let global_buffer = graphics::Buffer::create_impl(&device, "global_buffer".into(), &graphics::BufferDesc {
+            let global_buffer = graphics::BufferRaw::create_impl(&device, "global_buffer".into(), &graphics::BufferDesc {
                 size: std::mem::size_of::<GpuGlobalData>(),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                 memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
@@ -218,7 +219,7 @@ impl Drop for Context {
 
             frame.command_pool.destroy(&self.device);
 
-            graphics::Buffer::destroy_impl(&self.device, &frame.global_buffer);
+            graphics::BufferRaw::destroy_impl(&self.device, &frame.global_buffer);
             
             for resource in frame.in_use_transient_resources.resources() {
                 resource.destroy(&self.device);
@@ -231,7 +232,6 @@ impl Drop for Context {
 
 
         self.swapchain.destroy(&self.device);
-        self.device.destroy();
     }
 }
 
@@ -317,7 +317,7 @@ impl<T> Clone for GraphHandle<T> {
 
 impl<T> Copy for GraphHandle<T> { }
 
-pub type GraphBufferHandle = GraphHandle<graphics::Buffer>;
+pub type GraphBufferHandle = GraphHandle<graphics::BufferRaw>;
 pub type GraphImageHandle = GraphHandle<graphics::Image>;
 
 impl From<GraphHandle<graphics::Image>> for egui::TextureId {
@@ -391,7 +391,7 @@ impl Context {
         self.graph.resources[handle.resource_index].descriptor_index
     }
 
-    pub fn import_buffer(&mut self, buffer: &graphics::Buffer) -> GraphHandle<graphics::Buffer> {
+    pub fn import_buffer(&mut self, buffer: &graphics::BufferRaw) -> GraphHandle<graphics::BufferRaw> {
         let cache = self.graph.import_cache.get(&graphics::AnyResourceHandle::Buffer(buffer.handle));
         if let Some(resource_index) = cache.copied() {
             GraphHandle { resource_index, _phantom: PhantomData }
@@ -414,7 +414,7 @@ impl Context {
         name: impl Into<Cow<'static, str>>,
         buffer: &graphics::BufferView,
         desc: graphics::GraphResourceImportDesc,
-    ) -> GraphHandle<graphics::Buffer> {
+    ) -> GraphHandle<graphics::BufferRaw> {
         let name = name.into();
         let view = graphics::AnyResourceView::Buffer(*buffer);
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
@@ -459,7 +459,7 @@ impl Context {
         &mut self,
         name: impl Into<Cow<'static, str>>,
         data: &[u8], 
-    ) -> GraphHandle<graphics::Buffer> {
+    ) -> GraphHandle<graphics::BufferRaw> {
         let name = name.into();
         let buffer_desc = graphics::BufferDesc {
             size: data.len(),
@@ -469,7 +469,7 @@ impl Context {
         let desc = graphics::AnyResourceDesc::Buffer(buffer_desc);
         let cache = self.transient_resource_cache
             .get_by_descriptor(&desc)
-            .unwrap_or_else(|| graphics::AnyResource::Buffer(graphics::Buffer::create_impl(
+            .unwrap_or_else(|| graphics::AnyResource::Buffer(graphics::BufferRaw::create_impl(
                 &self.device,
                 name.clone(),
                 &buffer_desc,
@@ -501,7 +501,7 @@ impl Context {
         &mut self,
         name: impl Into<Cow<'static, str>>,
         buffer_desc: graphics::BufferDesc
-    ) -> GraphHandle<graphics::Buffer> {
+    ) -> GraphHandle<graphics::BufferRaw> {
         let name = name.into();
         let desc = graphics::AnyResourceDesc::Buffer(buffer_desc);
         let cache = self.transient_resource_cache.get_by_descriptor(&desc);

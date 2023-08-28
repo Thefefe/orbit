@@ -172,7 +172,7 @@ pub fn upload_dds_image(context: &graphics::Context, name: Cow<'static, str>, bi
         cmd.barrier(&[], &[graphics::image_barrier(&image, AccessKind::TransferWrite, AccessKind::AllGraphicsRead)], &[]);
     });
 
-    context.destroy_buffer(&scratch_buffer);
+    drop(scratch_buffer);
 
     image
 }
@@ -295,7 +295,7 @@ pub fn upload_image_and_generate_mipmaps(
         }
     });
 
-    context.destroy_buffer(&scratch_buffer);
+    drop(scratch_buffer);
 
     image
 }

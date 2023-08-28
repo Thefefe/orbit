@@ -1,4 +1,4 @@
-use std::{ptr::NonNull, borrow::Cow};
+use std::{ptr::NonNull, borrow::Cow, sync::Arc};
 
 use ash::vk;
 use gpu_allocator::{vulkan::{AllocationScheme, AllocationCreateDesc}, MemoryLocation};
@@ -13,7 +13,7 @@ pub struct BufferView {
 }
 
 #[derive(Debug, Clone)]
-pub struct Buffer {
+pub struct BufferRaw {
     pub name: Cow<'static, str>,
     pub(super) buffer_view: graphics::BufferView,
     pub desc: BufferDesc,
@@ -21,7 +21,7 @@ pub struct Buffer {
     pub mapped_ptr: Option<NonNull<u8>>,
 }
 
-impl std::ops::Deref for Buffer {
+impl std::ops::Deref for BufferRaw {
     type Target = graphics::BufferView;
 
     fn deref(&self) -> &Self::Target {
@@ -36,13 +36,13 @@ pub struct BufferDesc {
     pub memory_location: MemoryLocation,
 }
 
-impl Buffer {
+impl BufferRaw {
     pub(super) fn create_impl(
         device: &graphics::Device,
         name: Cow<'static, str>,
         desc: &BufferDesc,
         preallocated_descriptor_index: Option<graphics::DescriptorIndex>,
-    ) -> Buffer {
+    ) -> BufferRaw {
         puffin::profile_function!(&name);
         let create_info = vk::BufferCreateInfo::builder()
             .size(desc.size as u64)
@@ -78,7 +78,7 @@ impl Buffer {
 
         let device_address = device.get_buffer_address(handle);
 
-        Buffer {
+        BufferRaw {
             name,
             buffer_view: graphics::BufferView {
                 handle,
@@ -92,7 +92,7 @@ impl Buffer {
         }
     }
 
-    pub(super) fn destroy_impl(device: &graphics::Device, buffer: &Buffer) {
+    pub(super) fn destroy_impl(device: &graphics::Device, buffer: &BufferRaw) {
         puffin::profile_function!(&buffer.name);
         if let Some(index) = buffer.descriptor_index {
             device.free_descriptor_index(index);
@@ -105,9 +105,29 @@ impl Buffer {
     }
 }
 
+pub struct Buffer {
+    buffer: Arc<graphics::BufferRaw>,
+    device: Arc<graphics::Device>,
+}
+
+impl std::ops::Deref for Buffer {
+    type Target = graphics::BufferRaw;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        BufferRaw::destroy_impl(&self.device, &self.buffer);
+    }
+}
+
 impl graphics::Context {
     pub fn create_buffer(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc) -> Buffer {
-        Buffer::create_impl(&self.device, name.into(), desc, None)
+        let buffer = BufferRaw::create_impl(&self.device, name.into(), desc, None);
+        Buffer { buffer: Arc::new(buffer), device: self.device.clone() }
     }
 
     pub fn create_buffer_init(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc, init: &[u8]) -> Buffer {
@@ -117,13 +137,13 @@ impl graphics::Context {
             desc.usage |= vk::BufferUsageFlags::TRANSFER_DST;
         }
 
-        let buffer = Buffer::create_impl(&self.device, name.into(), &desc, None);
+        let buffer = BufferRaw::create_impl(&self.device, name.into(), &desc, None);
         self.immediate_write_buffer(&buffer, init, 0);
 
-        buffer
+        Buffer { buffer: Arc::new(buffer), device: self.device.clone() }
     }
 
-    pub fn immediate_write_buffer(&self, buffer: &graphics::Buffer, data: &[u8], offset: usize) {
+    pub fn immediate_write_buffer(&self, buffer: &graphics::BufferRaw, data: &[u8], offset: usize) {
         puffin::profile_function!();
         
         if data.is_empty() {
@@ -136,7 +156,7 @@ impl graphics::Context {
                 std::ptr::copy_nonoverlapping(data.as_ptr(), mapped_ptr.as_ptr().add(offset), copy_size);
             }
         } else {
-            let scratch_buffer = Buffer::create_impl(
+            let scratch_buffer = BufferRaw::create_impl(
                 &self.device,
                 "scratch_buffer".into(),
                 &BufferDesc {
@@ -161,11 +181,7 @@ impl graphics::Context {
                 ]);
             });
 
-            Buffer::destroy_impl(&self.device, &scratch_buffer);
+            BufferRaw::destroy_impl(&self.device, &scratch_buffer);
         }
-    }
-
-    pub fn destroy_buffer(&self, buffer: &Buffer) {
-        Buffer::destroy_impl(&self.device, buffer);
     }
 }

@@ -313,10 +313,6 @@ impl GpuAssetStore {
     }
 
     pub fn destroy(&self, context: &graphics::Context) {
-        context.destroy_buffer(&self.vertex_buffer);
-        context.destroy_buffer(&self.index_buffer);
-        context.destroy_buffer(&self.mesh_info_buffer);
-        context.destroy_buffer(&self.material_buffer);
         for (_, image) in self.textures.iter() {
             context.destroy_image(&image);
         }

@@ -321,6 +321,5 @@ impl DebugLineRenderer {
 
     pub fn destroy(&self, context: &graphics::Context) {
         context.destroy_pipeline(&self.pipeline);
-        context.destroy_buffer(&self.line_buffer);
     }
 }

@@ -33,7 +33,7 @@ pub trait RenderResource {
     ) -> graphics::GraphHandle<Self>;
 }
 
-impl RenderResource for graphics::Buffer {
+impl RenderResource for graphics::BufferRaw {
     type View = graphics::BufferView;
     type Desc = graphics::BufferDesc;
     
@@ -43,11 +43,11 @@ impl RenderResource for graphics::Buffer {
         desc: &Self::Desc,
         descriptor_index: Option<graphics::DescriptorIndex>
     ) -> Self {
-        graphics::Buffer::create_impl(device, name, desc, descriptor_index)
+        graphics::BufferRaw::create_impl(device, name, desc, descriptor_index)
     }
     
     fn destroy(&self, device: &graphics::Device) {
-        graphics::Buffer::destroy_impl(device, self);
+        graphics::BufferRaw::destroy_impl(device, self);
     }
 
     fn desc(&self) -> &Self::Desc {
@@ -111,12 +111,12 @@ impl RenderResource for graphics::Image {
 
 #[derive(Debug, Clone)]
 pub enum AnyResource {
-    Buffer(graphics::Buffer),
+    Buffer(graphics::BufferRaw),
     Image(graphics::Image),
 }
 
 impl AnyResource {
-    pub fn get_buffer(&self) -> Option<&graphics::Buffer> {
+    pub fn get_buffer(&self) -> Option<&graphics::BufferRaw> {
         match self {
             AnyResource::Buffer(buffer) => Some(buffer),
             AnyResource::Image(_) => None,
@@ -170,7 +170,7 @@ impl RenderResource for AnyResource {
     ) -> Self {
         match desc {
             AnyResourceDesc::Buffer(desc) => AnyResource::Buffer(
-                graphics::Buffer::create_impl(device, name, desc, descriptor_index)
+                graphics::BufferRaw::create_impl(device, name, desc, descriptor_index)
             ),
             AnyResourceDesc::Image(desc) => AnyResource::Image(
                 graphics::Image::create_impl(device, name, desc, descriptor_index)
@@ -231,7 +231,7 @@ impl AnyResource {
     ) -> Self {
         match desc {
             AnyResourceDesc::Buffer(desc) => {
-                AnyResource::Buffer(graphics::Buffer::create_impl(
+                AnyResource::Buffer(graphics::BufferRaw::create_impl(
                     device,
                     name,
                     desc,
@@ -252,7 +252,7 @@ impl AnyResource {
     pub fn destroy(&self, device: &graphics::Device) {
         match self {
             AnyResource::Buffer(buffer) => {
-                graphics::Buffer::destroy_impl(device, buffer);
+                graphics::BufferRaw::destroy_impl(device, buffer);
             },
             AnyResource::Image(image) => {
                 graphics::Image::destroy_impl(device, image);
@@ -607,7 +607,7 @@ impl CompiledRenderGraph {
         self.batches.clear();
     }
 
-    pub fn get_buffer(&self, handle: graphics::GraphHandle<graphics::Buffer>) -> &graphics::BufferView {
+    pub fn get_buffer(&self, handle: graphics::GraphHandle<graphics::BufferRaw>) -> &graphics::BufferView {
         match &self.resources[handle.resource_index].resource_view {
             AnyResourceView::Buffer(buffer) => buffer,
             _ => unreachable!(),

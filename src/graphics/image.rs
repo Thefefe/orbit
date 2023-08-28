@@ -601,7 +601,7 @@ impl graphics::Context {
             }
         });
 
-        self.destroy_buffer(&scratch_buffer);
+        drop(scratch_buffer);
     }
 
     pub fn destroy_image(&self, image: &Image) {

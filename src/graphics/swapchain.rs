@@ -178,6 +178,7 @@ pub struct Swapchain {
     old: VecDeque<SwapchainInner>,
 
     config: SwapchainConfig,
+    surface_info: graphics::SurfaceInfo,
 }
 
 impl Swapchain {
@@ -186,6 +187,7 @@ impl Swapchain {
             inner: SwapchainInner::new(device, None, config),
             old: VecDeque::new(),
             config,
+            surface_info: graphics::SurfaceInfo::new(device),
         }
     }
 
@@ -204,12 +206,12 @@ impl Swapchain {
         self.config.surface_format.format
     }
 
-    fn recreate_if_needed(&mut self, device: &mut graphics::Device) {
+    fn recreate_if_needed(&mut self, device: &graphics::Device) {
         if self.config == self.inner.config {
             return;
         }
 
-        device.refresh_surface_capabilities();
+        self.surface_info.refresh_capabilities(device);
         self.config.extent = device.gpu.surface_info.choose_extent(self.config.extent);
         let mut swapchain = SwapchainInner::new(&device, Some(self.inner.handle), self.config);
 
@@ -220,7 +222,7 @@ impl Swapchain {
 
     pub fn acquire_image(
         &mut self,
-        device: &mut graphics::Device,
+        device: &graphics::Device,
         frame_index: usize, // used for old swapchain lifetime management
         acquired_semaphore: vk::Semaphore,
     ) -> Result<AcquiredImage, SwapchainOutOfDate> {

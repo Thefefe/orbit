@@ -374,8 +374,6 @@ impl EguiRenderer {
 
     pub fn destroy(&self, context: &graphics::Context) {
         context.destroy_pipeline(&self.pipeline);
-        context.destroy_buffer(&self.index_buffer);
-        context.destroy_buffer(&self.vertex_buffer);
         for image in self.textures.values() {
             context.destroy_image(image);
         }

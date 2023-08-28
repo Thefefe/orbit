@@ -21,7 +21,12 @@ struct SwapchainInner {
 }
 
 impl SwapchainInner {
-    fn new(device: &graphics::Device, old_swapchain: Option<vk::SwapchainKHR>, config: SwapchainConfig) -> Self {
+    fn new(
+        device: &graphics::Device,
+        old_swapchain: Option<vk::SwapchainKHR>,
+        config: SwapchainConfig,
+        surface_info: &graphics::SurfaceInfo,
+    ) -> Self {
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(device.surface)
             .min_image_count(config.image_count)
@@ -32,7 +37,7 @@ impl SwapchainInner {
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .present_mode(config.present_mode)
-            .pre_transform(device.gpu.surface_info.capabilities.current_transform)
+            .pre_transform(surface_info.capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .clipped(false)
             .old_swapchain(old_swapchain.unwrap_or(vk::SwapchainKHR::null()));
@@ -183,11 +188,13 @@ pub struct Swapchain {
 
 impl Swapchain {
     pub fn new(device: &graphics::Device, config: SwapchainConfig) -> Self {
+        let surface_info = graphics::SurfaceInfo::new(device);
+
         Self {
-            inner: SwapchainInner::new(device, None, config),
+            inner: SwapchainInner::new(device, None, config, &surface_info),
             old: VecDeque::new(),
             config,
-            surface_info: graphics::SurfaceInfo::new(device),
+            surface_info,
         }
     }
 
@@ -212,8 +219,8 @@ impl Swapchain {
         }
 
         self.surface_info.refresh_capabilities(device);
-        self.config.extent = device.gpu.surface_info.choose_extent(self.config.extent);
-        let mut swapchain = SwapchainInner::new(&device, Some(self.inner.handle), self.config);
+        self.config.extent = self.surface_info.choose_extent(self.config.extent);
+        let mut swapchain = SwapchainInner::new(&device, Some(self.inner.handle), self.config, &self.surface_info);
 
         std::mem::swap(&mut swapchain, &mut self.inner);
 

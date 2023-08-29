@@ -210,7 +210,7 @@ impl ShadowMapRenderer {
         scene: SceneGraphData,
     ) -> graphics::GraphImageHandle {
         let pass_name = format!("shadow_pass_for_{name}");
-        let shadow_map = frame_ctx.create_transient_image(name, graphics::ImageDesc {
+        let shadow_map = frame_ctx.create_transient(name, graphics::ImageDesc {
             ty: graphics::ImageType::Single2D,
             format: App::DEPTH_FORMAT,
             dimensions: [resolution, resolution, 1],

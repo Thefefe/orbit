@@ -305,10 +305,10 @@ impl GpuAssetStore {
 
     pub fn import_to_graph(&self, context: &mut graphics::Context) -> AssetGraphData {
         AssetGraphData {
-            vertex_buffer:    context.import_buffer(&self.vertex_buffer),
-            index_buffer:     context.import_buffer(&self.index_buffer),
-            mesh_info_buffer: context.import_buffer(&self.mesh_info_buffer),
-            materials_buffer: context.import_buffer(&self.material_buffer),
+            vertex_buffer:    context.import(self.vertex_buffer.clone()),
+            index_buffer:     context.import(self.index_buffer.clone()),
+            mesh_info_buffer: context.import(self.mesh_info_buffer.clone()),
+            materials_buffer: context.import(self.material_buffer.clone()),
         }
     }
 }

@@ -162,16 +162,16 @@ impl graphics::SurfaceInfo {
 
 #[derive(Debug, Clone)]
 pub struct AcquiredImage {
-    pub image_view: graphics::ImageView,
+    pub image: graphics::ImageRaw,
     pub image_index: u32,
     pub suboptimal: bool,
 }
 
 impl std::ops::Deref for AcquiredImage {
-    type Target = graphics::ImageView;
+    type Target = graphics::ImageRaw;
 
     fn deref(&self) -> &Self::Target {
-        &self.image_view
+        &self.image
     }
 }
 
@@ -261,8 +261,27 @@ impl Swapchain {
 
         self.inner.last_frame_index = Some(frame_index);
 
+        let extent = self.config.extent;
+
+        let image = graphics::ImageRaw {
+            name: "swapchain_image".into(),
+            full_view: self.inner.images[image_index as usize],
+            subresource_views: Vec::new(),
+            desc: graphics::ImageDesc {
+                ty: graphics::ImageType::Single2D,
+                format: self.config.surface_format.format,
+                dimensions: [extent.width, extent.height, 1],
+                mip_levels: 1,
+                samples: graphics::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                aspect: vk::ImageAspectFlags::COLOR,
+                ..Default::default()
+            },
+            alloc_index: graphics::AllocIndex::null(),
+        };
+
         Ok(AcquiredImage {
-            image_view: self.inner.images[image_index as usize],
+            image,
             image_index,
             suboptimal,
         })

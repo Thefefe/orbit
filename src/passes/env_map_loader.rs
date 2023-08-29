@@ -38,9 +38,9 @@ pub struct EnvironmentMap {
 impl EnvironmentMap {
     pub fn import_to_graph(&self, context: &mut graphics::Context) -> GraphEnvironmentMap {
         GraphEnvironmentMap {
-            skybox: context.import_image(&self.skybox),
-            irradiance: context.import_image(&self.irradiance),
-            prefiltered: context.import_image(&self.prefiltered),
+            skybox: context.import(self.skybox.clone()),
+            irradiance: context.import(self.irradiance.clone()),
+            prefiltered: context.import(self.prefiltered.clone()),
         }
     }
 }

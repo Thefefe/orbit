@@ -106,7 +106,7 @@ impl ImageView {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SubresourceView {
+pub struct SubresourceView {
     view: vk::ImageView,
     descriptor_index: Option<graphics::DescriptorIndex>,
 }
@@ -237,9 +237,9 @@ pub struct ImageDesc {
 pub struct ImageRaw {
     pub name: Cow<'static, str>,
     pub full_view: graphics::ImageView,
-    subresource_views: Vec<SubresourceView>,
+    pub subresource_views: Vec<SubresourceView>,
     pub desc: ImageDesc,
-    alloc_index: graphics::AllocIndex,
+    pub alloc_index: graphics::AllocIndex,
 }
 
 impl std::ops::Deref for ImageRaw {
@@ -556,9 +556,23 @@ impl ImageRaw {
     }
 }
 
+#[derive(Clone)]
 pub struct Image {
     image: Arc<graphics::ImageRaw>,
     device: Arc<graphics::Device>,
+}
+
+impl Image {
+    pub fn recreate(&mut self, desc: &ImageDesc) -> bool {
+        if &self.image.desc == desc {
+            return false;
+        }
+
+        let mut image = Arc::new(ImageRaw::create_impl(&self.device, self.name.clone(), desc, None));
+        std::mem::swap(&mut self.image, &mut image);
+
+        true
+    }
 }
 
 impl std::ops::Deref for graphics::Image {
@@ -572,6 +586,12 @@ impl std::ops::Deref for graphics::Image {
 impl Drop for graphics::Image {
     fn drop(&mut self) {
         ImageRaw::destroy_impl(&self.device, &self.image);
+    }
+}
+
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.image.fmt(f)
     }
 }
 

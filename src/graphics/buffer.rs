@@ -105,6 +105,7 @@ impl BufferRaw {
     }
 }
 
+#[derive(Clone)]
 pub struct Buffer {
     buffer: Arc<graphics::BufferRaw>,
     device: Arc<graphics::Device>,
@@ -121,6 +122,12 @@ impl std::ops::Deref for Buffer {
 impl Drop for Buffer {
     fn drop(&mut self) {
         BufferRaw::destroy_impl(&self.device, &self.buffer);
+    }
+}
+
+impl std::fmt::Debug for Buffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.buffer.fmt(f)
     }
 }
 

@@ -75,6 +75,13 @@ pub struct Index {
 }
 
 impl Index {
+    pub fn null() -> Self {
+        Self {
+            generation: Generation::new(),
+            slot: NonZeroSlot::new(0),
+        }
+    }
+
     #[inline(always)]
     pub fn slot(self) -> u32 {
         self.slot.get_slot()

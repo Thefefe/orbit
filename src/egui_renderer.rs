@@ -182,10 +182,9 @@ impl EguiRenderer {
 
                 let texture = match mesh.texture_id {
                     egui::TextureId::Managed(id) => {
-                        let image = self.textures.get(&id).unwrap();
-                        context.import_image_with(
+                        context.import_with(
                             "egui_image",
-                            image,
+                            self.textures.get(&id).unwrap().clone(),
                             graphics::GraphResourceImportDesc {
                                 initial_access: graphics::AccessKind::FragmentShaderRead,
                                 target_access: graphics::AccessKind::FragmentShaderRead,
@@ -315,15 +314,15 @@ impl EguiRenderer {
         let screen_size = window_size.map(|n| n as f32);
         let pipeline = self.pipeline;
 
-        let index_buffer = context.import_buffer_with(
+        let index_buffer = context.import_with(
             "egui_index_buffer",
-            &self.index_buffer,
+            self.index_buffer.clone(),
             graphics::GraphResourceImportDesc::default(),
         );
 
-        let vertex_buffer = context.import_buffer_with(
+        let vertex_buffer = context.import_with(
             "egui_vertex_buffer",
-            &self.vertex_buffer,
+            self.vertex_buffer.clone(),
             graphics::GraphResourceImportDesc::default(),
         );
 

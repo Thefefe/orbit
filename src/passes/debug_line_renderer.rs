@@ -249,18 +249,18 @@ impl DebugLineRenderer {
 
     pub fn render(
         &mut self,
-        frame_ctx: &mut graphics::Context,
+        context: &mut graphics::Context,
         target_image: graphics::GraphImageHandle,
         resolve_image: Option<graphics::GraphImageHandle>,
         depth_image: graphics::GraphImageHandle,
         view_projection: Mat4,
     ) {
-        let line_buffer = frame_ctx.import_buffer_with("debug_line_buffer", &self.line_buffer, Default::default());
+        let line_buffer = context.import(self.line_buffer.clone());
         let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>();
         let vertex_count = self.vertex_cursor as u32;
         let pipeline = self.pipeline;
 
-        frame_ctx.add_pass("debug_line_render")
+        context.add_pass("debug_line_render")
             .with_dependency(target_image, graphics::AccessKind::ColorAttachmentWrite)
             .with_dependency(depth_image, graphics::AccessKind::DepthAttachmentRead)
             .with_dependencies(resolve_image.map(|h| (h, graphics::AccessKind::ColorAttachmentWrite)))

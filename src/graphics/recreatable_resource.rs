@@ -10,7 +10,7 @@ struct OldResource<R> {
     last_used_frame_index: Option<usize>,
 }
 
-pub struct Recreatable<R: graphics::RenderResource> {
+pub struct Recreatable<R: graphics::RawRenderResource> {
     name: Cow<'static, str>,
     current_resource: R,
     current_desc: R::Desc,
@@ -21,11 +21,11 @@ pub struct Recreatable<R: graphics::RenderResource> {
 
 impl<R> Recreatable<R>
 where 
-    R: graphics::RenderResource,
+    R: graphics::RawRenderResource,
     R::Desc: std::cmp::Eq,
 {
     pub fn new(context: &graphics::Context, name: Cow<'static, str>, desc: R::Desc) -> Self {   
-        let current = R::create(&context.device, name.clone(), &desc, None);
+        let current = R::create_raw(&context.device, name.clone(), &desc, None);
         Self {
             last_used_frame_index: None,
             name,
@@ -42,7 +42,7 @@ where
         }
 
         // slow but only happens on resizes so it's fine
-        let mut tmp = R::create(&context.device, self.name.clone(), &self.current_desc, None);
+        let mut tmp = R::create_raw(&context.device, self.name.clone(), &self.current_desc, None);
         std::mem::swap(&mut tmp, &mut self.current_resource);
         
         self.old.push_back(OldResource {
@@ -68,7 +68,7 @@ where
                old_resource.last_used_frame_index == Some(context.frame_index())
             {
                 // slow but only happens after resizes so it's fine
-                old_resource.resource.destroy(&context.device);
+                old_resource.resource.destroy_raw(&context.device);
                 self.old.pop_front();
             }
         }
@@ -79,10 +79,10 @@ where
 
     pub fn destroy(&mut self, context: &graphics::Context) {
         puffin::profile_function!(&self.name);
-        self.current_resource.destroy(&context.device);
+        self.current_resource.destroy_raw(&context.device);
 
         while let Some(old_resource) = self.old.pop_front() {
-            old_resource.resource.destroy(&context.device);
+            old_resource.resource.destroy_raw(&context.device);
         }
     }
 }

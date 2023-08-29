@@ -311,6 +311,12 @@ impl std::fmt::Display for DeviceCreateError {
 #[derive(Debug, Clone, Copy)]
 pub struct AllocIndex(arena::Index);
 
+impl AllocIndex {
+    pub fn null() -> Self {
+        Self(arena::Index::null())
+    }
+}
+
 struct AllocatorStuff {
     allocator: ManuallyDrop<Allocator>,
     allocations: arena::Arena<Allocation>,

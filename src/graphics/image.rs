@@ -558,18 +558,22 @@ impl ImageRaw {
 
 #[derive(Clone)]
 pub struct Image {
-    image: Arc<graphics::ImageRaw>,
+    image: Option<Arc<graphics::ImageRaw>>,
     device: Arc<graphics::Device>,
 }
 
 impl Image {
     pub fn recreate(&mut self, desc: &ImageDesc) -> bool {
-        if &self.image.desc == desc {
+        if &self.desc == desc {
             return false;
         }
 
         let mut image = Arc::new(ImageRaw::create_impl(&self.device, self.name.clone(), desc, None));
-        std::mem::swap(&mut self.image, &mut image);
+        std::mem::swap(self.image.as_mut().unwrap(), &mut image);
+
+        if let Some(image) = Arc::into_inner(image) {
+            ImageRaw::destroy_impl(&self.device, &image);
+        }
 
         true
     }
@@ -579,13 +583,15 @@ impl std::ops::Deref for graphics::Image {
     type Target = graphics::ImageRaw;
 
     fn deref(&self) -> &Self::Target {
-        &self.image
+        self.image.as_ref().unwrap()
     }
 }
 
 impl Drop for graphics::Image {
     fn drop(&mut self) {
-        ImageRaw::destroy_impl(&self.device, &self.image);
+        if let Some(image) = Arc::into_inner(self.image.take().unwrap()) {
+            ImageRaw::destroy_impl(&self.device, &image);
+        }
     }
 }
 
@@ -598,7 +604,7 @@ impl std::fmt::Debug for Image {
 impl graphics::Context {
     pub fn create_image(&self, name: impl Into<Cow<'static, str>>, desc: &ImageDesc) -> Image {
         let image = ImageRaw::create_impl(&self.device, name.into(), desc, None);
-        Image { image: Arc::new(image), device: self.device.clone() }
+        Image { image: Some(Arc::new(image)), device: self.device.clone() }
     }
 
     pub fn immediate_write_image(

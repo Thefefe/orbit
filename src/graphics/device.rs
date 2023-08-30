@@ -737,7 +737,6 @@ impl Device {
             descriptor_sets,
 
             global_descriptor_index_allocator: IndexAllocator::new(0),
-
             immutable_samplers,
         })
     }
@@ -799,10 +798,12 @@ impl Device {
         }
     }
 
-    pub fn alloc_index(&self) -> DescriptorIndex {
-        self.global_descriptor_index_allocator.alloc()
+    pub fn alloc_descriptor_index(&self) -> DescriptorIndex {
+        let index = self.global_descriptor_index_allocator.alloc();
+        index
     }
 
+    #[track_caller]
     pub fn free_descriptor_index(&self, index: DescriptorIndex) {
         self.global_descriptor_index_allocator.free(strip_sampler(index));
     }

@@ -298,46 +298,6 @@ impl App {
 
         let screen_extent = context.swapchain.extent();
 
-        // let main_color_image = graphics::RecreatableImage::new(context, "main_color_image".into(), graphics::ImageDesc {
-        //     ty: graphics::ImageType::Single2D,
-        //     format: Self::COLOR_FORMAT,
-        //     dimensions: [screen_extent.width, screen_extent.height, 1],
-        //     mip_levels: 1,
-        //     samples: Self::MULTISAMPLING,
-        //     usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        //     aspect: vk::ImageAspectFlags::COLOR,
-        //     subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-        //     ..Default::default()
-        // });
-
-        // let main_color_resolve_image = if Self::MULTISAMPLING != graphics::MultisampleCount::None {
-        //     Some(graphics::RecreatableImage::new(context, "main_color_resolve_image".into(), graphics::ImageDesc {
-        //         ty: graphics::ImageType::Single2D,
-        //         format: Self::COLOR_FORMAT,
-        //         dimensions: [screen_extent.width, screen_extent.height, 1],
-        //         mip_levels: 1,
-        //         samples: graphics::MultisampleCount::None,
-        //         usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-        //         aspect: vk::ImageAspectFlags::COLOR,
-        //         subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-        //         ..Default::default()
-        //     },))
-        // } else {
-        //     None
-        // };
-
-        // let main_depth_image = graphics::RecreatableImage::new(context, "main_depth_target".into(), graphics::ImageDesc {
-        //     ty: graphics::ImageType::Single2D,
-        //     format: Self::DEPTH_FORMAT,
-        //     dimensions: [screen_extent.width, screen_extent.height, 1],
-        //     mip_levels: 1,
-        //     samples: Self::MULTISAMPLING,
-        //     usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-        //     aspect: vk::ImageAspectFlags::DEPTH,
-        //     subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-        //     ..Default::default()
-        // });
-
         let main_color_image = context.create_image("main_color_image", &graphics::ImageDesc {
             ty: graphics::ImageType::Single2D,
             format: Self::COLOR_FORMAT,
@@ -620,38 +580,18 @@ impl App {
             self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
-        // self.main_color_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
-        // self.main_color_image.recreate(context);
-        // let color_target = self.main_color_image.get_current(context);
-        // let color_target = context.import_image(color_target);
-
-        // let color_resolve_target = if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
-        //     main_color_resolve_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
-        //     main_color_resolve_image.recreate(context);
-        //     let resolve_image = main_color_resolve_image.get_current(context);
-        //     Some(context.import_image(resolve_image))
-        // } else {
-        //     None
-        // };
-
-        // self.main_depth_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
-        // self.main_depth_image.recreate(context);
-        // let depth_target = self.main_depth_image.get_current(context);
-        // let depth_target = context.import_image(depth_target);
-
-        // self.main_color_image.desc_mut().dimensions = [screen_extent.width, screen_extent.height, 1];
         self.main_color_image.recreate(&graphics::ImageDesc {
             dimensions: [screen_extent.width, screen_extent.height, 1],
             ..self.main_color_image.desc
         });
-        let color_target = context.import(self.main_color_image.clone());
+        let color_target = context.import(&self.main_color_image);
 
         let color_resolve_target = if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
             main_color_resolve_image.recreate(&graphics::ImageDesc {
                 dimensions: [screen_extent.width, screen_extent.height, 1],
                 ..main_color_resolve_image.desc
             });
-            Some(context.import(main_color_resolve_image.clone()))
+            Some(context.import(main_color_resolve_image as &_))
         } else {
             None
         };
@@ -660,7 +600,7 @@ impl App {
             dimensions: [screen_extent.width, screen_extent.height, 1],
             ..self.main_depth_image.desc
         });
-        let depth_target = context.import(self.main_depth_image.clone());
+        let depth_target = context.import(&self.main_depth_image);
 
         let directional_light = self.shadow_map_renderer.render_directional_light(
             context,
@@ -793,13 +733,6 @@ impl App {
     }
 
     fn destroy(&mut self, context: &graphics::Context) {
-        // self.main_color_image.destroy(context);
-        // self.main_depth_image.destroy(context);
-        // if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
-        //     main_color_resolve_image.destroy(context);
-        // }
-        // self.depth_pyramid.destroy(context);
-
         self.forward_renderer.destroy(context);
         self.debug_line_renderer.destroy(context);
         self.scene_draw_gen.destroy(context);

@@ -245,6 +245,10 @@ impl<T> Arena<T> {
     pub fn iter_mut(&mut self) -> IterMut<T> {
         IterMut { entries: self.entries.iter_mut(), slot: 0 }
     }
+
+    pub fn drain(&mut self) -> Drain<T> {
+        Drain { arena: self, index: 0 }
+    }
 }
 
 pub struct Iter<'a, T> {
@@ -286,6 +290,32 @@ impl<'a, T> Iterator for IterMut<'a, T> {
                 return Some((Index { generation: entry.generation, slot: NonZeroSlot::new(slot) }, val));
             }
         }
+    }
+}
+
+pub struct Drain<'a, T> {
+    arena: &'a mut Arena<T>,
+    index: usize,
+}
+
+impl<'a, T> Iterator for Drain<'a, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let entry = self.arena.entries.get_mut(self.index)?;
+            self.index += 1;
+
+            if let Some(value) = entry.value.take(None) {
+                return Some(value);
+            }
+        }
+    }
+}
+
+impl<'a, T> Drop for Drain<'a, T> {
+    fn drop(&mut self) {
+        self.arena.clear();
     }
 }
 

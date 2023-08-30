@@ -268,7 +268,7 @@ impl ForwardRenderer {
 
         let environment_map = environment_map.map(|e| e.import_to_graph(context));
 
-        let brdf_integration_map = context.import(self.brdf_integration_map.clone());
+        let brdf_integration_map = context.import(&self.brdf_integration_map);
 
         let forward_pipeline = self.forward_pipeline;
         let skybox_pipeline = self.skybox_pipeline;

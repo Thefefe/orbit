@@ -13,7 +13,7 @@ type PassFn = Box<dyn Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGr
 pub enum ResourceSource {
     Create {
         desc: graphics::AnyResourceDesc,
-        cache: Option<graphics::AnyResourceOwned>,
+        cache: Option<graphics::AnyResource>,
     },
     Import {
         resource: graphics::AnyResource,
@@ -45,7 +45,7 @@ impl GraphResourceData {
     fn kind(&self) -> graphics::ResourceKind {
         match &self.source {
             ResourceSource::Create { desc, .. } => desc.kind(),
-            ResourceSource::Import { resource,  } => resource.kind(),
+            ResourceSource::Import { resource, .. } => resource.kind(),
         }
     }
 
@@ -132,7 +132,7 @@ impl RenderGraph {
 
     pub fn add_resource(&mut self, resource_data: GraphResourceData) -> GraphResourceIndex {
         let index = self.resources.len();
-        let imported_handle = if let ResourceSource::Import { resource } = &resource_data.source {
+        let imported_handle = if let ResourceSource::Import { resource, .. } = &resource_data.source {
             Some(resource.as_ref().handle())
         } else {
             None
@@ -186,7 +186,7 @@ impl RenderGraph {
 
 #[derive(Debug)]
 struct TransientResourceNode {
-    resource: graphics::AnyResourceOwned,
+    resource: graphics::AnyResource,
     next_node: Option<arena::Index>,
 }
 
@@ -213,11 +213,16 @@ impl TransientResourceCache {
         self.descriptor_lookup.clear();
     }
 
-    pub fn resources(&self) -> impl Iterator<Item = &graphics::AnyResourceOwned> {
+    pub fn resources(&self) -> impl Iterator<Item = &graphics::AnyResource> {
         self.resources_nodes.iter().map(|(_, node)| &node.resource)
     }
 
-    pub fn get_by_descriptor(&mut self, desc: &graphics::AnyResourceDesc) -> Option<graphics::AnyResourceOwned> {
+    pub fn drain_resources(&mut self) -> impl Iterator<Item = graphics::AnyResource> + '_ {
+        self.descriptor_lookup.clear();
+        self.resources_nodes.drain().map(|node| node.resource)
+    }
+
+    pub fn get_by_descriptor(&mut self, desc: &graphics::AnyResourceDesc) -> Option<graphics::AnyResource> {
         let index = self.descriptor_lookup.get_mut(desc)?;
         let resource_node = self.resources_nodes.remove(*index).unwrap();
         
@@ -230,7 +235,7 @@ impl TransientResourceCache {
         Some(resource_node.resource)
     }
 
-    pub fn insert(&mut self, desc: graphics::AnyResourceDesc, resource: graphics::AnyResourceOwned) {
+    pub fn insert(&mut self, desc: graphics::AnyResourceDesc, resource: graphics::AnyResource) {
         if let Some(index) = self.descriptor_lookup.get_mut(&desc) {
             let new_index = self.resources_nodes.insert(TransientResourceNode {
                 resource,
@@ -287,9 +292,15 @@ impl std::fmt::Debug for CompiledPassData {
     }
 }
 
+#[derive(Debug)]
+pub struct CompiledGraphResource {
+    pub resource: graphics::AnyResource,
+    pub owned_by_graph: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct CompiledRenderGraph {
-    pub resources: Vec<graphics::AnyResource>,
+    pub resources: Vec<CompiledGraphResource>,
     pub passes: Vec<CompiledPassData>,
     pub dependencies: Vec<BatchDependecy>,
     pub semaphores: Vec<(graphics::Semaphore, vk::PipelineStageFlags2)>,
@@ -332,14 +343,14 @@ impl CompiledRenderGraph {
     }
 
     pub fn get_buffer(&self, handle: graphics::GraphHandle<graphics::BufferRaw>) -> &graphics::BufferRaw {
-        match self.resources[handle.resource_index].as_ref() {
+        match self.resources[handle.resource_index].resource.as_ref() {
             graphics::AnyResourceRef::Buffer(buffer) => buffer,
             _ => unreachable!(),
         }
     }
 
     pub fn get_image(&self, handle: graphics::GraphHandle<graphics::ImageRaw>) -> &graphics::ImageRaw {
-        match self.resources[handle.resource_index].as_ref() {
+        match self.resources[handle.resource_index].resource.as_ref() {
             graphics::AnyResourceRef::Image(image) => image,
             _ => unreachable!(),
         }
@@ -439,17 +450,17 @@ impl RenderGraph {
         for resource_data in self.resources.drain(..) {
             match resource_data.source {
                 ResourceSource::Create { desc, cache, } => {
-                    let resource = cache.unwrap_or_else(|| graphics::AnyResourceOwned::create(
+                    let resource = cache.unwrap_or_else(|| graphics::AnyResource::create_owned(
                         device,
                         resource_data.name,
                         &desc,
                         resource_data.descriptor_index,
                     ));
 
-                    compiled.resources.push(graphics::AnyResource::Owned(resource));
+                    compiled.resources.push(CompiledGraphResource { resource, owned_by_graph: true });
                 },
                 ResourceSource::Import { resource } => {
-                    compiled.resources.push(resource);
+                    compiled.resources.push(CompiledGraphResource { resource, owned_by_graph: false });
                 },  
             } 
         }

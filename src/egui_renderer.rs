@@ -184,7 +184,7 @@ impl EguiRenderer {
                     egui::TextureId::Managed(id) => {
                         context.import_with(
                             "egui_image",
-                            self.textures.get(&id).unwrap().clone(),
+                            self.textures.get(&id).unwrap(),
                             graphics::GraphResourceImportDesc {
                                 initial_access: graphics::AccessKind::FragmentShaderRead,
                                 target_access: graphics::AccessKind::FragmentShaderRead,
@@ -316,13 +316,13 @@ impl EguiRenderer {
 
         let index_buffer = context.import_with(
             "egui_index_buffer",
-            self.index_buffer.clone(),
+            &self.index_buffer,
             graphics::GraphResourceImportDesc::default(),
         );
 
         let vertex_buffer = context.import_with(
             "egui_vertex_buffer",
-            self.vertex_buffer.clone(),
+            &self.vertex_buffer,
             graphics::GraphResourceImportDesc::default(),
         );
 

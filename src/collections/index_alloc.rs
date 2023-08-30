@@ -14,14 +14,18 @@ impl IndexAllocator {
     }
 
     pub fn alloc(&self) -> u32 {
-        if let Some(free_index) = self.freed_indices.lock().unwrap().pop() {
+        let mut free_indices = self.freed_indices.lock().unwrap();
+        if let Some(free_index) = free_indices.pop() {
             free_index
         } else {
-            self.index_counter.fetch_add(1, Ordering::Relaxed)
+            self.index_counter.fetch_add(1, Ordering::SeqCst)
         }
     }
 
+    #[track_caller]
     pub fn free(&self, index: u32) {
-        self.freed_indices.lock().unwrap().push(index);
+        let mut free_indices = self.freed_indices.lock().unwrap();
+        debug_assert!(!free_indices.contains(&index)); // freeing freed index
+        free_indices.push(index);
     }
 }

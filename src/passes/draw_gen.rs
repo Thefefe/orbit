@@ -36,11 +36,7 @@ impl SceneDrawGen {
         scene: SceneGraphData,
     ) -> graphics::GraphBufferHandle {
         let pass_name = format!("{draw_commands_name}_generation");
-        // let draw_commands = context.create_transient_buffer(draw_commands_name, graphics::BufferDesc {
-        //     size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
-        //     usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
-        //     memory_location: MemoryLocation::GpuOnly,
-        // });
+        
         let draw_commands = context.create_transient(draw_commands_name, graphics::BufferDesc {
             size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
@@ -83,7 +79,7 @@ impl SceneDrawGen {
 }
 
 pub struct DepthPyramid {
-    pyramid: graphics::Image,
+    pub pyramid: graphics::Image,
     usable: bool,
     current_access: graphics::AccessKind,
 }
@@ -92,21 +88,6 @@ impl DepthPyramid {
     pub fn new(context: &graphics::Context, [width, height]: [u32; 2]) -> Self {
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
 
-        // let pyramid = graphics::RecreatableImage::new(context, "depth_pyramid".into(), graphics::ImageDesc {
-        //     ty: graphics::ImageType::Single2D,
-        //     format: vk::Format::R32_SFLOAT,
-        //     dimensions: [width, height, 1],
-        //     mip_levels,
-        //     samples: graphics::MultisampleCount::None,
-        //     usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
-        //     aspect: vk::ImageAspectFlags::COLOR,
-        //     subresource_desc: graphics::ImageSubresourceViewDesc {
-        //         mip_count: u32::MAX,
-        //         mip_descriptors: graphics::ImageDescriptorFlags::STORAGE,
-        //         ..Default::default()
-        //     },
-        //     ..Default::default()
-        // });
         let pyramid = context.create_image("depth_pyramid", &graphics::ImageDesc {
             ty: graphics::ImageType::Single2D,
             format: vk::Format::R32_SFLOAT,
@@ -144,13 +125,7 @@ impl DepthPyramid {
             return None;
         }
 
-        // let image = self.pyramid.get_current(context);
-        // Some(context.import_with(image.name.clone(), image, graphics::GraphResourceImportDesc {
-        //     initial_access: graphics::AccessKind::ComputeShaderRead,
-        //     target_access: graphics::AccessKind::ComputeShaderRead,
-        //     ..Default::default()
-        // }))
-        Some(context.import_with(self.pyramid.name.clone(), self.pyramid.clone(), graphics::GraphResourceImportDesc {
+        Some(context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
             initial_access: graphics::AccessKind::ComputeShaderRead,
             target_access: graphics::AccessKind::ComputeShaderRead,
             ..Default::default()
@@ -158,32 +133,17 @@ impl DepthPyramid {
     }
 
     pub fn update(&mut self, context: &mut graphics::Context) {
-        // let image = self.pyramid.get_current(context);
-        // let _pyramid = if self.usable {
-        //     context.import_image(image)
-        // } else {
-        //     self.usable = true;
-        //     context.import_image_with(image.name.clone(), image, graphics::GraphResourceImportDesc {
-        //         initial_access: graphics::AccessKind::None,
-        //         target_access: graphics::AccessKind::ComputeShaderRead,
-        //         ..Default::default()
-        //     })
-        // };
         let _pyramid = if self.usable {
-            context.import(self.pyramid.clone())
+            context.import(&self.pyramid)
         } else {
             self.usable = true;
-            context.import_with(self.pyramid.name.clone(), self.pyramid.clone(), graphics::GraphResourceImportDesc {
+            context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
                 initial_access: graphics::AccessKind::None,
                 target_access: graphics::AccessKind::ComputeShaderRead,
                 ..Default::default()
             })
         };
     }
-
-    // pub fn destroy(&mut self, context: &graphics::Context) {
-    //     self.pyramid.destroy(context);
-    // }
 }
 
 #[repr(transparent)]

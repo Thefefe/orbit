@@ -67,7 +67,7 @@ impl BufferRaw {
 
         let descriptor_index = if desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) {
             let index = preallocated_descriptor_index
-                .unwrap_or_else(|| device.alloc_index());
+                .unwrap_or_else(|| device.alloc_descriptor_index());
             device.write_storage_buffer_resource(index, handle);
             Some(index)
         } else {
@@ -107,36 +107,36 @@ impl BufferRaw {
 
 #[derive(Clone)]
 pub struct Buffer {
-    buffer: Option<Arc<graphics::BufferRaw>>,
-    device: Arc<graphics::Device>,
+    pub _buffer: Option<Arc<graphics::BufferRaw>>,
+    pub _device: Arc<graphics::Device>,
 }
 
 impl std::ops::Deref for Buffer {
     type Target = graphics::BufferRaw;
 
     fn deref(&self) -> &Self::Target {
-        self.buffer.as_ref().unwrap()
+        self._buffer.as_ref().unwrap()
     }
 }
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        if let Some(buffer) = Arc::into_inner(self.buffer.take().unwrap()) {
-            BufferRaw::destroy_impl(&self.device, &buffer);
+        if let Some(buffer) = Arc::into_inner(self._buffer.take().unwrap()) {
+            BufferRaw::destroy_impl(&self._device, &buffer);
         }
     }
 }
 
 impl std::fmt::Debug for Buffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.buffer.fmt(f)
+        self._buffer.fmt(f)
     }
 }
 
 impl graphics::Context {
     pub fn create_buffer(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc) -> Buffer {
         let buffer = BufferRaw::create_impl(&self.device, name.into(), desc, None);
-        Buffer { buffer: Some(Arc::new(buffer)), device: self.device.clone() }
+        Buffer { _buffer: Some(Arc::new(buffer)), _device: self.device.clone() }
     }
 
     pub fn create_buffer_init(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc, init: &[u8]) -> Buffer {
@@ -149,7 +149,7 @@ impl graphics::Context {
         let buffer = BufferRaw::create_impl(&self.device, name.into(), &desc, None);
         self.immediate_write_buffer(&buffer, init, 0);
 
-        Buffer { buffer: Some(Arc::new(buffer)), device: self.device.clone() }
+        Buffer { _buffer: Some(Arc::new(buffer)), _device: self.device.clone() }
     }
 
     pub fn immediate_write_buffer(&self, buffer: &graphics::BufferRaw, data: &[u8], offset: usize) {

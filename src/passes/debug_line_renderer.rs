@@ -255,7 +255,7 @@ impl DebugLineRenderer {
         depth_image: graphics::GraphImageHandle,
         view_projection: Mat4,
     ) {
-        let line_buffer = context.import(self.line_buffer.clone());
+        let line_buffer = context.import(&self.line_buffer);
         let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>();
         let vertex_count = self.vertex_cursor as u32;
         let pipeline = self.pipeline;

@@ -5,7 +5,7 @@ use winit::window::Window;
 
 use crate::graphics;
 
-use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, RawRenderResource, ResourceKind, BatchDependecy};
+use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, ResourceKind, BatchDependecy};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -208,7 +208,7 @@ impl Drop for Context {
         }
         record_submit_stuff.command_pool.destroy(&self.device);
         
-        for frame in self.frames.iter() {
+        for frame in self.frames.iter_mut() {
             unsafe {
                 self.device.raw.destroy_fence(frame.in_flight_fence, None);
                 self.device.raw.destroy_semaphore(frame.image_available_semaphore.handle, None);
@@ -220,22 +220,17 @@ impl Drop for Context {
             frame.command_pool.destroy(&self.device);
 
             graphics::BufferRaw::destroy_impl(&self.device, &frame.global_buffer);
-            
-            // for resource in frame.in_use_transient_resources.resources() {
-            //     resource.destroy(&self.device);
-            // }
 
-            for resource in frame.compiled_graph.resources.iter() {
-                if let graphics::AnyResource::Owned(resource) = resource {
-                    resource.destroy(&self.device);
+            for graph::CompiledGraphResource { resource, owned_by_graph } in frame.compiled_graph.resources.drain(..) {
+                if owned_by_graph || !resource.is_owned() {
+                    graphics::AnyResource::destroy(&self.device, resource);
                 }
             }
         }
         
-        for resource in self.transient_resource_cache.resources() {
-            resource.destroy(&self.device)
+        for resource in self.transient_resource_cache.drain_resources() {
+            graphics::AnyResource::destroy(&self.device, resource);
         }
-
 
         self.swapchain.destroy(&self.device);
     }
@@ -278,18 +273,18 @@ impl Context {
         self.graph.clear();
 
         assert!(self.transient_resource_cache.is_empty());
-        // std::mem::swap(&mut self.transient_resource_cache, &mut frame.in_use_transient_resources);
-        for resource in frame.compiled_graph.resources.drain(..) {
-            if let graphics::AnyResource::Owned(resource) = resource {
-                self.transient_resource_cache.insert(resource.desc(), resource);
+        for graph::CompiledGraphResource { resource, owned_by_graph } in frame.compiled_graph.resources.drain(..) {
+            if !owned_by_graph && resource.is_owned() { // swapchain image
+                continue;
             }
+            self.transient_resource_cache.insert(resource.desc(), resource);
         }
 
         let acquired_image_handle = self.graph.add_resource(graph::GraphResourceData {
             name: "swapchain_image".into(),
             
             source: graph::ResourceSource::Import {
-                resource: acquired_image.image.clone().into()
+                resource: acquired_image.image.clone().into(),
             },
             descriptor_index: None,
 
@@ -463,13 +458,14 @@ impl Context {
         let desc = graphics::AnyResourceDesc::Buffer(buffer_desc);
         let cache = self.transient_resource_cache
             .get_by_descriptor(&desc)
-            .unwrap_or_else(|| graphics::AnyResourceOwned::Buffer(graphics::BufferRaw::create_impl(
+            .unwrap_or_else(|| graphics::AnyResource::create_owned(
                 &self.device,
                 name.clone(),
-                &buffer_desc,
+                &desc,
                 None
-            )));
-        let buffer = cache.get_buffer().unwrap();
+            ));
+
+        let graphics::AnyResourceRef::Buffer(buffer) = cache.as_ref() else { unreachable!() };
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), buffer.mapped_ptr.unwrap().as_ptr(), data.len());
         }
@@ -491,19 +487,33 @@ impl Context {
         GraphHandle { resource_index, _phantom: PhantomData }
     }
 
-    pub fn create_transient<R: RawRenderResource>(
+    pub fn create_transient<R: graphics::OwnedRenderResource>(
         &mut self,
         name: impl Into<Cow<'static, str>>,
         desc: R::Desc,
     ) -> GraphHandle<R> {
         let name = name.into();
         let desc = desc.into();
-        let cache = self.transient_resource_cache.get_by_descriptor(&desc);
+        let mut cache = self.transient_resource_cache.get_by_descriptor(&desc);
         let descriptor_index = match &cache {
-            Some(cache) => cache.as_any_ref().descriptor_index(),
-            None if desc.needs_descriptor_index() => Some(self.device.alloc_index()),
+            Some(cache) => cache.as_ref().descriptor_index(),
+            None if desc.needs_descriptor_index() => Some(self.device.alloc_descriptor_index()),
             _ => None
         };
+
+        if let Some(cache) = cache.as_mut() {
+            match cache {
+                graphics::AnyResource::BufferOwned(buffer) => {
+                    buffer.name = name.clone();
+                    self.device.set_debug_name(buffer.handle, name.as_ref());
+                },
+                graphics::AnyResource::ImageOwned(image)  => {
+                    image.name = name.clone();
+                    self.device.set_debug_name(image.handle, name.as_ref());
+                },
+                _ => unimplemented!()
+            }
+        }
 
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,
@@ -520,66 +530,6 @@ impl Context {
 
         GraphHandle { resource_index, _phantom: PhantomData }
     }
-
-    // pub fn create_transient_buffer(
-    //     &mut self,
-    //     name: impl Into<Cow<'static, str>>,
-    //     buffer_desc: graphics::BufferDesc
-    // ) -> GraphHandle<graphics::BufferRaw> {
-    //     let name = name.into();
-    //     let desc = graphics::AnyResourceDesc::Buffer(buffer_desc);
-    //     let cache = self.transient_resource_cache.get_by_descriptor(&desc);
-    //     let descriptor_index = match &cache {
-    //         Some(cache) => cache.descriptor_index(),
-    //         None if buffer_desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER)
-    //             => Some(self.device.alloc_index()),
-    //         _ => None
-    //     };
-
-    //     let resource_index = self.graph.add_resource(graph::GraphResourceData {
-    //         name,
-         
-    //         source: graph::ResourceSource::Create { desc, cache },
-    //         descriptor_index,
-
-    //         initial_access: graphics::AccessKind::None,
-    //         target_access: graphics::AccessKind::None,
-    //         wait_semaphore: None,
-    //         finish_semaphore: None,
-    //         versions: vec![],
-    //     });
-
-    //     GraphHandle { resource_index, _phantom: PhantomData }
-    // }
-    
-    // pub fn create_transient_image(
-    //     &mut self,
-    //     name: impl Into<Cow<'static, str>>,
-    //     image_desc: graphics::ImageDesc
-    // ) -> GraphHandle<graphics::ImageRaw> {
-    //     let name = name.into();
-    //     let desc = graphics::AnyResourceDesc::Image(image_desc);
-    //     let cache = self.transient_resource_cache.get_by_descriptor(&desc);
-    //     let descriptor_index = match &cache {
-    //         Some(cache) => cache.descriptor_index(),
-    //         None if image_desc.usage.contains(vk::ImageUsageFlags::SAMPLED) => Some(self.device.alloc_index()),
-    //         _ => None
-    //     };
-
-    //     let resource_index = self.graph.add_resource(graph::GraphResourceData {
-    //         name,
-         
-    //         source: graph::ResourceSource::Create { desc, cache },
-    //         descriptor_index,
-    //         initial_access: graphics::AccessKind::None,
-    //         target_access: graphics::AccessKind::None,
-    //         wait_semaphore: None,
-    //         finish_semaphore: None,
-    //         versions: vec![],
-    //     });
-
-    //     GraphHandle { resource_index, _phantom: PhantomData }
-    // }
 
     pub fn add_pass(&mut self, name: impl Into<Cow<'static, str>>) -> PassBuilder {
         PassBuilder { 
@@ -612,7 +562,6 @@ impl Context {
         self.graph.compile_and_flush(
             &self.device,
             &mut frame.compiled_graph,
-            // &mut frame.in_use_transient_resources,
         );
 
         frame.graph_debug_info.batch_infos.resize(frame.compiled_graph.batches.len(), GraphBatchDebugInfo::default());
@@ -630,7 +579,7 @@ impl Context {
                 memory_barrier = vk::MemoryBarrier2::default();
                 image_barriers.clear();
                 for BatchDependecy { resoure_index, src_access, dst_access } in batch.begin_dependencies.iter().copied() {
-                    let resource = &frame.compiled_graph.resources[resoure_index].as_ref();
+                    let resource = &frame.compiled_graph.resources[resoure_index].resource.as_ref();
 
                     if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
                         memory_barrier.src_stage_mask |= src_access.stage_mask();
@@ -695,7 +644,7 @@ impl Context {
 
                 image_barriers.clear();
                 for BatchDependecy { resoure_index, src_access, dst_access } in batch.finish_dependencies.iter().copied() {
-                    if let graphics::AnyResourceRef::Image(image) = frame.compiled_graph.resources[resoure_index].as_ref() {
+                    if let graphics::AnyResourceRef::Image(image) = frame.compiled_graph.resources[resoure_index].resource.as_ref() {
                         image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
                     }
                 }
@@ -720,8 +669,8 @@ impl Context {
 
         {
             puffin::profile_scope!("leftover_resource_releases");
-            for resource in self.transient_resource_cache.resources() {
-                resource.destroy(&self.device)
+            for resource in self.transient_resource_cache.drain_resources() {
+                graphics::AnyResource::destroy(&self.device, resource);
             }
             self.transient_resource_cache.clear();
         }
@@ -760,7 +709,7 @@ impl Context {
                     .id_source([i, 1])
                     .show(ui, |ui| {
                         for (j, dependency) in batch.begin_dependencies.iter().enumerate() {
-                            let resource = &graph.resources[dependency.resoure_index].as_ref();
+                            let resource = &graph.resources[dependency.resoure_index].resource.as_ref();
                             egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 1, j]).show(ui, |ui| {
                                 ui.label(format!("src_access: {:?}", dependency.src_access));
                                 ui.label(format!("dst_access: {:?}", dependency.dst_access));
@@ -780,7 +729,7 @@ impl Context {
                     .id_source([i, 3])
                     .show(ui, |ui| {
                         for (j, dependency) in batch.finish_dependencies.iter().enumerate() {
-                            let resource = &graph.resources[dependency.resoure_index].as_ref();
+                            let resource = &graph.resources[dependency.resoure_index].resource.as_ref();
                             egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 3, j]).show(ui, |ui| {
                                 ui.label(format!("src_access: {:?}", dependency.src_access));
                                 ui.label(format!("dst_access: {:?}", dependency.dst_access));

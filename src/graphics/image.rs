@@ -318,8 +318,8 @@ impl ImageRaw {
         device.set_debug_name(view, &format!("{}_full_view", name));
 
         let mut descriptor_flags = ImageDescriptorFlags::empty();
-        let descriptor_index = if desc.usage.intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE) {
-            let index = preallocated_descriptor_index.unwrap_or_else(|| device.alloc_index());
+        let full_descriptor_index = if desc.usage.intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE) {
+            let index = preallocated_descriptor_index.unwrap_or_else(|| device.alloc_descriptor_index());
 
             if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
                 device.write_sampled_image(index, view);
@@ -368,23 +368,27 @@ impl ImageRaw {
                 let view = unsafe { device.raw.create_image_view(&image_view_create_info, None).unwrap() };
                 device.set_debug_name(view, &format!("{name}_level_{mip_level}"));
 
-                if !desc.subresource_desc.mip_descriptors.is_empty() {
-                    let descriptor_index = device.alloc_index();
+                let subresource_descriptor_index = if !desc.subresource_desc.mip_descriptors.is_empty() {
+                    let subresource_descriptor_index = device.alloc_descriptor_index();
 
                     if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::SAMPLED) |
                        desc.usage.contains(vk::ImageUsageFlags::SAMPLED)
                     {
-                        device.write_sampled_image(descriptor_index, view);
+                        device.write_sampled_image(subresource_descriptor_index, view);
                     }
 
                     if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::STORAGE) |
                        desc.usage.contains(vk::ImageUsageFlags::STORAGE)
                     {
-                        device.write_storage_image(descriptor_index, view);
+                        device.write_storage_image(subresource_descriptor_index, view);
                     }
-                }
 
-                subresource_views.push(SubresourceView { view, descriptor_index });
+                    Some(subresource_descriptor_index)
+                } else {
+                    None
+                };
+
+                subresource_views.push(SubresourceView { view, descriptor_index: subresource_descriptor_index });
             }
         }
 
@@ -408,29 +412,33 @@ impl ImageRaw {
                     let view = unsafe { device.raw.create_image_view(&image_view_create_info, None).unwrap() };
                     device.set_debug_name(view, &format!("{name}_level_{mip_level}_layer_{layer}"));
     
-                    if !desc.subresource_desc.mip_descriptors.is_empty() {
-                        let descriptor_index = device.alloc_index();
+                    let subresource_descriptor_index = if !desc.subresource_desc.layer_descrptors.is_empty() {
+                        let subresource_descriptor_index = device.alloc_descriptor_index();
     
-                        if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::SAMPLED) |
+                        if desc.subresource_desc.layer_descrptors.contains(ImageDescriptorFlags::SAMPLED) |
                            desc.usage.contains(vk::ImageUsageFlags::SAMPLED)
                         {
-                            device.write_sampled_image(descriptor_index, view);
+                            device.write_sampled_image(subresource_descriptor_index, view);
                         }
     
-                        if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::STORAGE) |
+                        if desc.subresource_desc.layer_descrptors.contains(ImageDescriptorFlags::STORAGE) |
                            desc.usage.contains(vk::ImageUsageFlags::STORAGE)
                         {
-                            device.write_storage_image(descriptor_index, view);
+                            device.write_storage_image(subresource_descriptor_index, view);
                         }
-                    }
 
-                    subresource_views.push(SubresourceView { view, descriptor_index });
+                        Some(subresource_descriptor_index)
+                    } else {
+                        None
+                    };
+
+                    subresource_views.push(SubresourceView { view, descriptor_index: subresource_descriptor_index });
                 }
             }
         }
 
         let _descriptor_index = graphics::descriptor_index_with_sampler(
-            descriptor_index.unwrap_or(0),
+            full_descriptor_index.unwrap_or(0),
             desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)
         );
 
@@ -453,6 +461,7 @@ impl ImageRaw {
 
     pub(super) fn destroy_impl(device: &graphics::Device, image: &graphics::ImageRaw) {
         puffin::profile_function!(&image.name);
+
         if !image._descriptor_flags.is_empty() {
             device.free_descriptor_index(image._descriptor_index);
         }
@@ -558,8 +567,8 @@ impl ImageRaw {
 
 #[derive(Clone)]
 pub struct Image {
-    image: Option<Arc<graphics::ImageRaw>>,
-    device: Arc<graphics::Device>,
+    pub _image: Option<Arc<graphics::ImageRaw>>,
+    pub _device: Arc<graphics::Device>,
 }
 
 impl Image {
@@ -568,11 +577,11 @@ impl Image {
             return false;
         }
 
-        let mut image = Arc::new(ImageRaw::create_impl(&self.device, self.name.clone(), desc, None));
-        std::mem::swap(self.image.as_mut().unwrap(), &mut image);
+        let mut image = Arc::new(ImageRaw::create_impl(&self._device, self.name.clone(), desc, None));
+        std::mem::swap(self._image.as_mut().unwrap(), &mut image);
 
         if let Some(image) = Arc::into_inner(image) {
-            ImageRaw::destroy_impl(&self.device, &image);
+            ImageRaw::destroy_impl(&self._device, &image);
         }
 
         true
@@ -583,28 +592,28 @@ impl std::ops::Deref for graphics::Image {
     type Target = graphics::ImageRaw;
 
     fn deref(&self) -> &Self::Target {
-        self.image.as_ref().unwrap()
+        self._image.as_ref().unwrap()
     }
 }
 
 impl Drop for graphics::Image {
     fn drop(&mut self) {
-        if let Some(image) = Arc::into_inner(self.image.take().unwrap()) {
-            ImageRaw::destroy_impl(&self.device, &image);
+        if let Some(image) = Arc::into_inner(self._image.take().unwrap()) {
+            ImageRaw::destroy_impl(&self._device, &image);
         }
     }
 }
 
 impl std::fmt::Debug for Image {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.image.fmt(f)
+        self._image.fmt(f)
     }
 }
 
 impl graphics::Context {
     pub fn create_image(&self, name: impl Into<Cow<'static, str>>, desc: &ImageDesc) -> Image {
         let image = ImageRaw::create_impl(&self.device, name.into(), desc, None);
-        Image { image: Some(Arc::new(image)), device: self.device.clone() }
+        Image { _image: Some(Arc::new(image)), _device: self.device.clone() }
     }
 
     pub fn immediate_write_image(

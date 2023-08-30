@@ -225,10 +225,10 @@ impl SceneData {
     pub fn import_to_graph(&self, context: &mut graphics::Context) -> SceneGraphData {
         SceneGraphData {
             submesh_count: self.submesh_data.len(),
-            submesh_buffer: context.import(self.submesh_buffer.clone()),
-            entity_buffer: context.import(self.entity_data_buffer.clone()),
+            submesh_buffer: context.import(&self.submesh_buffer),
+            entity_buffer: context.import(&self.entity_data_buffer),
             light_count: self.lights.len(),
-            light_data_buffer: context.import(self.light_data_buffer.clone()),
+            light_data_buffer: context.import(&self.light_data_buffer),
         }
     }
 }

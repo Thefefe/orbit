@@ -49,35 +49,6 @@ impl EguiRenderer {
                     module: fragment_shader,
                     entry,
                 }),
-                vertex_input: graphics::VertexInput {
-                    bindings: &[
-                        vk::VertexInputBindingDescription {
-                            binding: 0,
-                            stride: std::mem::size_of::<egui::epaint::Vertex>() as u32,
-                            input_rate: vk::VertexInputRate::VERTEX,
-                        }
-                    ],
-                    attributes: &[
-                        vk::VertexInputAttributeDescription {
-                            location: 0,
-                            binding: 0,
-                            format: vk::Format::R32G32_SFLOAT,
-                            offset: bytemuck::offset_of!(egui::epaint::Vertex, pos) as u32,
-                        },
-                        vk::VertexInputAttributeDescription {
-                            location: 1,
-                            binding: 0,
-                            format: vk::Format::R32G32_SFLOAT,
-                            offset: bytemuck::offset_of!(egui::epaint::Vertex, uv) as u32,
-                        },
-                        vk::VertexInputAttributeDescription {
-                            location: 2,
-                            binding: 0,
-                            format: vk::Format::R8G8B8A8_UNORM,
-                            offset: bytemuck::offset_of!(egui::epaint::Vertex, color) as u32,
-                        },
-                    ]
-                },
                 rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -113,7 +84,7 @@ impl EguiRenderer {
 
         let vertex_buffer = context.create_buffer("egui_vertex_buffer", &graphics::BufferDesc {
             size: Self::PER_FRAME_VERTEX_BYTE_SIZE * graphics::FRAME_COUNT,
-            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
 
@@ -327,7 +298,7 @@ impl EguiRenderer {
         );
 
         let index_offset = Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index();
-        let vertex_offset = Self::PER_FRAME_VERTEX_BYTE_SIZE * context.frame_index();
+        let vertex_offset = Self::MAX_VERTEX_COUNT * context.frame_index();
 
         context.add_pass("egui_draw")
             .with_dependency(target_image, graphics::AccessKind::ColorAttachmentWrite)
@@ -352,7 +323,7 @@ impl EguiRenderer {
 
                 cmd.bind_raster_pipeline(pipeline);
                 cmd.bind_index_buffer(index_buffer, index_offset as u64);
-                cmd.bind_vertex_buffer(0, vertex_buffer, vertex_offset as u64);
+                // cmd.bind_vertex_buffer(0, vertex_buffer, vertex_offset as u64);
 
                 for batch in clipped_batches.iter() {
                     cmd.set_scissor(0, &[batch.clip_rect]);
@@ -361,7 +332,9 @@ impl EguiRenderer {
 
                     cmd.build_constants()
                         .vec2(screen_size)
-                        .sampled_image(&texture);
+                        .sampled_image(&texture)
+                        .buffer(&vertex_buffer)
+                        .uint(vertex_offset as u32);
 
                     cmd.draw_indexed(batch.index_range.clone(), 0..1, batch.vertex_offset);                    
                 }

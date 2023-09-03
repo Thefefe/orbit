@@ -139,7 +139,6 @@ impl MultisampleState {
 pub struct RasterPipelineDesc<'a> {
     pub vertex_stage: ShaderStage<'a>,
     pub fragment_stage: Option<ShaderStage<'a>>,
-    pub vertex_input: VertexInput<'a>,
     pub rasterizer: RasterizerDesc,
     pub color_attachments: &'a [PipelineColorAttachment],
     pub depth_state: Option<DepthState>,
@@ -161,12 +160,8 @@ impl RasterPipeline {
             stages.push(fragment_stage.to_vk().stage(vk::ShaderStageFlags::FRAGMENT).build());
         }
 
-        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(desc.vertex_input.bindings)
-            .vertex_attribute_descriptions(desc.vertex_input.attributes);
-
-        let input_assembly =
-            vk::PipelineInputAssemblyStateCreateInfo::builder().topology(desc.rasterizer.primitive_topology);
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
+            .topology(desc.rasterizer.primitive_topology);
 
         let mut rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
             .polygon_mode(desc.rasterizer.polygon_mode)
@@ -217,11 +212,12 @@ impl RasterPipeline {
                 desc.depth_state.as_ref().map_or(vk::Format::UNDEFINED, |depth| depth.format),
             );
 
+        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
+
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
-            // .flags(vk::PipelineCreateFlags::DESCRIPTOR_BUFFER_EXT)
             .stages(&stages)
-            .vertex_input_state(&vertex_input_state)
             .input_assembly_state(&input_assembly)
+            .vertex_input_state(&vertex_input_state)
             .rasterization_state(&rasterization)
             .viewport_state(&viewport_state)
             .multisample_state(&multisample_state)

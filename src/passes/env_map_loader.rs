@@ -80,7 +80,6 @@ impl EnvironmentMapLoader {
                     module: fragment_module,
                     entry,
                 }),
-                vertex_input: graphics::VertexInput::default(),
                 rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -122,7 +121,6 @@ impl EnvironmentMapLoader {
                     module: fragment_module,
                     entry,
                 }),
-                vertex_input: graphics::VertexInput::default(),
                 rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -164,7 +162,6 @@ impl EnvironmentMapLoader {
                     module: fragment_module,
                     entry,
                 }),
-                vertex_input: graphics::VertexInput::default(),
                 rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,

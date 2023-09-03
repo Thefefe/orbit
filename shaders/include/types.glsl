@@ -104,6 +104,27 @@ struct LightData {
     float size;
 };
 
+struct EguiVertex {
+    float pos_x;
+    float pos_y;
+    float u;
+    float v;
+    u8vec4 color;
+};
+
+struct DebugLineVertex {
+    vec3   position;
+    u8vec4 color;
+};
+
+RegisterBuffer(EguiVertexBuffer, {
+    EguiVertex vertices[];
+});
+
+RegisterBuffer(DebugLineVertexBuffer, {
+    DebugLineVertex vertices[];
+});
+
 RegisterBuffer(LightBuffer, {
 	LightData lights[];
 });

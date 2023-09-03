@@ -1,15 +1,14 @@
 #version 460
 
 #include "../include/common.glsl"
+#include "../include/types.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
     vec2 screen_size;
     uint input_texture;
+    uint vertex_buffer;
+    uint vertex_offset;
 };
-
-layout(location = 0) in vec2 vPos;
-layout(location = 1) in vec2 vUv;
-layout(location = 2) in vec4 vColor;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outUV;
@@ -22,11 +21,14 @@ vec3 srgb_to_linear(vec3 srgb) {
 }
 
 void main() {
-    vec2 normal_pos = vPos / screen_size;
+    EguiVertex vertex = GetBuffer(EguiVertexBuffer, vertex_buffer).vertices[gl_VertexIndex + vertex_offset];
+    vec2 normal_pos = vec2(vertex.pos_x, vertex.pos_y) / screen_size;
     vec2 ndc_pos = 2.0 * normal_pos - 1.0;
 
     gl_Position = vec4(ndc_pos.x, -ndc_pos.y, 0.0, 1.0);
 
-    outColor = vec4(srgb_to_linear(vColor.rgb), vColor.a);
-    outUV = vUv;
+    vec4 color = vec4(vertex.color) / 255.0;
+
+    outColor = vec4(srgb_to_linear(color.rgb), color.a);
+    outUV = vec2(vertex.u, vertex.v);
 }

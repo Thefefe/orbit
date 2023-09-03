@@ -43,27 +43,6 @@ impl DebugLineRenderer {
                     module: fragment_module,
                     entry,
                 }),
-                vertex_input: graphics::VertexInput {
-                    bindings: &[vk::VertexInputBindingDescription {
-                        binding: 0,
-                        stride: std::mem::size_of::<DebugLineVertex>() as u32,
-                        input_rate: vk::VertexInputRate::VERTEX,
-                    }],
-                    attributes: &[
-                        vk::VertexInputAttributeDescription {
-                            location: 0,
-                            binding: 0,
-                            format: vk::Format::R32G32B32_SFLOAT,
-                            offset: bytemuck::offset_of!(DebugLineVertex, position) as u32,
-                        },
-                        vk::VertexInputAttributeDescription {
-                            location: 1,
-                            binding: 0,
-                            format: vk::Format::R8G8B8A8_UNORM,
-                            offset: bytemuck::offset_of!(DebugLineVertex, color) as u32,
-                        },
-                    ],
-                },
                 rasterizer: graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::LINE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -99,7 +78,7 @@ impl DebugLineRenderer {
 
         let line_buffer = context.create_buffer("debug_line_buffer", &graphics::BufferDesc {
             size: graphics::FRAME_COUNT * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>(),
-            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
 
@@ -256,7 +235,7 @@ impl DebugLineRenderer {
         view_projection: Mat4,
     ) {
         let line_buffer = context.import(&self.line_buffer);
-        let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>();
+        let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT;
         let vertex_count = self.vertex_cursor as u32;
         let pipeline = self.pipeline;
 
@@ -297,18 +276,20 @@ impl DebugLineRenderer {
 
                 cmd.begin_rendering(&rendering_info);
                 cmd.bind_raster_pipeline(pipeline);
-                cmd.bind_vertex_buffer(0, &line_buffer, buffer_offset as u64);
-
 
                 cmd.build_constants()
                     .mat4(&view_projection)
-                    .float(0.1);
+                    .float(0.1)
+                    .buffer(&line_buffer)
+                    .uint(buffer_offset as u32);
                 cmd.set_depth_test_enable(false);
                 cmd.draw(0..vertex_count as u32, 0..1);
                 
                 cmd.build_constants()
                     .mat4(&view_projection)
-                    .float(1.0);
+                    .float(1.0)
+                    .buffer(&line_buffer)
+                    .uint(buffer_offset as u32);
                 cmd.set_depth_test_enable(true);
                 cmd.draw(0..vertex_count as u32, 0..1);
 

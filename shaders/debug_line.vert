@@ -1,17 +1,20 @@
 #version 460
 
-layout(location = 0) in vec3 vertex_position;
-layout(location = 1) in vec4 vertex_color;
+#include "include/common.glsl"
+#include "include/types.glsl"
 
 layout(location = 0) out vec4 out_color;
 
 layout(push_constant) uniform PushConstants {
     mat4 view_projection;
     float multiplier;
+    uint vertex_buffer;
+    uint vertex_offset;
 };
 
 void main() {
-    vec4 position = view_projection * vec4(vertex_position, 1.0);
+    DebugLineVertex vertex = GetBuffer(DebugLineVertexBuffer, vertex_buffer).vertices[gl_VertexIndex + vertex_offset];
+    vec4 position = view_projection * vec4(vertex.position, 1.0);
     gl_Position = position;
-    out_color = vertex_color;
+    out_color = vec4(vertex.color) / 255.0;
 }

@@ -236,6 +236,12 @@ impl Drop for Context {
             graphics::AnyResource::destroy(&self.device, resource);
         }
 
+        for shader_module in self.shader_modules.values() {
+            unsafe {
+                self.device.raw.destroy_shader_module(*shader_module, None);
+            }
+        }
+
         self.swapchain.destroy(&self.device);
     }
 }

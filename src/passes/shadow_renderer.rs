@@ -8,7 +8,6 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
 use crate::{
     graphics,
     math,
-    utils,
     assets::AssetGraphData,
     scene::{SceneGraphData, GpuDrawCommand},
     App,
@@ -148,17 +147,12 @@ pub struct ShadowMapRenderer {
 }
 
 impl ShadowMapRenderer {
-    pub fn new(context: &graphics::Context) -> Self {
-        let pipeline = {
-            let vertex_shader = utils::load_spv("shaders/shadow.vert.spv").unwrap();
-            let fragment_shader = utils::load_spv("shaders/shadow.frag.spv").unwrap();
-
-            let vertex_module = context.create_shader_module(&vertex_shader, "shadow_vertex_shader");
-            let fragment_module = context.create_shader_module(&fragment_shader, "shadow_fragment_shader");
-            
-            let pipeline_desc = graphics::RasterPipelineDesc::builder()
-                .vertex_module(vertex_module)
-                .fragment_module(Some(fragment_module))
+    pub fn new(context: &mut graphics::Context) -> Self {
+        let pipeline = context.create_raster_pipeline(
+            "shadowmap_renderer_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/shadow.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     depth_clamp: true,
                     ..Default::default()
@@ -169,15 +163,8 @@ impl ShadowMapRenderer {
                     test: graphics::PipelineState::Static(true),
                     write: true,
                     compare: vk::CompareOp::LESS,
-                }));
-
-            let pipeline = context.create_raster_pipeline("shadowmap_renderer_pipeline", &pipeline_desc);
-
-            context.destroy_shader_module(vertex_module);
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
+                }))
+        );
 
         Self { pipeline, settings: Default::default() }
     }

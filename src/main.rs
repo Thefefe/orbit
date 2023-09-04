@@ -231,7 +231,7 @@ impl App {
     pub const MULTISAMPLING: graphics::MultisampleCount = graphics::MultisampleCount::X4;
 
     fn new(
-        context: &graphics::Context,
+        context: &mut graphics::Context,
         gltf_path: Option<std::path::PathBuf>,
         env_map_path: Option<std::path::PathBuf>
     ) -> Self {
@@ -766,9 +766,9 @@ fn main() {
 
     let egui_ctx = egui::Context::default();
     let mut egui_state = egui_winit::State::new(&event_loop);
-    let mut egui_renderer = EguiRenderer::new(&context);
+    let mut egui_renderer = EguiRenderer::new(&mut context);
 
-    let mut app = App::new(&context, args.scene, args.envmap);
+    let mut app = App::new(&mut context, args.scene, args.envmap);
 
     event_loop.run(move |event, _target, control_flow| {
         if let Event::WindowEvent { event, .. } = &event {

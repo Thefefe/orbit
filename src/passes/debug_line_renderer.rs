@@ -4,7 +4,7 @@ use ash::vk;
 use glam::{Vec3A, Vec4, vec3, Vec3, Mat4};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, App, utils};
+use crate::{graphics, App};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -24,17 +24,12 @@ impl DebugLineRenderer {
     pub const MAX_VERTEX_COUNT: usize = 1_000_000;
     const CIRCLE_LINE_SEGMENTS: usize = 24;
 
-    pub fn new(context: &graphics::Context) -> Self {
-        let pipeline = {
-            let vertex_shader = utils::load_spv("shaders/debug_line.vert.spv").unwrap();
-            let fragment_shader = utils::load_spv("shaders/debug_line.frag.spv").unwrap();
-
-            let vertex_module = context.create_shader_module(&vertex_shader, "debug_line_vertex_shader");
-            let fragment_module = context.create_shader_module(&fragment_shader, "debug_line_fragment_shader");
-
-            let pipeline_desc = graphics::RasterPipelineDesc::builder()
-                .vertex_module(vertex_module)
-                .fragment_module(Some(fragment_module))
+    pub fn new(context: &mut graphics::Context) -> Self {
+        let pipeline = context.create_raster_pipeline(
+            "basic_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/debug_line.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/debug_line.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::LINE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -56,15 +51,8 @@ impl DebugLineRenderer {
                 .multisample_state(graphics::MultisampleState {
                     sample_count: App::MULTISAMPLING,
                     alpha_to_coverage: false
-                });
-
-            let pipeline = context.create_raster_pipeline("basic_pipeline", &pipeline_desc);
-
-            context.destroy_shader_module(vertex_module);
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
+                })
+        );
 
         let line_buffer = context.create_buffer("debug_line_buffer", &graphics::BufferDesc {
             size: graphics::FRAME_COUNT * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>(),

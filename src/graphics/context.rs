@@ -1,4 +1,4 @@
-use std::{sync::{Mutex, Arc}, borrow::Cow, time::Instant, marker::PhantomData};
+use std::{sync::{Mutex, Arc}, borrow::Cow, time::Instant, marker::PhantomData, collections::HashMap};
 
 use ash::vk;
 use winit::window::Window;
@@ -48,6 +48,8 @@ pub struct Context {
 
     pub device: Arc<graphics::Device>,
     pub swapchain: graphics::Swapchain,
+
+    pub shader_modules: HashMap<graphics::ShaderSource, vk::ShaderModule>,
 
     pub graph: RenderGraph,
     transient_resource_cache: TransientResourceCache,
@@ -156,6 +158,8 @@ impl Context {
             device,
             swapchain,
             
+            shader_modules: HashMap::new(),
+
             graph: RenderGraph::new(),
             transient_resource_cache: TransientResourceCache::new(),
             

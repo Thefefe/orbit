@@ -1,4 +1,6 @@
-use crate::graphics;
+use std::{path::Path, borrow::Cow};
+
+use crate::{graphics, utils};
 
 use ash::vk;
 
@@ -11,6 +13,23 @@ pub enum PipelineState<T> {
 impl<T: Default> Default for PipelineState<T> {
     fn default() -> Self {
         PipelineState::Static(T::default())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ShaderSource {
+    Spv(Cow<'static, Path>),
+}
+
+impl ShaderSource {
+    pub fn spv(p: &'static str) -> Self {
+        Self::Spv(Cow::Borrowed(p.as_ref()))
+    }
+
+    pub fn name(&self) -> Cow<str> {
+        match self {
+            ShaderSource::Spv(spv) => spv.file_name().map(|c| c.to_string_lossy()).unwrap(),
+        }
     }
 }
 
@@ -140,10 +159,10 @@ impl MultisampleState {
 
 const MAX_COLOR_ATTACHMENT_COUNT: usize = 2;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RasterPipelineDesc {
-    pub vertex_module: vk::ShaderModule,
-    pub fragment_module: Option<vk::ShaderModule>,
+    pub vertex_source: Option<ShaderSource>,
+    pub fragment_source: Option<ShaderSource>,
     pub rasterizer: RasterizerDesc,
     pub depth_bias: PipelineState<Option<DepthBias>>,
     pub color_attachment_count: usize,
@@ -158,7 +177,7 @@ impl RasterPipelineDesc {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RasterPipelineDescBuilder {
     desc: RasterPipelineDesc,
 }
@@ -172,13 +191,13 @@ impl std::ops::Deref for RasterPipelineDescBuilder {
 }
 
 impl RasterPipelineDescBuilder {
-    pub fn vertex_module(mut self, module: vk::ShaderModule) -> Self {
-        self.desc.vertex_module = module;
+    pub fn vertex_shader(mut self, source: ShaderSource) -> Self {
+        self.desc.vertex_source = Some(source);
         self
     }
 
-    pub fn fragment_module(mut self, module: Option<vk::ShaderModule>) -> Self {
-        self.desc.fragment_module = module;
+    pub fn fragment_shader(mut self, module: ShaderSource) -> Self {
+        self.desc.fragment_source = Some(module);
         self
     }
 
@@ -225,25 +244,55 @@ impl RasterPipelineDescBuilder {
     }
 }
 
-impl RasterPipeline {
-    pub fn create_impl(
-        device: &graphics::Device,
-        name: &str,
-        desc: &RasterPipelineDesc,
-    ) -> RasterPipeline {
-        let mut stages = vec![
-            vk::PipelineShaderStageCreateInfo::builder()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(desc.vertex_module)
-                .name(cstr::cstr!("main"))
-                .build(),
-        ];
+pub fn create_shader_module(device: &graphics::Device, spv: &[u32], name: &str) -> vk::ShaderModule {
+    let create_info = vk::ShaderModuleCreateInfo::builder().code(spv);
+    let handle = unsafe { device.raw.create_shader_module(&create_info, None).unwrap() };
+    device.set_debug_name(handle, name);
+    handle
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ComputePipeline {
+    pub handle: vk::Pipeline,
+}
+
+pub trait Pipeline {
+    fn handle(&self) -> vk::Pipeline;
+}
+
+impl Pipeline for RasterPipeline {
+    fn handle(&self) -> vk::Pipeline {
+        self.handle
+    }
+}
+
+impl Pipeline for ComputePipeline {
+    fn handle(&self) -> vk::Pipeline {
+        self.handle
+    }
+}
+
+impl graphics::Context {
+    pub fn create_raster_pipeline(&mut self, name: &str, desc: &RasterPipelineDesc) -> RasterPipeline {
+        let mut stages = vec![];
         let mut dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
 
-        if let Some(fragment_module) = desc.fragment_module {
+        if let Some(vertex_source) = &desc.vertex_source {
+            let module = self.get_shader_module(vertex_source);
+
+            stages.push(vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(module)
+                .name(cstr::cstr!("main"))
+                .build());
+        }
+
+        if let Some(fragment_source) = &desc.fragment_source {
+            let module = self.get_shader_module(fragment_source);
+
             stages.push(vk::PipelineShaderStageCreateInfo::builder()
                 .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment_module)
+                .module(module)
                 .name(cstr::cstr!("main"))
                 .build());
         }
@@ -324,11 +373,11 @@ impl RasterPipeline {
             .color_blend_state(&color_blend_state)
             .depth_stencil_state(&depth_stencil_state)
             .dynamic_state(&dynamic_state)
-            .layout(device.pipeline_layout)
+            .layout(self.device.pipeline_layout)
             .push_next(&mut rendering_info);
 
         let handle = unsafe {
-            device.raw
+            self.device.raw
                 .create_graphics_pipelines(
                     vk::PipelineCache::null(),
                     std::slice::from_ref(&pipeline_create_info),
@@ -337,30 +386,14 @@ impl RasterPipeline {
                 .unwrap()[0]
         };
 
-        device.set_debug_name(handle, name);
+        self.device.set_debug_name(handle, name);
 
         RasterPipeline { handle }
     }
-}
 
-pub fn create_shader_module(device: &graphics::Device, spv: &[u32], name: &str) -> vk::ShaderModule {
-    let create_info = vk::ShaderModuleCreateInfo::builder().code(spv);
-    let handle = unsafe { device.raw.create_shader_module(&create_info, None).unwrap() };
-    device.set_debug_name(handle, name);
-    handle
-}
+    pub fn create_compute_pipeline(&mut self, name: &str, shader: ShaderSource) -> ComputePipeline {
+        let module = self.get_shader_module(&shader);
 
-#[derive(Debug, Clone, Copy)]
-pub struct ComputePipeline {
-    pub handle: vk::Pipeline,
-}
-
-impl ComputePipeline {
-    pub fn create_impl(
-        device: &graphics::Device,
-        name: &str,
-        module: vk::ShaderModule,
-    ) -> ComputePipeline {
         let stage = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(module)
@@ -368,47 +401,34 @@ impl ComputePipeline {
             .build();
         let create_info = vk::ComputePipelineCreateInfo::builder()
             .stage(stage)
-            .layout(device.pipeline_layout);
+            .layout(self.device.pipeline_layout);
 
         let handle = unsafe {
-            device.raw.create_compute_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&create_info), None)
+            self.device.raw.create_compute_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&create_info), None)
                 .unwrap()[0]
         };
 
-        device.set_debug_name(handle, name);
+        self.device.set_debug_name(handle, name);
 
-        Self { handle }
-    }
-}
-
-pub trait Pipeline {
-    fn handle(&self) -> vk::Pipeline;
-}
-
-impl Pipeline for RasterPipeline {
-    fn handle(&self) -> vk::Pipeline {
-        self.handle
-    }
-}
-
-impl Pipeline for ComputePipeline {
-    fn handle(&self) -> vk::Pipeline {
-        self.handle
-    }
-}
-
-impl graphics::Context {
-    pub fn create_raster_pipeline(&self, name: &str, desc: &RasterPipelineDesc) -> RasterPipeline {
-        RasterPipeline::create_impl(&self.device, name, desc)
-    }
-
-    pub fn create_compute_pipeline(&self, name: &str, shader: vk::ShaderModule) -> ComputePipeline {
-        ComputePipeline::create_impl(&self.device, name, shader)
+        ComputePipeline { handle }
     }
 
     pub fn destroy_pipeline(&self, pipeline: &impl Pipeline) {
         unsafe {
             self.device.raw.destroy_pipeline(pipeline.handle(), None)
+        }
+    }
+
+    fn get_shader_module(&mut self, source: &ShaderSource) -> vk::ShaderModule {
+        if let Some(module) = self.shader_modules.get(source).copied() {
+            module
+        } else {
+            let spv = utils::load_spv("shaders/shadow.vert.spv").unwrap();
+            let create_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
+            let handle = unsafe { self.device.raw.create_shader_module(&create_info, None).unwrap() };
+            self.device.set_debug_name(handle, &source.name());
+            self.shader_modules.insert(source.clone(), handle);
+            handle
         }
     }
 

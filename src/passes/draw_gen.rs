@@ -4,20 +4,18 @@ use ash::vk;
 use glam::Mat4;
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, utils, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
+use crate::{graphics, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
 
 pub struct SceneDrawGen {
     pipeline: graphics::ComputePipeline,
 }
 
 impl SceneDrawGen {
-    pub fn new(context: &graphics::Context) -> Self {
-        let spv = utils::load_spv("shaders/scene_draw_gen.comp.spv").unwrap();
-        let module = context.create_shader_module(&spv, "scene_draw_gen_module"); 
-
-        let pipeline = context.create_compute_pipeline("scene_draw_gen_pipeline", module);
-
-        context.destroy_shader_module(module);
+    pub fn new(context: &mut graphics::Context) -> Self {
+        let pipeline = context.create_compute_pipeline(
+            "scene_draw_gen_pipeline",
+            graphics::ShaderSource::spv("shaders/scene_draw_gen.comp.spv")
+        );
 
         Self { pipeline }
     }

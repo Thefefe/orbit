@@ -1,7 +1,7 @@
 use ash::vk;
 use glam::{Mat4, Vec3};
 
-use crate::{graphics, utils, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App};
+use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App};
 
 use super::shadow_renderer::DirectionalLightGraphData;
 
@@ -23,17 +23,12 @@ pub struct ForwardRenderer {
 }
 
 impl ForwardRenderer {
-    pub fn new(context: &graphics::Context) -> Self {
-        let forward_pipeline = {
-            let vertex_shader = utils::load_spv("shaders/forward.vert.spv").unwrap();
-            let fragment_shader = utils::load_spv("shaders/forward.frag.spv").unwrap();
-
-            let vertex_module = context.create_shader_module(&vertex_shader, "forward_vertex_shader");
-            let fragment_module = context.create_shader_module(&fragment_shader, "forward_fragment_shader");
-
-            let pipeline_desc = graphics::RasterPipelineDesc::builder()
-                .vertex_module(vertex_module)
-                .fragment_module(Some(fragment_module))
+    pub fn new(context: &mut graphics::Context) -> Self {
+        let forward_pipeline = context.create_raster_pipeline(
+            "forward_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/forward.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/forward.frag.spv"))
                 .color_attachments(&[graphics::PipelineColorAttachment {
                     format: App::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
@@ -48,30 +43,15 @@ impl ForwardRenderer {
                 .multisample_state(graphics::MultisampleState {
                     sample_count: App::MULTISAMPLING,
                     alpha_to_coverage: true
-                });
-
-
-            let pipeline = context.create_raster_pipeline("forward_pipeline", &pipeline_desc);
-
-            context.destroy_shader_module(vertex_module);
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
+                })
+        );
 
         
-        let skybox_pipeline = {
-            let vertex_shader = utils::load_spv("shaders/unit_cube.vert.spv").unwrap();
-            let fragment_shader = utils::load_spv("shaders/skybox.frag.spv").unwrap();
-
-            let vertex_module = context
-                .create_shader_module(&vertex_shader, "unit_cube_vertex_shader");
-            let fragment_module = context
-                .create_shader_module(&fragment_shader, "skybox_fragment_shader");
-
-            let pipeline_desc = graphics::RasterPipelineDesc::builder()
-                .vertex_module(vertex_module)
-                .fragment_module(Some(fragment_module))
+        let skybox_pipeline = context.create_raster_pipeline(
+            "skybox_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/skybox.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     front_face: vk::FrontFace::CLOCKWISE,
                     ..Default::default()
@@ -90,27 +70,15 @@ impl ForwardRenderer {
                 .multisample_state(graphics::MultisampleState {
                     sample_count: App::MULTISAMPLING,
                     alpha_to_coverage: true
-                });
-
-            let pipeline = context.create_raster_pipeline("skybox_pipeline", &pipeline_desc);
-
-            context.destroy_shader_module(vertex_module);
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
+                })
+        );
 
         
-        let brdf_integration_pipeline = {
-            let vertex_shader = utils::load_spv("shaders/blit.vert.spv").unwrap();
-            let fragment_shader = utils::load_spv("shaders/brdf_integration.frag.spv").unwrap();
-
-            let vertex_module = context.create_shader_module(&vertex_shader, "blit_vertex_shader");
-            let fragment_module = context.create_shader_module(&fragment_shader, "brdf_integration_fragment_shader");
-
-            let pipeline_desc = graphics::RasterPipelineDesc::builder()
-                .vertex_module(vertex_module)
-                .fragment_module(Some(fragment_module))
+        let brdf_integration_pipeline = context.create_raster_pipeline(
+            "brdf_integration_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/blit.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/brdf_integration.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
@@ -125,15 +93,8 @@ impl ForwardRenderer {
                     test: graphics::PipelineState::Static(true),
                     write: false,
                     compare: vk::CompareOp::GREATER,
-                }));
-
-            let pipeline = context.create_raster_pipeline("brdf_integration_pipeline", &pipeline_desc);
-
-            context.destroy_shader_module(vertex_module);
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
+                }))
+        );
 
         let brdf_integration_map = context.create_image("brdf_integration_map", &graphics::ImageDesc {
             ty: graphics::ImageType::Single2D,

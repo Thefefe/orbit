@@ -1,6 +1,6 @@
 use std::{ops::Range, collections::HashMap};
 
-use crate::{graphics::{self}, utils::load_spv};
+use crate::graphics;
 use ash::vk;
 use gpu_allocator::MemoryLocation;
 
@@ -26,21 +26,12 @@ impl EguiRenderer {
     const PER_FRAME_VERTEX_BYTE_SIZE: usize = Self::MAX_VERTEX_COUNT * std::mem::size_of::<egui::epaint::Vertex>();
     const PER_FRAME_INDEX_BYTE_SIZE: usize = Self::MAX_INDEX_COUNT * std::mem::size_of::<u32>();
 
-    pub fn new(context: &graphics::Context) -> Self {
-        let pipeline = {
-            let (vertex_module, fragment_module) = {
-                let vertex_spv = load_spv("shaders/egui/egui.vert.spv").expect("failed to load shader");
-                let fragment_spv = load_spv("shaders/egui/egui.frag.spv").expect("failed to load shader");
-
-                (
-                    context.create_shader_module(&vertex_spv, "egui_vertex_shader"),
-                    context.create_shader_module(&fragment_spv, "egui_fragment_shader"),
-                )
-            };
-            
-            let pipeline_desc = graphics::RasterPipelineDesc::builder()
-                .vertex_module(vertex_module)
-                .fragment_module(Some(fragment_module))
+    pub fn new(context: &mut graphics::Context) -> Self {
+        let pipeline = context.create_raster_pipeline(
+            "egui_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/egui/egui.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/egui/egui.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()
@@ -57,15 +48,8 @@ impl EguiRenderer {
                         
                     }),
                     ..Default::default()
-                }]);
-
-            let pipeline = context.create_raster_pipeline("egui_pipeline", &pipeline_desc);
-
-            context.destroy_shader_module(vertex_module);
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
+                }])
+        );
 
         let vertex_buffer = context.create_buffer("egui_vertex_buffer", &graphics::BufferDesc {
             size: Self::PER_FRAME_VERTEX_BYTE_SIZE * graphics::FRAME_COUNT,

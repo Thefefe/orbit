@@ -1,40 +1,28 @@
 use ash::vk;
 
-use crate::{graphics, utils};
+use crate::graphics;
 
 pub struct ScreenPostProcess {
     pipeline: graphics::RasterPipeline,
 }
 
 impl ScreenPostProcess {
-    pub fn new(context: &graphics::Context) -> Self {
-        let pipeline = {
-            let vertex_shader = utils::load_spv("shaders/blit.vert.spv").unwrap();
-            let fragment_shader = utils::load_spv("shaders/blit.frag.spv").unwrap();
-
-            let vertex_module = context.create_shader_module(&vertex_shader, "blit_vertex_shader");
-            let fragment_module = context.create_shader_module(&fragment_shader, "blit_fragment_shader");
-            
-            let pipeline_desc = graphics::RasterPipelineDesc::builder()
-                .vertex_module(vertex_module)
-                .fragment_module(Some(fragment_module))
-                .rasterizer(graphics::RasterizerDesc {
-                    cull_mode: vk::CullModeFlags::NONE,
-                    ..Default::default()
-                })
-                .color_attachments(&[graphics::PipelineColorAttachment {
-                    format: context.swapchain.format(),
-                    color_mask: vk::ColorComponentFlags::RGBA,
-                    color_blend: None,
-                }]);
-
-            let pipeline = context.create_raster_pipeline("blit_pipeline", &pipeline_desc);
-
-            context.destroy_shader_module(vertex_module);
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
+    pub fn new(context: &mut graphics::Context) -> Self {
+        let pipeline = context.create_raster_pipeline(
+            "blit_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+            .vertex_shader(graphics::ShaderSource::spv("shaders/blit.vert.spv"))
+            .fragment_shader(graphics::ShaderSource::spv("shaders/blit.frag.spv"))
+            .rasterizer(graphics::RasterizerDesc {
+                cull_mode: vk::CullModeFlags::NONE,
+                ..Default::default()
+            })
+            .color_attachments(&[graphics::PipelineColorAttachment {
+                format: context.swapchain.format(),
+                color_mask: vk::ColorComponentFlags::RGBA,
+                color_blend: None,
+            }]),
+        );
 
         Self { pipeline }
     }

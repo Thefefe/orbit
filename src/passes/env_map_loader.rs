@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use ash::vk;
 use glam::{vec3, Mat4};
 
-use crate::{graphics, utils, gltf_loader};
+use crate::{graphics, gltf_loader};
 
 #[derive(Clone, Copy)]
 pub struct EnvironmentMapView<'a> {
@@ -57,74 +57,60 @@ impl EnvironmentMapLoader {
     const PREFILTERD_SIZE: u32 = 512;
     const PREFILTERED_MIP_LEVELS: u32 = 5;
 
-    pub fn new(context: &graphics::Context) -> Self {
-        let vertex_shader = utils::load_spv("shaders/unit_cube.vert.spv").unwrap();
-        let vertex_module = context
-            .create_shader_module(&vertex_shader, "equirectangular_cube_map_vertex_shader");
+    pub fn new(context: &mut graphics::Context) -> Self {
+        let equirectangular_to_cube_pipeline = context.create_raster_pipeline(
+            "equirectangular_to_cube_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/equirectangular_cube_map.frag.spv"))
+                .rasterizer(graphics::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_clamp: false,
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: Self::FORMAT,
+                    ..Default::default()
+                }])
+        );
 
-        let pipeline_desc = graphics::RasterPipelineDesc::builder()
-            .vertex_module(vertex_module)
-            .rasterizer(graphics::RasterizerDesc {
-                primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                polygon_mode: vk::PolygonMode::FILL,
-                front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                cull_mode: vk::CullModeFlags::NONE,
-                depth_clamp: false,
-            })
-            .color_attachments(&[graphics::PipelineColorAttachment {
-                format: Self::FORMAT,
-                ..Default::default()
-            }]);
+        let cube_map_convolution_pipeline = context.create_raster_pipeline(
+            "cubemap_convolution_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/cubemap_convolution.frag.spv"))
+                .rasterizer(graphics::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_clamp: false,
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: Self::FORMAT,
+                    ..Default::default()
+                }])
+        );
 
-        let equirectangular_to_cube_pipeline = {
-            let fragment_shader = utils::load_spv("shaders/equirectangular_cube_map.frag.spv").unwrap();
-
-            let fragment_module = context
-                .create_shader_module(&fragment_shader, "equirectangular_cube_map_fragment_shader");
-
-            let pipeline = context.create_raster_pipeline(
-                "equirectangular_to_cube_pipeline",
-                &pipeline_desc.fragment_module(Some(fragment_module))
-            );
-
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
-
-        let cube_map_convolution_pipeline = {
-            let fragment_shader = utils::load_spv("shaders/cubemap_convolution.frag.spv").unwrap();
-
-            let fragment_module = context
-                .create_shader_module(&fragment_shader, "cubemap_convolution_fragment_shader");
-
-            let pipeline = context.create_raster_pipeline(
-                "cubemap_convolution_pipeline",
-                &pipeline_desc.fragment_module(Some(fragment_module))
-            );
-            
-            context.destroy_shader_module(fragment_module);
-            
-            pipeline
-        };
-
-        let cube_map_prefilter_pipeline = {
-            let fragment_shader = utils::load_spv("shaders/environmental_map_prefilter.frag.spv").unwrap();
-
-            let fragment_module = context
-                .create_shader_module(&fragment_shader, "cubemap_convolution_fragment_shader");
-
-            let pipeline = context.create_raster_pipeline(
-                "cubemap_convolution_pipeline",
-                &pipeline_desc.fragment_module(Some(fragment_module))
-            );
-
-            context.destroy_shader_module(fragment_module);
-
-            pipeline
-        };
-
-        context.destroy_shader_module(vertex_module);
+        let cube_map_prefilter_pipeline = context.create_raster_pipeline(
+            "cubemap_convolution_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/environmental_map_prefilter.frag.spv"))
+                .rasterizer(graphics::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_clamp: false,
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: Self::FORMAT,
+                    ..Default::default()
+                }])
+        );
 
         Self { equirectangular_to_cube_pipeline, cube_map_convolution_pipeline, cube_map_prefilter_pipeline  }
     }

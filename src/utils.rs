@@ -1,4 +1,4 @@
-use std::{cell::Cell, sync::MutexGuard, ops::RangeBounds};
+use std::{cell::Cell, sync::MutexGuard, ops::RangeBounds, path::Path};
 
 pub fn div_ceil(lhs: usize, rhs: usize) -> usize {
     let d = lhs / rhs;
@@ -14,7 +14,7 @@ pub fn aligned_size(size: usize, align: usize) -> usize {
     div_ceil(size, align) * align
 }
 
-pub fn load_spv(path: &str) -> std::io::Result<Vec<u32>> {
+pub fn load_spv(path: impl AsRef<Path>) -> std::io::Result<Vec<u32>> {
     let mut file = std::fs::File::open(path)?;
     ash::util::read_spv(&mut file)
 }

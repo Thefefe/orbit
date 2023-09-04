@@ -276,7 +276,7 @@ impl graphics::Context {
     pub fn create_raster_pipeline(&mut self, name: &str, desc: &RasterPipelineDesc) -> RasterPipeline {
         let mut stages = vec![];
         let mut dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-
+        
         if let Some(vertex_source) = &desc.vertex_source {
             let module = self.get_shader_module(vertex_source);
 
@@ -423,12 +423,17 @@ impl graphics::Context {
         if let Some(module) = self.shader_modules.get(source).copied() {
             module
         } else {
-            let spv = utils::load_spv("shaders/shadow.vert.spv").unwrap();
-            let create_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
-            let handle = unsafe { self.device.raw.create_shader_module(&create_info, None).unwrap() };
-            self.device.set_debug_name(handle, &source.name());
-            self.shader_modules.insert(source.clone(), handle);
-            handle
+            match source {
+                ShaderSource::Spv(path) => {
+                    let name = path.file_name().map(|c| c.to_string_lossy()).unwrap();
+                    let spv = utils::load_spv(path).unwrap();
+                    let create_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
+                    let handle = unsafe { self.device.raw.create_shader_module(&create_info, None).unwrap() };
+                    self.device.set_debug_name(handle, &name);
+                    self.shader_modules.insert(source.clone(), handle);
+                    handle
+                },
+            }
         }
     }
 

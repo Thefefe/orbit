@@ -1,29 +1,22 @@
 use crate::graphics;
 
-use std::ffi::CStr;
 use ash::vk;
+
+#[derive(Debug, Clone, Copy)]
+pub enum PipelineState<T> {
+    Static(T),
+    Dynamic,
+}
+
+impl<T: Default> Default for PipelineState<T> {
+    fn default() -> Self {
+        PipelineState::Static(T::default())
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct RasterPipeline {
     pub handle: vk::Pipeline,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ShaderStage<'a> {
-    pub module: vk::ShaderModule,
-    pub entry: &'a CStr,
-}
-
-impl<'a> ShaderStage<'a> {
-    fn to_vk(&self) -> vk::PipelineShaderStageCreateInfoBuilder<'a> {
-        vk::PipelineShaderStageCreateInfo::builder().module(self.module).name(self.entry)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct VertexInput<'a> {
-    pub bindings: &'a [vk::VertexInputBindingDescription],
-    pub attributes: &'a [vk::VertexInputAttributeDescription],
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -33,15 +26,25 @@ pub struct DepthBias {
     pub slope_factor: f32,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct RasterizerDesc {
     pub primitive_topology: vk::PrimitiveTopology,
     pub polygon_mode: vk::PolygonMode,
-    pub line_width: f32,
     pub front_face: vk::FrontFace,
     pub cull_mode: vk::CullModeFlags,
-    pub depth_bias: Option<DepthBias>,
     pub depth_clamp: bool,
+}
+
+impl Default for RasterizerDesc {
+    fn default() -> Self {
+        Self {
+            primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+            polygon_mode: vk::PolygonMode::FILL,
+            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            cull_mode: vk::CullModeFlags::BACK,
+            depth_clamp: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -96,7 +99,7 @@ impl PipelineColorAttachment {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DepthState {
     pub format: vk::Format,
-    pub test: bool,
+    pub test: PipelineState<bool>,
     pub write: bool,
     pub compare: vk::CompareOp,
 }
@@ -135,15 +138,91 @@ impl MultisampleState {
     }
 }
 
+const MAX_COLOR_ATTACHMENT_COUNT: usize = 2;
+
 #[derive(Debug, Clone, Copy, Default)]
-pub struct RasterPipelineDesc<'a> {
-    pub vertex_stage: ShaderStage<'a>,
-    pub fragment_stage: Option<ShaderStage<'a>>,
+pub struct RasterPipelineDesc {
+    pub vertex_module: vk::ShaderModule,
+    pub fragment_module: Option<vk::ShaderModule>,
     pub rasterizer: RasterizerDesc,
-    pub color_attachments: &'a [PipelineColorAttachment],
+    pub depth_bias: PipelineState<Option<DepthBias>>,
+    pub color_attachment_count: usize,
+    pub color_attachments: [PipelineColorAttachment; 2],
     pub depth_state: Option<DepthState>,
     pub multisample_state: MultisampleState,
-    pub dynamic_states: &'a [vk::DynamicState],
+}
+
+impl RasterPipelineDesc {
+    pub fn builder() -> RasterPipelineDescBuilder {
+        RasterPipelineDescBuilder { desc: Self::default() }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RasterPipelineDescBuilder {
+    desc: RasterPipelineDesc,
+}
+
+impl std::ops::Deref for RasterPipelineDescBuilder {
+    type Target = RasterPipelineDesc;
+
+    fn deref(&self) -> &Self::Target {
+        &self.desc
+    }
+}
+
+impl RasterPipelineDescBuilder {
+    pub fn vertex_module(mut self, module: vk::ShaderModule) -> Self {
+        self.desc.vertex_module = module;
+        self
+    }
+
+    pub fn fragment_module(mut self, module: Option<vk::ShaderModule>) -> Self {
+        self.desc.fragment_module = module;
+        self
+    }
+
+    pub fn rasterizer(mut self, rasterizer: RasterizerDesc) -> Self {
+        self.desc.rasterizer = rasterizer;
+        self
+    }
+
+    pub fn depth_bias_static(mut self, depth_bias: Option<DepthBias>) -> Self {
+        self.desc.depth_bias = PipelineState::Static(depth_bias);
+        self
+    }
+
+    pub fn depth_bias_dynamic(mut self) -> Self {
+        self.desc.depth_bias = PipelineState::Dynamic;
+        self
+    }
+
+    pub fn color_attachments(mut self, attachments: &[PipelineColorAttachment]) -> Self {
+        assert!(attachments.len() <= MAX_COLOR_ATTACHMENT_COUNT);
+        self.desc.color_attachment_count = attachments.len();
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                attachments.as_ptr(),
+                self.desc.color_attachments.as_mut_ptr(),
+                attachments.len()
+            );
+        }
+        self
+    }
+
+    pub fn depth_state(mut self, depth_state: Option<DepthState>) -> Self {
+        self.desc.depth_state = depth_state;
+        self
+    }
+
+    pub fn multisample_state(mut self, multisample_state: MultisampleState) -> Self {
+        self.desc.multisample_state = multisample_state;
+        self
+    }
+
+    pub fn build(self) -> RasterPipelineDesc {
+        self.desc
+    }
 }
 
 impl RasterPipeline {
@@ -153,11 +232,20 @@ impl RasterPipeline {
         desc: &RasterPipelineDesc,
     ) -> RasterPipeline {
         let mut stages = vec![
-            desc.vertex_stage.to_vk().stage(vk::ShaderStageFlags::VERTEX).build(),
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(desc.vertex_module)
+                .name(cstr::cstr!("main"))
+                .build(),
         ];
+        let mut dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
 
-        if let Some(fragment_stage) = desc.fragment_stage {
-            stages.push(fragment_stage.to_vk().stage(vk::ShaderStageFlags::FRAGMENT).build());
+        if let Some(fragment_module) = desc.fragment_module {
+            stages.push(vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(fragment_module)
+                .name(cstr::cstr!("main"))
+                .build());
         }
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
@@ -165,17 +253,22 @@ impl RasterPipeline {
 
         let mut rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
             .polygon_mode(desc.rasterizer.polygon_mode)
-            .line_width(desc.rasterizer.line_width)
+            .line_width(1.0)
             .cull_mode(desc.rasterizer.cull_mode)
             .front_face(desc.rasterizer.front_face)
-            .depth_bias_enable(desc.rasterizer.depth_bias.is_some())
             .depth_clamp_enable(desc.rasterizer.depth_clamp);
 
-        if let Some(depth_bias) = &desc.rasterizer.depth_bias {
-            rasterization = rasterization
+        match &desc.depth_bias {
+            PipelineState::Static(Some(depth_bias)) => rasterization = rasterization
+                .depth_bias_enable(true)
                 .depth_bias_constant_factor(depth_bias.constant_factor)
                 .depth_bias_clamp(depth_bias.clamp)
-                .depth_bias_slope_factor(depth_bias.slope_factor);
+                .depth_bias_slope_factor(depth_bias.slope_factor),
+            PipelineState::Static(None) => rasterization = rasterization.depth_bias_enable(false),
+            PipelineState::Dynamic => {
+                rasterization = rasterization.depth_bias_enable(true);
+                dynamic_states.push(vk::DynamicState::DEPTH_BIAS)
+            },
         }
 
         let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
@@ -184,35 +277,42 @@ impl RasterPipeline {
 
         let multisample_state = desc.multisample_state.to_vk();
 
-        let color_blend_attachment: Vec<_> =
-            desc.color_attachments.iter().map(|attachment| attachment.color_blend_vk()).collect();
+        let color_blend_attachment = desc.color_attachments.map(|attachment| attachment.color_blend_vk());
 
         let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
             .logic_op_enable(false)
-            .attachments(&color_blend_attachment);
+            .attachments(&color_blend_attachment[..desc.color_attachment_count]);
 
-        let mut dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        dynamic_states.extend_from_slice(desc.dynamic_states);
+        let mut depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder();
 
-        let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
+        if let Some(depth_state) = &desc.depth_state {
+            match depth_state.test {
+                PipelineState::Static(test) => depth_stencil_state = depth_stencil_state.depth_test_enable(test),
+                PipelineState::Dynamic => {
+                    depth_stencil_state = depth_stencil_state.depth_test_enable(true);
+                    dynamic_states.push(vk::DynamicState::DEPTH_TEST_ENABLE);
+                },
+            }
 
-        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
-            .depth_test_enable(desc.depth_state.as_ref().map_or(false, |depth| depth.test))
-            .depth_write_enable(desc.depth_state.as_ref().map_or(false, |depth| depth.write))
-            .depth_compare_op(desc.depth_state.as_ref().map_or(vk::CompareOp::ALWAYS, |depth| depth.compare))
-            .depth_bounds_test_enable(false)
-            .stencil_test_enable(false);
+            depth_stencil_state = depth_stencil_state
+                .depth_write_enable(desc.depth_state.as_ref().map_or(false, |depth| depth.write))
+                .depth_compare_op(desc.depth_state.as_ref().map_or(vk::CompareOp::ALWAYS, |depth| depth.compare))
+                .depth_bounds_test_enable(false)
+                .stencil_test_enable(false);
+        }
 
-        let color_attachment_formats: Vec<_> =
-            desc.color_attachments.iter().map(|attachment| attachment.format).collect();
+        let color_attachment_formats = desc.color_attachments.map(|attachment| attachment.format);
 
         let mut rendering_info = vk::PipelineRenderingCreateInfo::builder()
-            .color_attachment_formats(&color_attachment_formats)
+            .color_attachment_formats(&color_attachment_formats[..desc.color_attachment_count])
             .depth_attachment_format(
                 desc.depth_state.as_ref().map_or(vk::Format::UNDEFINED, |depth| depth.format),
             );
 
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
+
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+            .dynamic_states(&dynamic_states);
 
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(&stages)
@@ -259,9 +359,13 @@ impl ComputePipeline {
     pub fn create_impl(
         device: &graphics::Device,
         name: &str,
-        shader: &ShaderStage,
+        module: vk::ShaderModule,
     ) -> ComputePipeline {
-        let stage = shader.to_vk().stage(vk::ShaderStageFlags::COMPUTE).build();
+        let stage = vk::PipelineShaderStageCreateInfo::builder()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(module)
+            .name(cstr::cstr!("main"))
+            .build();
         let create_info = vk::ComputePipelineCreateInfo::builder()
             .stage(stage)
             .layout(device.pipeline_layout);
@@ -298,7 +402,7 @@ impl graphics::Context {
         RasterPipeline::create_impl(&self.device, name, desc)
     }
 
-    pub fn create_compute_pipeline(&self, name: &str, shader: &ShaderStage) -> ComputePipeline {
+    pub fn create_compute_pipeline(&self, name: &str, shader: vk::ShaderModule) -> ComputePipeline {
         ComputePipeline::create_impl(&self.device, name, shader)
     }
 

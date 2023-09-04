@@ -62,42 +62,30 @@ impl EnvironmentMapLoader {
         let vertex_module = context
             .create_shader_module(&vertex_shader, "equirectangular_cube_map_vertex_shader");
 
+        let pipeline_desc = graphics::RasterPipelineDesc::builder()
+            .vertex_module(vertex_module)
+            .rasterizer(graphics::RasterizerDesc {
+                primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                polygon_mode: vk::PolygonMode::FILL,
+                front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                cull_mode: vk::CullModeFlags::NONE,
+                depth_clamp: false,
+            })
+            .color_attachments(&[graphics::PipelineColorAttachment {
+                format: Self::FORMAT,
+                ..Default::default()
+            }]);
+
         let equirectangular_to_cube_pipeline = {
             let fragment_shader = utils::load_spv("shaders/equirectangular_cube_map.frag.spv").unwrap();
 
             let fragment_module = context
                 .create_shader_module(&fragment_shader, "equirectangular_cube_map_fragment_shader");
 
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("equirectangular_to_cube_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: None,
-                    depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
-                    format: Self::FORMAT,
-                    color_mask: vk::ColorComponentFlags::RGBA,
-                    color_blend: None,
-                }],
-                depth_state: None,
-                multisample_state: Default::default(),
-                dynamic_states: &[],
-            });
+            let pipeline = context.create_raster_pipeline(
+                "equirectangular_to_cube_pipeline",
+                &pipeline_desc.fragment_module(Some(fragment_module))
+            );
 
             context.destroy_shader_module(fragment_module);
 
@@ -110,35 +98,10 @@ impl EnvironmentMapLoader {
             let fragment_module = context
                 .create_shader_module(&fragment_shader, "cubemap_convolution_fragment_shader");
 
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("cubemap_convolution_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: None,
-                    depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
-                    format: Self::FORMAT,
-                    color_mask: vk::ColorComponentFlags::RGBA,
-                    color_blend: None,
-                }],
-                depth_state: None,
-                multisample_state: Default::default(),
-                dynamic_states: &[],
-            });
+            let pipeline = context.create_raster_pipeline(
+                "cubemap_convolution_pipeline",
+                &pipeline_desc.fragment_module(Some(fragment_module))
+            );
             
             context.destroy_shader_module(fragment_module);
             
@@ -151,35 +114,10 @@ impl EnvironmentMapLoader {
             let fragment_module = context
                 .create_shader_module(&fragment_shader, "cubemap_convolution_fragment_shader");
 
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("cubemap_convolution_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: None,
-                    depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
-                    format: Self::FORMAT,
-                    color_mask: vk::ColorComponentFlags::RGBA,
-                    color_blend: None,
-                }],
-                depth_state: None,
-                multisample_state: Default::default(),
-                dynamic_states: &[],
-            });
+            let pipeline = context.create_raster_pipeline(
+                "cubemap_convolution_pipeline",
+                &pipeline_desc.fragment_module(Some(fragment_module))
+            );
 
             context.destroy_shader_module(fragment_module);
 

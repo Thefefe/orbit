@@ -28,7 +28,7 @@ impl EguiRenderer {
 
     pub fn new(context: &graphics::Context) -> Self {
         let pipeline = {
-            let (vertex_shader, fragment_shader) = {
+            let (vertex_module, fragment_module) = {
                 let vertex_spv = load_spv("shaders/egui/egui.vert.spv").expect("failed to load shader");
                 let fragment_spv = load_spv("shaders/egui/egui.frag.spv").expect("failed to load shader");
 
@@ -37,28 +37,15 @@ impl EguiRenderer {
                     context.create_shader_module(&fragment_spv, "egui_fragment_shader"),
                 )
             };
-
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("egui_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_shader,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_shader,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            
+            let pipeline_desc = graphics::RasterPipelineDesc::builder()
+                .vertex_module(vertex_module)
+                .fragment_module(Some(fragment_module))
+                .rasterizer(graphics::RasterizerDesc {
                     cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: None,
-                    depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
+                    ..Default::default()
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
                     format: context.swapchain.format(),
                     color_blend: Some(graphics::ColorBlendState {
                         src_color_blend_factor: vk::BlendFactor::ONE,
@@ -70,14 +57,12 @@ impl EguiRenderer {
                         
                     }),
                     ..Default::default()
-                }],
-                depth_state: None,
-                multisample_state: Default::default(),
-                dynamic_states: &[],
-            });
+                }]);
 
-            context.destroy_shader_module(vertex_shader);
-            context.destroy_shader_module(fragment_shader);
+            let pipeline = context.create_raster_pipeline("egui_pipeline", &pipeline_desc);
+
+            context.destroy_shader_module(vertex_module);
+            context.destroy_shader_module(fragment_module);
 
             pipeline
         };

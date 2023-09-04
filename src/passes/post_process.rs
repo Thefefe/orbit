@@ -14,36 +14,21 @@ impl ScreenPostProcess {
 
             let vertex_module = context.create_shader_module(&vertex_shader, "blit_vertex_shader");
             let fragment_module = context.create_shader_module(&fragment_shader, "blit_fragment_shader");
-
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("blit_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            
+            let pipeline_desc = graphics::RasterPipelineDesc::builder()
+                .vertex_module(vertex_module)
+                .fragment_module(Some(fragment_module))
+                .rasterizer(graphics::RasterizerDesc {
                     cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: None,
-                    depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
+                    ..Default::default()
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
                     format: context.swapchain.format(),
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
-                }],
-                depth_state: None,
-                multisample_state: Default::default(),
-                dynamic_states: &[],
-            });
+                }]);
+
+            let pipeline = context.create_raster_pipeline("blit_pipeline", &pipeline_desc);
 
             context.destroy_shader_module(vertex_module);
             context.destroy_shader_module(fragment_module);

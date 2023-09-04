@@ -156,36 +156,22 @@ impl ShadowMapRenderer {
             let vertex_module = context.create_shader_module(&vertex_shader, "shadow_vertex_shader");
             let fragment_module = context.create_shader_module(&fragment_shader, "shadow_fragment_shader");
             
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("shadowmap_renderer_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::BACK,
-                    depth_bias: Some(graphics::DepthBias::default()),
+            let pipeline_desc = graphics::RasterPipelineDesc::builder()
+                .vertex_module(vertex_module)
+                .fragment_module(Some(fragment_module))
+                .rasterizer(graphics::RasterizerDesc {
                     depth_clamp: true,
-                },
-                color_attachments: &[],
-                depth_state: Some(graphics::DepthState {
+                    ..Default::default()
+                })
+                .depth_bias_dynamic()
+                .depth_state(Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
-                    test: true,
+                    test: graphics::PipelineState::Static(true),
                     write: true,
                     compare: vk::CompareOp::LESS,
-                }),
-                multisample_state: Default::default(),
-                dynamic_states: &[vk::DynamicState::DEPTH_BIAS]
-            });
+                }));
+
+            let pipeline = context.create_raster_pipeline("shadowmap_renderer_pipeline", &pipeline_desc);
 
             context.destroy_shader_module(vertex_module);
             context.destroy_shader_module(fragment_module);

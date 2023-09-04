@@ -32,43 +32,33 @@ impl DebugLineRenderer {
             let vertex_module = context.create_shader_module(&vertex_shader, "debug_line_vertex_shader");
             let fragment_module = context.create_shader_module(&fragment_shader, "debug_line_fragment_shader");
 
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("basic_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
+            let pipeline_desc = graphics::RasterPipelineDesc::builder()
+                .vertex_module(vertex_module)
+                .fragment_module(Some(fragment_module))
+                .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::LINE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
                     front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                     cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: None,
                     depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
                     format: App::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
-                }],
-                depth_state: Some(graphics::DepthState {
+                }])
+                .depth_state(Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
-                    test: true,
+                    test: graphics::PipelineState::Dynamic,
                     write: false,
                     compare: vk::CompareOp::GREATER_OR_EQUAL,
-                }),
-                multisample_state: graphics::MultisampleState {
+                }))
+                .multisample_state(graphics::MultisampleState {
                     sample_count: App::MULTISAMPLING,
-                    alpha_to_coverage: false,
-                },
-                dynamic_states: &[vk::DynamicState::DEPTH_TEST_ENABLE]
-            });
+                    alpha_to_coverage: false
+                });
+
+            let pipeline = context.create_raster_pipeline("basic_pipeline", &pipeline_desc);
 
             context.destroy_shader_module(vertex_module);
             context.destroy_shader_module(fragment_module);

@@ -31,43 +31,27 @@ impl ForwardRenderer {
             let vertex_module = context.create_shader_module(&vertex_shader, "forward_vertex_shader");
             let fragment_module = context.create_shader_module(&fragment_shader, "forward_fragment_shader");
 
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("forward_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::BACK,
-                    depth_bias: None,
-                    depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
+            let pipeline_desc = graphics::RasterPipelineDesc::builder()
+                .vertex_module(vertex_module)
+                .fragment_module(Some(fragment_module))
+                .color_attachments(&[graphics::PipelineColorAttachment {
                     format: App::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
-                }],
-                depth_state: Some(graphics::DepthState {
+                }])
+                .depth_state(Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
-                    test: true,
+                    test: graphics::PipelineState::Static(true),
                     write: true,
                     compare: vk::CompareOp::GREATER,
-                }),
-                multisample_state: graphics::MultisampleState {
+                }))
+                .multisample_state(graphics::MultisampleState {
                     sample_count: App::MULTISAMPLING,
                     alpha_to_coverage: true
-                },
-                dynamic_states: &[],
-            });
+                });
+
+
+            let pipeline = context.create_raster_pipeline("forward_pipeline", &pipeline_desc);
 
             context.destroy_shader_module(vertex_module);
             context.destroy_shader_module(fragment_module);
@@ -85,43 +69,30 @@ impl ForwardRenderer {
             let fragment_module = context
                 .create_shader_module(&fragment_shader, "skybox_fragment_shader");
 
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("skybox_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::FRONT,
-                    depth_bias: None,
-                    depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
+            let pipeline_desc = graphics::RasterPipelineDesc::builder()
+                .vertex_module(vertex_module)
+                .fragment_module(Some(fragment_module))
+                .rasterizer(graphics::RasterizerDesc {
+                    front_face: vk::FrontFace::CLOCKWISE,
+                    ..Default::default()
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
                     format: App::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
-                }],
-                depth_state: Some(graphics::DepthState {
+                }])
+                .depth_state(Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
-                    test: false,
+                    test: graphics::PipelineState::Static(true),
                     write: false,
                     compare: vk::CompareOp::GREATER,
-                }),
-                multisample_state: graphics::MultisampleState {
+                }))
+                .multisample_state(graphics::MultisampleState {
                     sample_count: App::MULTISAMPLING,
-                    alpha_to_coverage: false,
-                },
-                dynamic_states: &[],
-            });
+                    alpha_to_coverage: true
+                });
+
+            let pipeline = context.create_raster_pipeline("skybox_pipeline", &pipeline_desc);
 
             context.destroy_shader_module(vertex_module);
             context.destroy_shader_module(fragment_module);
@@ -137,35 +108,26 @@ impl ForwardRenderer {
             let vertex_module = context.create_shader_module(&vertex_shader, "blit_vertex_shader");
             let fragment_module = context.create_shader_module(&fragment_shader, "brdf_integration_fragment_shader");
 
-            let entry = cstr::cstr!("main");
-
-            let pipeline = context.create_raster_pipeline("brdf_integration_pipeline", &graphics::RasterPipelineDesc {
-                vertex_stage: graphics::ShaderStage {
-                    module: vertex_module,
-                    entry,
-                },
-                fragment_stage: Some(graphics::ShaderStage {
-                    module: fragment_module,
-                    entry,
-                }),
-                rasterizer: graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    line_width: 1.0,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            let pipeline_desc = graphics::RasterPipelineDesc::builder()
+                .vertex_module(vertex_module)
+                .fragment_module(Some(fragment_module))
+                .rasterizer(graphics::RasterizerDesc {
                     cull_mode: vk::CullModeFlags::NONE,
-                    depth_bias: None,
-                    depth_clamp: false,
-                },
-                color_attachments: &[graphics::PipelineColorAttachment {
+                    ..Default::default()
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
                     format: vk::Format::R16G16B16A16_SFLOAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
-                }],
-                depth_state: None,
-                multisample_state: Default::default(),
-                dynamic_states: &[],
-            });
+                }])
+                .depth_state(Some(graphics::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: graphics::PipelineState::Static(true),
+                    write: false,
+                    compare: vk::CompareOp::GREATER,
+                }));
+
+            let pipeline = context.create_raster_pipeline("brdf_integration_pipeline", &pipeline_desc);
 
             context.destroy_shader_module(vertex_module);
             context.destroy_shader_module(fragment_module);

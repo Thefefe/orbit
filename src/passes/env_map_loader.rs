@@ -5,6 +5,11 @@ use glam::{vec3, Mat4};
 
 use crate::{graphics, gltf_loader};
 
+pub const FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
+const IRRADIANCE_SIZE: u32 = 32;
+const PREFILTERD_SIZE: u32 = 512;
+const PREFILTERED_MIP_LEVELS: u32 = 5;
+
 #[derive(Clone, Copy)]
 pub struct EnvironmentMapView<'a> {
     pub skybox: &'a graphics::ImageView,
@@ -36,88 +41,8 @@ pub struct EnvironmentMap {
 }
 
 impl EnvironmentMap {
-    pub fn import_to_graph(&self, context: &mut graphics::Context) -> GraphEnvironmentMap {
-        GraphEnvironmentMap {
-            skybox: context.import(&self.skybox),
-            irradiance: context.import(&self.irradiance),
-            prefiltered: context.import(&self.prefiltered),
-        }
-    }
-}
-
-pub struct EnvironmentMapLoader {
-    equirectangular_to_cube_pipeline: graphics::RasterPipeline,
-    cube_map_convolution_pipeline: graphics::RasterPipeline,
-    cube_map_prefilter_pipeline: graphics::RasterPipeline,
-}
-
-impl EnvironmentMapLoader {
-    pub const FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
-    const IRRADIANCE_SIZE: u32 = 32;
-    const PREFILTERD_SIZE: u32 = 512;
-    const PREFILTERED_MIP_LEVELS: u32 = 5;
-
-    pub fn new(context: &mut graphics::Context) -> Self {
-        let equirectangular_to_cube_pipeline = context.create_raster_pipeline(
-            "equirectangular_to_cube_pipeline",
-            &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/equirectangular_cube_map.frag.spv"))
-                .rasterizer(graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
-                    depth_clamp: false,
-                })
-                .color_attachments(&[graphics::PipelineColorAttachment {
-                    format: Self::FORMAT,
-                    ..Default::default()
-                }])
-        );
-
-        let cube_map_convolution_pipeline = context.create_raster_pipeline(
-            "cubemap_convolution_pipeline",
-            &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/cubemap_convolution.frag.spv"))
-                .rasterizer(graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
-                    depth_clamp: false,
-                })
-                .color_attachments(&[graphics::PipelineColorAttachment {
-                    format: Self::FORMAT,
-                    ..Default::default()
-                }])
-        );
-
-        let cube_map_prefilter_pipeline = context.create_raster_pipeline(
-            "cubemap_convolution_pipeline",
-            &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/environmental_map_prefilter.frag.spv"))
-                .rasterizer(graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
-                    depth_clamp: false,
-                })
-                .color_attachments(&[graphics::PipelineColorAttachment {
-                    format: Self::FORMAT,
-                    ..Default::default()
-                }])
-        );
-
-        Self { equirectangular_to_cube_pipeline, cube_map_convolution_pipeline, cube_map_prefilter_pipeline  }
-    }
-
-    pub fn create_from_equirectangular_image(
-        &self,
-        context: &graphics::Context,
+    pub fn new(
+        context: &mut graphics::Context,
         name: Cow<'static, str>,
         resolution: u32,
         equirectangular_image: &graphics::ImageView,
@@ -147,7 +72,7 @@ impl EnvironmentMapLoader {
         let irradiance = context.create_image(format!("{name}_convoluted"), &graphics::ImageDesc {
             ty: graphics::ImageType::Cube,
             format: vk::Format::R16G16B16A16_SFLOAT,
-            dimensions: [Self::IRRADIANCE_SIZE, Self::IRRADIANCE_SIZE, 1],
+            dimensions: [IRRADIANCE_SIZE, IRRADIANCE_SIZE, 1],
             mip_levels: 1,
             samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
@@ -164,8 +89,8 @@ impl EnvironmentMapLoader {
         let prefiltered = context.create_image(format!("{name}_prefilterd"), &graphics::ImageDesc {
             ty: graphics::ImageType::Cube,
             format: vk::Format::R16G16B16A16_SFLOAT,
-            dimensions: [Self::PREFILTERD_SIZE, Self::PREFILTERD_SIZE, 1],
-            mip_levels: Self::PREFILTERED_MIP_LEVELS,
+            dimensions: [PREFILTERD_SIZE, PREFILTERD_SIZE, 1],
+            mip_levels: PREFILTERED_MIP_LEVELS,
             samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
@@ -185,7 +110,7 @@ impl EnvironmentMapLoader {
         let scratch_image = context.create_image("scratch_image", &graphics::ImageDesc {
             ty: graphics::ImageType::Single2D,
             format: vk::Format::R16G16B16A16_SFLOAT,
-            dimensions: [Self::PREFILTERD_SIZE, Self::PREFILTERD_SIZE, 1],
+            dimensions: [PREFILTERD_SIZE, PREFILTERD_SIZE, 1],
             mip_levels: 1,
             samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -193,6 +118,59 @@ impl EnvironmentMapLoader {
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
             ..Default::default()
         });
+        let equirectangular_to_cube_pipeline = context.create_raster_pipeline(
+            "equirectangular_to_cube_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/equirectangular_cube_map.frag.spv"))
+                .rasterizer(graphics::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_clamp: false,
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: FORMAT,
+                    ..Default::default()
+                }])
+        );
+
+        let cube_map_convolution_pipeline = context.create_raster_pipeline(
+            "cubemap_convolution_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/cubemap_convolution.frag.spv"))
+                .rasterizer(graphics::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_clamp: false,
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: FORMAT,
+                    ..Default::default()
+                }])
+        );
+
+        let cube_map_prefilter_pipeline = context.create_raster_pipeline(
+            "cubemap_convolution_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/environmental_map_prefilter.frag.spv"))
+                .rasterizer(graphics::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_clamp: false,
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: FORMAT,
+                    ..Default::default()
+                }])
+        );
 
         context.record_and_submit(|cmd| {
             cmd.barrier(&[], &[
@@ -218,7 +196,7 @@ impl EnvironmentMapLoader {
 
                 cmd.begin_rendering(&rendering_info);
 
-                cmd.bind_raster_pipeline(self.equirectangular_to_cube_pipeline);
+                cmd.bind_raster_pipeline(equirectangular_to_cube_pipeline);
 
                 cmd.build_constants()
                     .mat4(&view_matrices[i as usize])
@@ -237,11 +215,6 @@ impl EnvironmentMapLoader {
             );
             
             cmd.barrier(&[], &[
-                // render::image_barrier(
-                //     &skybox,
-                //     render::AccessKind::ColorAttachmentWrite,
-                //     render::AccessKind::AllGraphicsRead,
-                // ),
                 graphics::image_barrier(
                     &irradiance,
                     graphics::AccessKind::None,
@@ -273,7 +246,7 @@ impl EnvironmentMapLoader {
 
                 cmd.begin_rendering(&rendering_info);
 
-                cmd.bind_raster_pipeline(self.cube_map_convolution_pipeline);
+                cmd.bind_raster_pipeline(cube_map_convolution_pipeline);
                 
                 cmd.build_constants()
                     .mat4(&view_matrices[i as usize])
@@ -285,8 +258,8 @@ impl EnvironmentMapLoader {
             }
 
             for face in 0..6u32 {
-                let mut extent = [Self::PREFILTERD_SIZE; 2];
-                for mip_level in 0..Self::PREFILTERED_MIP_LEVELS {
+                let mut extent = [PREFILTERD_SIZE; 2];
+                for mip_level in 0..PREFILTERED_MIP_LEVELS {
                     cmd.barrier(&[], &[graphics::image_barrier(
                         &scratch_image,
                         graphics::AccessKind::None,
@@ -313,9 +286,9 @@ impl EnvironmentMapLoader {
     
                     cmd.begin_rendering(&rendering_info);
     
-                    cmd.bind_raster_pipeline(self.cube_map_prefilter_pipeline);
+                    cmd.bind_raster_pipeline(cube_map_prefilter_pipeline);
                     
-                    let roughness = mip_level as f32 / (Self::PREFILTERED_MIP_LEVELS - 1) as f32;
+                    let roughness = mip_level as f32 / (PREFILTERED_MIP_LEVELS - 1) as f32;
 
                     cmd.build_constants()
                         .mat4(&view_matrices[face as usize])
@@ -373,9 +346,11 @@ impl EnvironmentMapLoader {
         }
     }
 
-    pub fn destroy(&self, context: &graphics::Context) {
-        context.destroy_pipeline(&self.equirectangular_to_cube_pipeline);
-        context.destroy_pipeline(&self.cube_map_convolution_pipeline);
-        context.destroy_pipeline(&self.cube_map_prefilter_pipeline);
+    pub fn import_to_graph(&self, context: &mut graphics::Context) -> GraphEnvironmentMap {
+        GraphEnvironmentMap {
+            skybox: context.import(&self.skybox),
+            irradiance: context.import(&self.irradiance),
+            prefiltered: context.import(&self.prefiltered),
+        }
     }
 }

@@ -12,7 +12,6 @@ struct ClippedBatch {
 }
 
 pub struct EguiRenderer {
-    pipeline: graphics::RasterPipeline,
     vertex_buffer: graphics::Buffer,
     index_buffer: graphics::Buffer,
     textures: HashMap<u64, graphics::Image>,
@@ -27,29 +26,6 @@ impl EguiRenderer {
     const PER_FRAME_INDEX_BYTE_SIZE: usize = Self::MAX_INDEX_COUNT * std::mem::size_of::<u32>();
 
     pub fn new(context: &mut graphics::Context) -> Self {
-        let pipeline = context.create_raster_pipeline(
-            "egui_pipeline",
-            &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/egui/egui.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/egui/egui.frag.spv"))
-                .rasterizer(graphics::RasterizerDesc {
-                    cull_mode: vk::CullModeFlags::NONE,
-                    ..Default::default()
-                })
-                .color_attachments(&[graphics::PipelineColorAttachment {
-                    format: context.swapchain.format(),
-                    color_blend: Some(graphics::ColorBlendState {
-                        src_color_blend_factor: vk::BlendFactor::ONE,
-                        dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-                        color_blend_op: vk::BlendOp::ADD,
-                        src_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_DST_ALPHA,
-                        dst_alpha_blend_factor: vk::BlendFactor::ONE,
-                        alpha_blend_op: vk::BlendOp::ADD,
-                        
-                    }),
-                    ..Default::default()
-                }])
-        );
 
         let vertex_buffer = context.create_buffer("egui_vertex_buffer", &graphics::BufferDesc {
             size: Self::PER_FRAME_VERTEX_BYTE_SIZE * graphics::FRAME_COUNT,
@@ -64,7 +40,6 @@ impl EguiRenderer {
         });
 
         Self {
-            pipeline,
             vertex_buffer,
             index_buffer,
             textures: HashMap::new(),
@@ -252,7 +227,6 @@ impl EguiRenderer {
 
         let window_size: [u32; 2] = context.window().inner_size().into();
         let screen_size = window_size.map(|n| n as f32);
-        let pipeline = self.pipeline;
 
         let index_buffer = context.import_with(
             "egui_index_buffer",
@@ -268,6 +242,30 @@ impl EguiRenderer {
 
         let index_offset = Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index();
         let vertex_offset = Self::MAX_VERTEX_COUNT * context.frame_index();
+
+        let pipeline = context.create_raster_pipeline(
+            "egui_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/egui/egui.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/egui/egui.frag.spv"))
+                .rasterizer(graphics::RasterizerDesc {
+                    cull_mode: vk::CullModeFlags::NONE,
+                    ..Default::default()
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: context.swapchain.format(),
+                    color_blend: Some(graphics::ColorBlendState {
+                        src_color_blend_factor: vk::BlendFactor::ONE,
+                        dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                        color_blend_op: vk::BlendOp::ADD,
+                        src_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_DST_ALPHA,
+                        dst_alpha_blend_factor: vk::BlendFactor::ONE,
+                        alpha_blend_op: vk::BlendOp::ADD,
+                        
+                    }),
+                    ..Default::default()
+                }])
+        );
 
         context.add_pass("egui_draw")
             .with_dependency(target_image, graphics::AccessKind::ColorAttachmentWrite)
@@ -310,9 +308,5 @@ impl EguiRenderer {
 
                 cmd.end_rendering();
             });
-    }
-
-    pub fn destroy(&self, context: &graphics::Context) {
-        context.destroy_pipeline(&self.pipeline);
     }
 }

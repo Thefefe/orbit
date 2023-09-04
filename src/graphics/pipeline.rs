@@ -4,7 +4,7 @@ use crate::{graphics, utils};
 
 use ash::vk;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PipelineState<T> {
     Static(T),
     Dynamic,
@@ -38,14 +38,32 @@ pub struct RasterPipeline {
     pub handle: vk::Pipeline,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DepthBias {
     pub constant_factor: f32,
     pub clamp: f32,
     pub slope_factor: f32,
 }
 
-#[derive(Debug, Clone, Copy)]
+// for hashing
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct OrderedDepthBias {
+    pub constant_factor: ordered_float::OrderedFloat<f32>,
+    pub clamp: ordered_float::OrderedFloat<f32>,
+    pub slope_factor: ordered_float::OrderedFloat<f32>,   
+}
+
+impl From<DepthBias> for OrderedDepthBias {
+    fn from(value: DepthBias) -> Self {
+        Self {
+            constant_factor: value.constant_factor.into(),
+            clamp: value.clamp.into(),
+            slope_factor: value.slope_factor.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RasterizerDesc {
     pub primitive_topology: vk::PrimitiveTopology,
     pub polygon_mode: vk::PolygonMode,
@@ -66,7 +84,7 @@ impl Default for RasterizerDesc {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ColorBlendState {
     pub src_color_blend_factor: vk::BlendFactor,
     pub dst_color_blend_factor: vk::BlendFactor,
@@ -76,7 +94,7 @@ pub struct ColorBlendState {
     pub alpha_blend_op: vk::BlendOp,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PipelineColorAttachment {
     pub format: vk::Format,
     pub color_mask: vk::ColorComponentFlags,
@@ -115,7 +133,7 @@ impl PipelineColorAttachment {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct DepthState {
     pub format: vk::Format,
     pub test: PipelineState<bool>,
@@ -142,7 +160,7 @@ impl MultisampleCount {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
 pub struct MultisampleState {
     pub sample_count: MultisampleCount,
     pub alpha_to_coverage: bool,
@@ -159,12 +177,12 @@ impl MultisampleState {
 
 const MAX_COLOR_ATTACHMENT_COUNT: usize = 2;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct RasterPipelineDesc {
     pub vertex_source: Option<ShaderSource>,
     pub fragment_source: Option<ShaderSource>,
     pub rasterizer: RasterizerDesc,
-    pub depth_bias: PipelineState<Option<DepthBias>>,
+    pub depth_bias: PipelineState<Option<OrderedDepthBias>>,
     pub color_attachment_count: usize,
     pub color_attachments: [PipelineColorAttachment; 2],
     pub depth_state: Option<DepthState>,
@@ -207,7 +225,7 @@ impl RasterPipelineDescBuilder {
     }
 
     pub fn depth_bias_static(mut self, depth_bias: Option<DepthBias>) -> Self {
-        self.desc.depth_bias = PipelineState::Static(depth_bias);
+        self.desc.depth_bias = PipelineState::Static(depth_bias.map(|depth_bias| depth_bias.into()));
         self
     }
 
@@ -256,27 +274,15 @@ pub struct ComputePipeline {
     pub handle: vk::Pipeline,
 }
 
-pub trait Pipeline {
-    fn handle(&self) -> vk::Pipeline;
-}
-
-impl Pipeline for RasterPipeline {
-    fn handle(&self) -> vk::Pipeline {
-        self.handle
-    }
-}
-
-impl Pipeline for ComputePipeline {
-    fn handle(&self) -> vk::Pipeline {
-        self.handle
-    }
-}
-
 impl graphics::Context {
     pub fn create_raster_pipeline(&mut self, name: &str, desc: &RasterPipelineDesc) -> RasterPipeline {
+        if let Some(pipeline) = self.raster_pipelines.get(desc).copied() {
+            return pipeline;
+        }
+
         let mut stages = vec![];
         let mut dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        
+
         if let Some(vertex_source) = &desc.vertex_source {
             let module = self.get_shader_module(vertex_source);
 
@@ -310,9 +316,9 @@ impl graphics::Context {
         match &desc.depth_bias {
             PipelineState::Static(Some(depth_bias)) => rasterization = rasterization
                 .depth_bias_enable(true)
-                .depth_bias_constant_factor(depth_bias.constant_factor)
-                .depth_bias_clamp(depth_bias.clamp)
-                .depth_bias_slope_factor(depth_bias.slope_factor),
+                .depth_bias_constant_factor(depth_bias.constant_factor.0)
+                .depth_bias_clamp(depth_bias.clamp.0)
+                .depth_bias_slope_factor(depth_bias.slope_factor.0),
             PipelineState::Static(None) => rasterization = rasterization.depth_bias_enable(false),
             PipelineState::Dynamic => {
                 rasterization = rasterization.depth_bias_enable(true);
@@ -388,10 +394,16 @@ impl graphics::Context {
 
         self.device.set_debug_name(handle, name);
 
+        self.raster_pipelines.insert(desc.clone(), RasterPipeline { handle });
+
         RasterPipeline { handle }
     }
 
     pub fn create_compute_pipeline(&mut self, name: &str, shader: ShaderSource) -> ComputePipeline {
+        if let Some(compute_pipeline) = self.compute_pipelines.get(&shader).copied() {
+            return compute_pipeline;
+        }
+
         let module = self.get_shader_module(&shader);
 
         let stage = vk::PipelineShaderStageCreateInfo::builder()
@@ -410,13 +422,9 @@ impl graphics::Context {
 
         self.device.set_debug_name(handle, name);
 
-        ComputePipeline { handle }
-    }
+        self.compute_pipelines.insert(shader, ComputePipeline { handle });
 
-    pub fn destroy_pipeline(&self, pipeline: &impl Pipeline) {
-        unsafe {
-            self.device.raw.destroy_pipeline(pipeline.handle(), None)
-        }
+        ComputePipeline { handle }
     }
 
     fn get_shader_module(&mut self, source: &ShaderSource) -> vk::ShaderModule {
@@ -435,13 +443,5 @@ impl graphics::Context {
                 },
             }
         }
-    }
-
-    pub fn create_shader_module(&self, spv: &[u32], name: &str) -> vk::ShaderModule {
-        create_shader_module(&self.device, spv, name)
-    }
-
-    pub fn destroy_shader_module(&self, module: vk::ShaderModule) {
-        unsafe { self.device.raw.destroy_shader_module(module, None) };
     }
 }

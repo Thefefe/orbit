@@ -14,7 +14,6 @@ pub struct DebugLineVertex {
 }
 
 pub struct DebugLineRenderer {
-    pipeline: graphics::RasterPipeline,
     line_buffer: graphics::Buffer,
     vertex_cursor: usize,
     frame_index: usize,
@@ -25,42 +24,13 @@ impl DebugLineRenderer {
     const CIRCLE_LINE_SEGMENTS: usize = 24;
 
     pub fn new(context: &mut graphics::Context) -> Self {
-        let pipeline = context.create_raster_pipeline(
-            "basic_pipeline",
-            &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/debug_line.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/debug_line.frag.spv"))
-                .rasterizer(graphics::RasterizerDesc {
-                    primitive_topology: vk::PrimitiveTopology::LINE_LIST,
-                    polygon_mode: vk::PolygonMode::FILL,
-                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-                    cull_mode: vk::CullModeFlags::NONE,
-                    depth_clamp: false,
-                })
-                .color_attachments(&[graphics::PipelineColorAttachment {
-                    format: App::COLOR_FORMAT,
-                    color_mask: vk::ColorComponentFlags::RGBA,
-                    color_blend: None,
-                }])
-                .depth_state(Some(graphics::DepthState {
-                    format: App::DEPTH_FORMAT,
-                    test: graphics::PipelineState::Dynamic,
-                    write: false,
-                    compare: vk::CompareOp::GREATER_OR_EQUAL,
-                }))
-                .multisample_state(graphics::MultisampleState {
-                    sample_count: App::MULTISAMPLING,
-                    alpha_to_coverage: false
-                })
-        );
-
         let line_buffer = context.create_buffer("debug_line_buffer", &graphics::BufferDesc {
             size: graphics::FRAME_COUNT * Self::MAX_VERTEX_COUNT * std::mem::size_of::<DebugLineVertex>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             memory_location: MemoryLocation::CpuToGpu,
         });
 
-        Self { pipeline, line_buffer, vertex_cursor: 0, frame_index: 0 }
+        Self { line_buffer, vertex_cursor: 0, frame_index: 0 }
     }
 
     fn remainin_vertex_space(&self) -> usize {
@@ -215,7 +185,35 @@ impl DebugLineRenderer {
         let line_buffer = context.import(&self.line_buffer);
         let buffer_offset = self.frame_index * Self::MAX_VERTEX_COUNT;
         let vertex_count = self.vertex_cursor as u32;
-        let pipeline = self.pipeline;
+        
+        let pipeline = context.create_raster_pipeline(
+            "basic_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/debug_line.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/debug_line.frag.spv"))
+                .rasterizer(graphics::RasterizerDesc {
+                    primitive_topology: vk::PrimitiveTopology::LINE_LIST,
+                    polygon_mode: vk::PolygonMode::FILL,
+                    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    depth_clamp: false,
+                })
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: App::COLOR_FORMAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }])
+                .depth_state(Some(graphics::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: graphics::PipelineState::Dynamic,
+                    write: false,
+                    compare: vk::CompareOp::GREATER_OR_EQUAL,
+                }))
+                .multisample_state(graphics::MultisampleState {
+                    sample_count: App::MULTISAMPLING,
+                    alpha_to_coverage: false
+                })
+        );
 
         context.add_pass("debug_line_render")
             .with_dependency(target_image, graphics::AccessKind::ColorAttachmentWrite)
@@ -276,9 +274,5 @@ impl DebugLineRenderer {
 
         self.frame_index = (self.frame_index + 1) % graphics::FRAME_COUNT;
         self.vertex_cursor = 0;
-    }
-
-    pub fn destroy(&self, context: &graphics::Context) {
-        context.destroy_pipeline(&self.pipeline);
     }
 }

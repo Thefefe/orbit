@@ -6,71 +6,54 @@ use gpu_allocator::MemoryLocation;
 
 use crate::{graphics, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
 
-pub struct SceneDrawGen {
-    pipeline: graphics::ComputePipeline,
-}
+pub fn create_draw_commands(
+    context: &mut graphics::Context,
+    draw_commands_name: Cow<'static, str>,
+    view_projection_matrix: &Mat4,
+    cull_plane_mask: FrustumPlaneMask,
+    _depth_pyramid: Option<graphics::GraphImageHandle>,
+    assets: AssetGraphData,
+    scene: SceneGraphData,
+) -> graphics::GraphBufferHandle {
+    let pass_name = format!("{draw_commands_name}_generation");
+    
+    let draw_commands = context.create_transient(draw_commands_name, graphics::BufferDesc {
+        size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
+        usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+        memory_location: MemoryLocation::GpuOnly,
+    });
+    
+    let pipeline = context.create_compute_pipeline(
+        "scene_draw_gen_pipeline",
+        graphics::ShaderSource::spv("shaders/scene_draw_gen.comp.spv")
+    );
 
-impl SceneDrawGen {
-    pub fn new(context: &mut graphics::Context) -> Self {
-        let pipeline = context.create_compute_pipeline(
-            "scene_draw_gen_pipeline",
-            graphics::ShaderSource::spv("shaders/scene_draw_gen.comp.spv")
-        );
+    let view_projection_matrix = view_projection_matrix.clone();
 
-        Self { pipeline }
-    }
+    context.add_pass(pass_name)
+        // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
+        // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
+        .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let mesh_infos = graph.get_buffer(assets.mesh_info_buffer);
+            let scene_submeshes = graph.get_buffer(scene.submesh_buffer);
+            let entity_buffer = graph.get_buffer(scene.entity_buffer);
+            let draw_commands = graph.get_buffer(draw_commands);
+            
+            cmd.bind_compute_pipeline(pipeline);
 
-    pub fn create_draw_commands(
-        &self,
-        context: &mut graphics::Context,
-        draw_commands_name: Cow<'static, str>,
-        view_projection_matrix: &Mat4,
-        cull_plane_mask: FrustumPlaneMask,
-        _depth_pyramid: Option<graphics::GraphImageHandle>,
-        assets: AssetGraphData,
-        scene: SceneGraphData,
-    ) -> graphics::GraphBufferHandle {
-        let pass_name = format!("{draw_commands_name}_generation");
-        
-        let draw_commands = context.create_transient(draw_commands_name, graphics::BufferDesc {
-            size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
-            memory_location: MemoryLocation::GpuOnly,
+            cmd.build_constants()
+                .mat4(&view_projection_matrix)
+                .uint(cull_plane_mask.0)
+                .buffer(&scene_submeshes)
+                .buffer(&mesh_infos)
+                .buffer(&draw_commands)
+                .buffer(&entity_buffer);
+
+            cmd.dispatch([scene.submesh_count as u32 / 256 + 1, 1, 1]);
         });
-        
-        let pipeline = self.pipeline;
-
-        let view_projection_matrix = view_projection_matrix.clone();
-
-        context.add_pass(pass_name)
-            // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
-            // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
-            .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
-            .render(move |cmd, graph| {
-                let mesh_infos = graph.get_buffer(assets.mesh_info_buffer);
-                let scene_submeshes = graph.get_buffer(scene.submesh_buffer);
-                let entity_buffer = graph.get_buffer(scene.entity_buffer);
-                let draw_commands = graph.get_buffer(draw_commands);
-                
-                cmd.bind_compute_pipeline(pipeline);
-
-                cmd.build_constants()
-                    .mat4(&view_projection_matrix)
-                    .uint(cull_plane_mask.0)
-                    .buffer(&scene_submeshes)
-                    .buffer(&mesh_infos)
-                    .buffer(&draw_commands)
-                    .buffer(&entity_buffer);
-
-                cmd.dispatch([scene.submesh_count as u32 / 256 + 1, 1, 1]);
-            });
-        
-        draw_commands
-    }
-
-    pub fn destroy(&mut self, context: &graphics::Context) {
-        context.destroy_pipeline(&self.pipeline);
-    }
+    
+    draw_commands
 }
 
 pub struct DepthPyramid {

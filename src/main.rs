@@ -38,14 +38,12 @@ use scene::{SceneData, Transform};
 
 use passes::{
     debug_line_renderer::DebugLineRenderer,
-    draw_gen::{SceneDrawGen, DepthPyramid},
-    env_map_loader::{EnvironmentMap, EnvironmentMapLoader},
-    forward::ForwardRenderer,
-    post_process::ScreenPostProcess,
-    shadow_renderer::ShadowMapRenderer,
+    draw_gen::DepthPyramid,
+    env_map_loader::EnvironmentMap,
+    forward::ForwardRenderer, shadow_renderer::ShadowSettings,
 };
 
-use crate::passes::draw_gen::FrustumPlaneMask;
+use crate::passes::{draw_gen::{FrustumPlaneMask, create_draw_commands}, shadow_renderer::render_directional_light, post_process::render_post_process};
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
@@ -192,10 +190,7 @@ struct App {
 
     forward_renderer: ForwardRenderer,
     debug_line_renderer: DebugLineRenderer,
-    scene_draw_gen: SceneDrawGen,
-    shadow_map_renderer: ShadowMapRenderer,
-    post_process: ScreenPostProcess,
-    equirectangular_cube_map_loader: EnvironmentMapLoader,
+    shadow_settings: ShadowSettings,
 
     environment_map: Option<EnvironmentMap>,
 
@@ -265,8 +260,6 @@ impl App {
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
         scene.update_lights(context);
-        let equirectangular_cube_map_loader = EnvironmentMapLoader::new(context);
-
         let environment_map = if let Some(env_map_path) = env_map_path {
             let equirectangular_environment_image = {
                 let (image_binary, image_format) =
@@ -284,14 +277,11 @@ impl App {
                 image
             };
 
-            let environment_map = equirectangular_cube_map_loader.create_from_equirectangular_image(
-                &context,
+            Some(EnvironmentMap::new(context,
                 "environment_map".into(),
                 1024,
                 &equirectangular_environment_image,
-            );
-
-            Some(environment_map)
+            ))
         } else {
             None
         };
@@ -362,10 +352,7 @@ impl App {
 
             forward_renderer: ForwardRenderer::new(context),
             debug_line_renderer: DebugLineRenderer::new(context),
-            scene_draw_gen: SceneDrawGen::new(context),
-            shadow_map_renderer: ShadowMapRenderer::new(context),
-            post_process: ScreenPostProcess::new(context),
-            equirectangular_cube_map_loader,
+            shadow_settings: ShadowSettings::default(),
 
             environment_map,
 
@@ -574,7 +561,7 @@ impl App {
 
         if self.use_mock_camera {
             let Projection::Perspective { fov, near_clip } = focused_camera.projection else { todo!() };
-            let far_clip = self.shadow_map_renderer.settings.max_shadow_distance;
+            let far_clip = self.shadow_settings.max_shadow_distance;
             let frustum_corner = math::perspective_corners(fov, aspect_ratio, near_clip, far_clip)
                 .map(|corner| focused_camera.transform.compute_matrix() * corner);
             self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
@@ -602,8 +589,9 @@ impl App {
         });
         let depth_target = context.import(&self.main_depth_image);
 
-        let directional_light = self.shadow_map_renderer.render_directional_light(
+        let directional_light = render_directional_light(
             context,
+            &self.shadow_settings,
             "sun".into(),
             self.sun_light.transform.orientation,
             self.light_color,
@@ -612,7 +600,6 @@ impl App {
             aspect_ratio,
             assets,
             scene,
-            &self.scene_draw_gen,
             self.selected_cascade,
             self.show_cascade_view_frustum,
             self.show_cascade_light_frustum,
@@ -622,7 +609,7 @@ impl App {
         self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
-        let forwad_draw_commands = self.scene_draw_gen.create_draw_commands(
+        let forwad_draw_commands = create_draw_commands(
             context,
             "forward_draw_commands".into(),
             &focused_camera_view_projection,
@@ -654,10 +641,11 @@ impl App {
             depth_target,
             camera_view_projection,
         );
-        self.post_process.render(
+
+        render_post_process(
             context,
             if let Some(resolved) = color_resolve_target { resolved } else { color_target },
-            self.camera_exposure
+            self.camera_exposure,
         );
 
         egui::Window::new("camera_and_lighting")
@@ -683,7 +671,7 @@ impl App {
                     ui.add(egui::DragValue::new(&mut self.light_intensitiy).speed(0.4));
                 });
 
-                self.shadow_map_renderer.settings.edit(ui);
+                self.shadow_settings.edit(ui);
 
                 ui.horizontal(|ui| {
                     ui.label("selected_cascade");
@@ -731,15 +719,6 @@ impl App {
             }
         }
     }
-
-    fn destroy(&mut self, context: &graphics::Context) {
-        self.forward_renderer.destroy(context);
-        self.debug_line_renderer.destroy(context);
-        self.scene_draw_gen.destroy(context);
-        self.shadow_map_renderer.destroy(context);
-        self.post_process.destroy(context);
-        self.equirectangular_cube_map_loader.destroy(context);
-    }
 }
 
 fn main() {
@@ -781,10 +760,6 @@ fn main() {
             unsafe {
                 context.device.raw.device_wait_idle().unwrap();
             }
-
-            app.destroy(&context);
-
-            egui_renderer.destroy(&context);
         }
 
         if input.handle_event(&event) {

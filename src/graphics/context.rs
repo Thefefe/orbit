@@ -50,6 +50,8 @@ pub struct Context {
     pub swapchain: graphics::Swapchain,
 
     pub shader_modules: HashMap<graphics::ShaderSource, vk::ShaderModule>,
+    pub raster_pipelines: HashMap<graphics::RasterPipelineDesc, graphics::RasterPipeline>,
+    pub compute_pipelines: HashMap<graphics::ShaderSource, graphics::ComputePipeline>,
 
     pub graph: RenderGraph,
     transient_resource_cache: TransientResourceCache,
@@ -159,6 +161,8 @@ impl Context {
             swapchain,
             
             shader_modules: HashMap::new(),
+            raster_pipelines: HashMap::new(),
+            compute_pipelines: HashMap::new(),
 
             graph: RenderGraph::new(),
             transient_resource_cache: TransientResourceCache::new(),
@@ -236,9 +240,21 @@ impl Drop for Context {
             graphics::AnyResource::destroy(&self.device, resource);
         }
 
-        for shader_module in self.shader_modules.values() {
+        for shader_module in self.shader_modules.values().copied() {
             unsafe {
-                self.device.raw.destroy_shader_module(*shader_module, None);
+                self.device.raw.destroy_shader_module(shader_module, None);
+            }
+        }
+
+        for raster_pipeline in self.raster_pipelines.values().copied() {
+            unsafe {
+                self.device.raw.destroy_pipeline(raster_pipeline.handle, None);
+            }
+        }
+
+        for compute_pipeline in self.compute_pipelines.values().copied() {
+            unsafe {
+                self.device.raw.destroy_pipeline(compute_pipeline.handle, None);
             }
         }
 

@@ -33,4 +33,5 @@ ddsfile = "0.5.1"
 onlyargs = "0.1.2"
 onlyargs_derive = "0.1.2"
 rand = "0.8.5"
+ordered-float = "3.9.1"
 

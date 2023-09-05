@@ -373,7 +373,7 @@ impl App {
             render_mode: 0,
             camera_exposure: 1.0,
             light_color: Vec3::splat(1.0),
-            light_intensitiy: 32.0,
+            light_intensitiy: 10.0,
             selected_cascade: 0,
             view_mock_camera: false,
 

@@ -63,7 +63,7 @@ pub struct ShadowSettings {
 impl Default for ShadowSettings {
     fn default() -> Self {
         Self {
-            shadow_resolution: 512,
+            shadow_resolution: 2048,
 
             depth_bias_constant_factor: 6.0,
             depth_bias_clamp: 0.0,

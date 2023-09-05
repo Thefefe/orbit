@@ -179,6 +179,61 @@ impl Camera {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Settings {
+    pub present_mode: vk::PresentModeKHR,
+    pub msaa: graphics::MultisampleCount,
+    pub shadow_settings: ShadowSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            present_mode: vk::PresentModeKHR::FIFO,
+            msaa: Default::default(),
+            shadow_settings: Default::default()
+        }
+    }
+}
+
+impl Settings {
+    pub fn edit(&mut self, device: &graphics::Device, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let present_mode_display = |p: vk::PresentModeKHR| match p {
+                vk::PresentModeKHR::FIFO         => "fifo",
+                vk::PresentModeKHR::FIFO_RELAXED => "fifo_relaxed",
+                vk::PresentModeKHR::IMMEDIATE    => "immediate",
+                vk::PresentModeKHR::MAILBOX      => "mailbox",
+                _ => unimplemented!()
+            };
+
+            ui.label("present_mode");
+            egui::ComboBox::from_id_source("present_mode")
+                .selected_text(format!("{}", present_mode_display(self.present_mode)))
+                .show_ui(ui, |ui| {
+                    for present_mode in device.gpu.surface_info.present_modes.iter().copied() {
+                        ui.selectable_value(&mut self.present_mode, present_mode, present_mode_display(present_mode));
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("msaa");
+            egui::ComboBox::from_id_source("msaa")
+                .selected_text(format!("{}", self.msaa))
+                .show_ui(ui, |ui| {
+                    for sample_count in device.gpu.supported_multisample_counts() {
+                        ui.selectable_value(&mut self.msaa, sample_count, sample_count.to_string());
+                    }
+                });
+        });
+
+        ui.heading("shadow_settings");
+
+        self.shadow_settings.edit(ui);
+    }
+}
+
 struct App {
     gpu_assets: GpuAssetStore,
     scene: SceneData,
@@ -190,7 +245,7 @@ struct App {
 
     forward_renderer: ForwardRenderer,
     debug_line_renderer: DebugLineRenderer,
-    shadow_settings: ShadowSettings,
+    settings: Settings,
 
     environment_map: Option<EnvironmentMap>,
 
@@ -217,13 +272,12 @@ struct App {
     open_graph_debugger: bool,
     open_profiler: bool,
     open_camera_light_editor: bool,
-    open_cull_debugger: bool,
+    open_settings: bool,
 }
 
 impl App {
     pub const COLOR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-    pub const MULTISAMPLING: graphics::MultisampleCount = graphics::MultisampleCount::X4;
 
     fn new(
         context: &mut graphics::Context,
@@ -293,35 +347,19 @@ impl App {
             format: Self::COLOR_FORMAT,
             dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
-            samples: Self::MULTISAMPLING,
+            samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::COLOR,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
             ..Default::default()
         });
 
-        let main_color_resolve_image = if Self::MULTISAMPLING != graphics::MultisampleCount::None {
-            Some(context.create_image("main_color_resolve_image", &graphics::ImageDesc {
-                ty: graphics::ImageType::Single2D,
-                format: Self::COLOR_FORMAT,
-                dimensions: [screen_extent.width, screen_extent.height, 1],
-                mip_levels: 1,
-                samples: graphics::MultisampleCount::None,
-                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-                aspect: vk::ImageAspectFlags::COLOR,
-                subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-                ..Default::default()
-            },))
-        } else {
-            None
-        };
-
         let main_depth_image = context.create_image("main_depth_target", &graphics::ImageDesc {
             ty: graphics::ImageType::Single2D,
             format: Self::DEPTH_FORMAT,
             dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
-            samples: Self::MULTISAMPLING,
+            samples: graphics::MultisampleCount::None,
             usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             aspect: vk::ImageAspectFlags::DEPTH,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
@@ -341,18 +379,22 @@ impl App {
 
         let depth_pyramid = DepthPyramid::new(context, [screen_extent.width, screen_extent.height]);
 
+        let settings = Settings::default();
+
+        context.swapchain.set_present_mode(settings.present_mode);
+
         Self {
             gpu_assets,
             scene,
 
             main_color_image,
-            main_color_resolve_image,
+            main_color_resolve_image: None,
             main_depth_image,
             depth_pyramid,
 
             forward_renderer: ForwardRenderer::new(context),
             debug_line_renderer: DebugLineRenderer::new(context),
-            shadow_settings: ShadowSettings::default(),
+            settings,
 
             environment_map,
 
@@ -386,7 +428,7 @@ impl App {
             open_graph_debugger: false,
             open_profiler: false,
             open_camera_light_editor: false,
-            open_cull_debugger: false,
+            open_settings: false,
         }
     }
 
@@ -395,7 +437,7 @@ impl App {
         input: &Input,
         time: &Time,
         egui_ctx: &egui::Context,
-        context: &graphics::Context,
+        context: &mut graphics::Context,
         control_flow: &mut ControlFlow,
     ) {
         puffin::profile_function!();
@@ -433,7 +475,7 @@ impl App {
             self.open_camera_light_editor = !self.open_camera_light_editor;
         }
         if input.key_pressed(KeyCode::F5) {
-            self.open_cull_debugger = !self.open_cull_debugger;
+            self.open_settings = !self.open_settings;
         }
 
         fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
@@ -505,12 +547,16 @@ impl App {
             self.open_profiler = puffin_egui::profiler_window(egui_ctx);
         }
 
-        if self.open_cull_debugger {
-            egui::Window::new("culling debugger").open(&mut self.open_cull_debugger).show(egui_ctx, |ui| {
-                ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
-                ui.checkbox(&mut self.show_frustum_planes, "show frustum planes");
+        if self.open_settings {
+            egui::Window::new("settings").open(&mut self.open_settings).show(egui_ctx, |ui| {
+                // ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
+                // ui.checkbox(&mut self.show_frustum_planes, "show frustum planes");
+
+                self.settings.edit(&context.device, ui);
             });
         }
+
+        context.swapchain.set_present_mode(self.settings.present_mode);
 
         const RENDER_MODES: &[KeyCode] = &[
             KeyCode::Key0,
@@ -561,7 +607,7 @@ impl App {
 
         if self.use_mock_camera {
             let Projection::Perspective { fov, near_clip } = focused_camera.projection else { todo!() };
-            let far_clip = self.shadow_settings.max_shadow_distance;
+            let far_clip = self.settings.shadow_settings.max_shadow_distance;
             let frustum_corner = math::perspective_corners(fov, aspect_ratio, near_clip, far_clip)
                 .map(|corner| focused_camera.transform.compute_matrix() * corner);
             self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
@@ -569,29 +615,40 @@ impl App {
 
         self.main_color_image.recreate(&graphics::ImageDesc {
             dimensions: [screen_extent.width, screen_extent.height, 1],
+            samples: self.settings.msaa,
             ..self.main_color_image.desc
         });
-        let color_target = context.import(&self.main_color_image);
-
-        let color_resolve_target = if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
-            main_color_resolve_image.recreate(&graphics::ImageDesc {
-                dimensions: [screen_extent.width, screen_extent.height, 1],
-                ..main_color_resolve_image.desc
-            });
-            Some(context.import(main_color_resolve_image as &_))
-        } else {
-            None
-        };
-
         self.main_depth_image.recreate(&graphics::ImageDesc {
             dimensions: [screen_extent.width, screen_extent.height, 1],
+            samples: self.settings.msaa,
             ..self.main_depth_image.desc
         });
+
+        if self.settings.msaa != graphics::MultisampleCount::None {
+            if let Some(main_color_resolve_image) = self.main_color_resolve_image.as_mut() {
+                main_color_resolve_image.recreate(&graphics::ImageDesc {
+                    dimensions: [screen_extent.width, screen_extent.height, 1],
+                    ..main_color_resolve_image.desc
+                });
+            } else {
+                let image = context.create_image("main_color_resolve_image", &graphics::ImageDesc {
+                    samples: graphics::MultisampleCount::None,
+                    ..self.main_color_image.desc
+                });
+                self.main_color_resolve_image = Some(image);
+            }
+        } else {
+            self.main_color_resolve_image.take();
+        }
+
+        let color_target = context.import(&self.main_color_image);
+        let color_resolve_target = self.main_color_resolve_image.as_ref().map(|i| context.import(i));
         let depth_target = context.import(&self.main_depth_image);
+
 
         let directional_light = render_directional_light(
             context,
-            &self.shadow_settings,
+            &self.settings.shadow_settings,
             "sun".into(),
             self.sun_light.transform.orientation,
             self.light_color,
@@ -621,6 +678,7 @@ impl App {
 
         self.forward_renderer.render(
             context,
+            &self.settings,
             forwad_draw_commands,
             color_target,
             None,
@@ -636,6 +694,7 @@ impl App {
 
         self.debug_line_renderer.render(
             context,
+            &self.settings,
             color_target,
             color_resolve_target,
             depth_target,
@@ -670,8 +729,6 @@ impl App {
                     ui.label("light_intensitiy");
                     ui.add(egui::DragValue::new(&mut self.light_intensitiy).speed(0.4));
                 });
-
-                self.shadow_settings.edit(ui);
 
                 ui.horizontal(|ui| {
                     ui.label("selected_cascade");
@@ -736,12 +793,7 @@ fn main() {
     let mut input = Input::new(&window);
     let mut time = Time::new();
 
-    let mut context = graphics::Context::new(
-        window,
-        &graphics::ContextDesc {
-            present_mode: vk::PresentModeKHR::IMMEDIATE,
-        },
-    );
+    let mut context = graphics::Context::new(window);
 
     let egui_ctx = egui::Context::default();
     let mut egui_state = egui_winit::State::new(&event_loop);
@@ -770,7 +822,7 @@ fn main() {
             egui_ctx.begin_frame(raw_input);
 
             time.update_now();
-            app.update(&input, &time, &egui_ctx, &context, control_flow);
+            app.update(&input, &time, &egui_ctx, &mut context, control_flow);
 
             let full_output = egui_ctx.end_frame();
             egui_state.handle_platform_output(&context.window(), &egui_ctx, full_output.platform_output);

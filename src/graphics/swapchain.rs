@@ -205,6 +205,10 @@ impl Swapchain {
         }
     }
 
+    pub fn set_present_mode(&mut self, present_mode: vk::PresentModeKHR) {
+        self.config.present_mode = present_mode;
+    }
+
     pub fn extent(&self) -> vk::Extent2D {
         self.config.extent
     }

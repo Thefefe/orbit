@@ -150,12 +150,42 @@ pub enum MultisampleCount {
 }
 
 impl MultisampleCount {
+    pub const ALL: [Self; 4] = [
+        Self::None,
+        Self::X2,
+        Self::X4,
+        Self::X8,
+    ];
+
     pub fn to_vk(self) -> vk::SampleCountFlags {
         match self {
             MultisampleCount::None => vk::SampleCountFlags::TYPE_1,
             MultisampleCount::X2 => vk::SampleCountFlags::TYPE_2,
             MultisampleCount::X4 => vk::SampleCountFlags::TYPE_4,
             MultisampleCount::X8 => vk::SampleCountFlags::TYPE_8,
+        }
+    }
+}
+
+impl From<vk::SampleCountFlags> for MultisampleCount {
+    fn from(value: vk::SampleCountFlags) -> Self {
+        match value {
+            vk::SampleCountFlags::TYPE_1 => MultisampleCount::None,
+            vk::SampleCountFlags::TYPE_2 => MultisampleCount::X2,
+            vk::SampleCountFlags::TYPE_4 => MultisampleCount::X4,
+            vk::SampleCountFlags::TYPE_8 => MultisampleCount::X8,
+            _ => unimplemented!()
+        }
+    }
+}
+
+impl std::fmt::Display for MultisampleCount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MultisampleCount::None => write!(f, "off"),
+            MultisampleCount::X2   => write!(f, "2x"),
+            MultisampleCount::X4   => write!(f, "4x"),
+            MultisampleCount::X8   => write!(f, "8x"),
         }
     }
 }
@@ -170,6 +200,7 @@ impl MultisampleState {
     pub fn to_vk(self) -> vk::PipelineMultisampleStateCreateInfo {
         vk::PipelineMultisampleStateCreateInfo::builder()
             .rasterization_samples(self.sample_count.to_vk())
+            .sample_shading_enable(self.sample_count != graphics::MultisampleCount::None)
             .alpha_to_coverage_enable(self.alpha_to_coverage)
             .build()
     }

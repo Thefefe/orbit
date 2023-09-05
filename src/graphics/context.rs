@@ -66,12 +66,8 @@ pub struct Context {
     frame_context: Option<FrameContext>,
 }
 
-pub struct ContextDesc {
-    pub present_mode: vk::PresentModeKHR,
-}
-
 impl Context {
-    pub fn new(window: Window, desc: &ContextDesc) -> Self {
+    pub fn new(window: Window) -> Self {
         let device = graphics::Device::new(&window).expect("failed to create device");
         let device = Arc::new(device);
 
@@ -84,24 +80,13 @@ impl Context {
                 height: window_size.height,
             };
 
-            let present_mode = surface_info.try_select_present_mode(&[desc.present_mode]);
-            if present_mode != desc.present_mode {
-                log::warn!(
-                    "'{:?}' isn't supported, selected: {:?}",
-                    desc.present_mode,
-                    present_mode
-                );
-            } else {
-                log::info!("selected present mode: {present_mode:?}");
-            }
-
             let surface_format = surface_info.choose_surface_format();
 
             let image_count = surface_info.choose_image_count(FRAME_COUNT as u32);
 
             let config = graphics::SwapchainConfig {
                 extent,
-                present_mode,
+                present_mode: vk::PresentModeKHR::FIFO,
                 surface_format,
                 frame_count: FRAME_COUNT,
                 image_count,

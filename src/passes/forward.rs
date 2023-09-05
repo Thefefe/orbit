@@ -1,7 +1,7 @@
 use ash::vk;
 use glam::{Mat4, Vec3};
 
-use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App};
+use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App, Settings};
 
 use super::shadow_renderer::DirectionalLightGraphData;
 
@@ -94,6 +94,7 @@ impl ForwardRenderer {
     pub fn render(
         &mut self,
         context: &mut graphics::Context,
+        settings: &Settings,
         
         draw_commands: graphics::GraphBufferHandle,
         color_target: graphics::GraphImageHandle,
@@ -151,7 +152,7 @@ impl ForwardRenderer {
                     compare: vk::CompareOp::GREATER,
                 }))
                 .multisample_state(graphics::MultisampleState {
-                    sample_count: App::MULTISAMPLING,
+                    sample_count: settings.msaa,
                     alpha_to_coverage: true
                 })
         );
@@ -178,7 +179,7 @@ impl ForwardRenderer {
                     compare: vk::CompareOp::GREATER,
                 }))
                 .multisample_state(graphics::MultisampleState {
-                    sample_count: App::MULTISAMPLING,
+                    sample_count: settings.msaa,
                     alpha_to_coverage: true
                 })
         );

@@ -4,7 +4,7 @@ use ash::vk;
 use glam::{Vec3A, Vec4, vec3, Vec3, Mat4};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, App};
+use crate::{graphics, App, Settings};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -177,6 +177,7 @@ impl DebugLineRenderer {
     pub fn render(
         &mut self,
         context: &mut graphics::Context,
+        settings: &Settings,
         target_image: graphics::GraphImageHandle,
         resolve_image: Option<graphics::GraphImageHandle>,
         depth_image: graphics::GraphImageHandle,
@@ -210,7 +211,7 @@ impl DebugLineRenderer {
                     compare: vk::CompareOp::GREATER_OR_EQUAL,
                 }))
                 .multisample_state(graphics::MultisampleState {
-                    sample_count: App::MULTISAMPLING,
+                    sample_count: settings.msaa,
                     alpha_to_coverage: false
                 })
         );

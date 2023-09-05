@@ -1,3 +1,5 @@
+use crate::graphics;
+
 use ash::{
     vk::{self, Handle},
     extensions::{khr, ext},
@@ -213,6 +215,16 @@ impl GpuInfo {
     #[inline]
     pub fn has_all_extensions(&self, query: &[&CStr]) -> bool {
         query.iter().all(|&query| self.extensions.contains(query))
+    }
+
+    pub fn supported_multisample_counts(&self) -> impl Iterator<Item = graphics::MultisampleCount> + '_ {
+        graphics::MultisampleCount::ALL.into_iter().filter(|sample_count| self
+            .properties
+            .properties10
+            .limits
+            .framebuffer_color_sample_counts
+            .contains(sample_count.to_vk())
+        )
     }
 }
 
@@ -509,6 +521,7 @@ impl Device {
             .queue_priorities(&[1.0]);
 
         let vulkan10_features = vk::PhysicalDeviceFeatures::builder()
+            .sample_rate_shading(true)
             .multi_draw_indirect(true)
             .sampler_anisotropy(true)
             .depth_bias_clamp(true)

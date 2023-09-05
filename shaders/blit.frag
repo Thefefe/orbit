@@ -21,16 +21,14 @@ const mat3 ACES_OUTPUT_MATRIX = mat3(
     -0.07367, -0.00605,  1.07602
 );
 
-vec3 aces_rrt_and_odt_fit(vec3 v)
-{
+vec3 aces_rrt_and_odt_fit(vec3 v) {
     vec3 a = v * (v + 0.0245786) - 0.000090537;
     vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
     return a / b;
 }
 
 //https://github.com/Shimmen/ArkoseRendererThesis/blob/master/shaders/aces.glsl
-vec3 aces_hill(vec3 color)
-{
+vec3 aces_hill(vec3 color) {
     color = ACES_INPUT_MATRIX * color;
     color = aces_rrt_and_odt_fit(color);
     color = ACES_OUTPUT_MATRIX * color;

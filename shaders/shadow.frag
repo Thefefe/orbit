@@ -8,13 +8,13 @@ layout(push_constant) uniform PushConstants {
     uint vertex_buffer;
     uint entity_buffer;
     uint draw_commands_buffer;
-    uint material_buffer;
+    uint materials_buffer;
 };
 
 layout(location = 0) in VertexOutput {
     vec2 uv;
     float alpha_cutoff;
-    uint texture_index;
+    flat uint texture_index;
 } vout;
 
 

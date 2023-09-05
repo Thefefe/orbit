@@ -19,6 +19,8 @@ pub struct ForwardRenderer {
 }
 
 impl ForwardRenderer {
+    const LUT_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
+
     pub fn new(context: &mut graphics::Context) -> Self {
         let brdf_integration_pipeline = context.create_raster_pipeline(
             "brdf_integration_pipeline",
@@ -30,7 +32,7 @@ impl ForwardRenderer {
                     ..Default::default()
                 })
                 .color_attachments(&[graphics::PipelineColorAttachment {
-                    format: vk::Format::R16G16B16A16_SFLOAT,
+                    format: Self::LUT_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
                     color_blend: None,
                 }])
@@ -44,7 +46,7 @@ impl ForwardRenderer {
 
         let brdf_integration_map = context.create_image("brdf_integration_map", &graphics::ImageDesc {
             ty: graphics::ImageType::Single2D,
-            format: vk::Format::R16G16B16A16_SFLOAT,
+            format: Self::LUT_FORMAT,
             dimensions: [512, 512, 1],
             mip_levels: 1,
             samples: graphics::MultisampleCount::None,

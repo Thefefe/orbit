@@ -14,6 +14,7 @@ const float EPSILON = 0.0000001;
 layout(set = 1, binding = 0) uniform sampler _u_sampler_registry[IMMUTABLE_SAMPLER_COUNT];
 layout(set = 1, binding = 0) uniform samplerShadow _u_sampler_comparisson_registry[IMMUTABLE_SAMPLER_COUNT];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2D _u_texture2d_registry[];
+layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture3D _u_texture3d_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2DMS _u_texture2dms_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_texture_cube_registry[];
 layout(set = 2, binding = 0) uniform writeonly image2D _u_image2d_registry[];
@@ -41,6 +42,9 @@ layout(set = 2, binding = 0) uniform writeonly image2D _u_image2d_registry[];
 #define GetTexture2D(Index) \
     _u_texture2d_registry[nonuniformEXT(Index & TEXTURE_INDEX_TEXTURE_MASK)]
 
+#define GetTexture3D(Index) \
+    _u_texture3d_registry[nonuniformEXT(Index & TEXTURE_INDEX_TEXTURE_MASK)]
+
 #define GetTexture2DMS(Index) \
     _u_texture2dms_registry[nonuniformEXT(Index & TEXTURE_INDEX_TEXTURE_MASK)]
 
@@ -58,6 +62,9 @@ layout(set = 2, binding = 0) uniform writeonly image2D _u_image2d_registry[];
 
 #define GetSampledTexture2D(Index) \
     sampler2D(GetTexture2D(Index), GetSampler(GetSamplerIndex(Index)))
+
+#define GetSampledTexture3D(Index) \
+    sampler3D(GetTexture3D(Index), GetSampler(GetSamplerIndex(Index)))
 
 #define GetSampledTexture2DMS(Index) \
     sampler2DMS(GetTexture2DMS(Index), GetSampler(GetSamplerIndex(Index)))

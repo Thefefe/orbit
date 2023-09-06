@@ -1,5 +1,6 @@
 use ash::vk;
 use glam::{Mat4, Vec3};
+use rand::prelude::Distribution;
 
 use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App, Settings};
 
@@ -16,6 +17,7 @@ pub struct ForwardFrameData {
 
 pub struct ForwardRenderer {
     brdf_integration_map: graphics::Image,
+    jittered_offset_texture: graphics::Image,
 }
 
 impl ForwardRenderer {
@@ -88,6 +90,7 @@ impl ForwardRenderer {
 
         Self {
             brdf_integration_map,
+            jittered_offset_texture: create_jittered_offset_texture(context, 16, 8),
         }
     }
 
@@ -134,6 +137,7 @@ impl ForwardRenderer {
         let environment_map = environment_map.map(|e| e.import_to_graph(context));
 
         let brdf_integration_map = context.import(&self.brdf_integration_map);
+        let jitter_texture = context.import(&self.jittered_offset_texture);
 
         let forward_pipeline = context.create_raster_pipeline(
             "forward_pipeline",
@@ -196,6 +200,7 @@ impl ForwardRenderer {
                 let depth_target = graph.get_image(depth_target);
 
                 let brdf_integration_map = graph.get_image(brdf_integration_map);
+                let jitter_texture = graph.get_image(jitter_texture);
                 
                 let environment_map = environment_map.map(|e| e.get(graph));
 
@@ -264,14 +269,14 @@ impl ForwardRenderer {
                 let mut push_constants = cmd.build_constants()
                     .uint(screen_extent.width)
                     .uint(screen_extent.height)
-                    .buffer(&per_frame_data)
-                    .buffer(&vertex_buffer)
-                    .buffer(&instance_buffer)
-                    .buffer(&draw_commands_buffer)
-                    .buffer(&materials_buffer)
-                    .buffer(&directional_light_buffer)
+                    .buffer(per_frame_data)
+                    .buffer(vertex_buffer)
+                    .buffer(instance_buffer)
+                    .buffer(draw_commands_buffer)
+                    .buffer(materials_buffer)
+                    .buffer(directional_light_buffer)
                     .uint(scene.light_count as u32)
-                    .buffer(&light_buffer);
+                    .buffer(light_buffer);
 
                 if let Some(environment_map) = &environment_map {
                     push_constants = push_constants
@@ -283,7 +288,9 @@ impl ForwardRenderer {
                         .uint(u32::MAX)
                 };
 
-                push_constants = push_constants.sampled_image(&brdf_integration_map);
+                push_constants = push_constants
+                    .sampled_image(brdf_integration_map)
+                    .sampled_image(jitter_texture);
 
                 drop(push_constants);
 
@@ -299,4 +306,60 @@ impl ForwardRenderer {
                 cmd.end_rendering();
             });
     }
+}
+
+
+
+fn gen_offset_texture_data(window_size: usize, filter_size: usize) -> Vec<f32> {
+    use std::f32::consts::PI;
+    
+    let mut data = Vec::with_capacity(window_size * window_size * filter_size * 2);
+
+    let mut rng = rand::thread_rng();
+    let dist = rand::distributions::Uniform::from(-0.5f32..=0.5f32);
+
+    for _ in 0..window_size {
+        for _ in 0..window_size {
+            for v in 0..filter_size {
+                for u in 0..filter_size {
+                    let v = filter_size - 1 - v;
+
+                    let x = (u as f32 + 0.5 + dist.sample(&mut rng)) / filter_size as f32;
+                    let y = (v as f32 + 0.5 + dist.sample(&mut rng)) / filter_size as f32;
+                    
+                    data.push(y.sqrt() * f32::cos(2.0 * PI * x));
+                    data.push(y.sqrt() * f32::sin(2.0 * PI * x));
+                }
+            }
+        }
+    }
+
+    data
+}
+
+fn create_jittered_offset_texture(context: &mut graphics::Context, window_size: usize, filter_size: usize) -> graphics::Image {
+    let data = gen_offset_texture_data(window_size, filter_size);
+    let num_filter_samples = filter_size * filter_size;
+    
+    let image = context.create_image("jitterd_offset_texture", &graphics::ImageDesc {
+        ty: graphics::ImageType::Single3D,
+        format: vk::Format::R32G32B32A32_SFLOAT,
+        dimensions: [num_filter_samples as u32 / 2, window_size as u32, window_size as u32],
+        mip_levels: 1,
+        samples: graphics::MultisampleCount::None,
+        usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+        aspect: vk::ImageAspectFlags::COLOR,
+        subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+        default_sampler: Some(graphics::SamplerKind::NearestRepeat),
+    });
+
+    context.immediate_write_image(
+        &image, 0, 0..1,
+        graphics::AccessKind::None,
+        Some(graphics::AccessKind::FragmentShaderRead),
+        bytemuck::cast_slice(data.as_slice()),
+        None
+    );
+
+    image
 }

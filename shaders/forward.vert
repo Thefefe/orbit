@@ -16,6 +16,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint irradiance_image_index;
     uint prefiltered_env_map_index;
     uint brdf_integration_map_index;
+    uint jitter_texture_index;
 };
 
 layout(location = 0) out VertexOutput {

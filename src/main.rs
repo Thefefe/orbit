@@ -189,7 +189,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            present_mode: vk::PresentModeKHR::FIFO,
+            present_mode: vk::PresentModeKHR::IMMEDIATE,
             msaa: Default::default(),
             shadow_settings: Default::default()
         }

@@ -43,6 +43,11 @@ impl ImageView {
     }
 
     #[inline(always)]
+    pub fn depth(&self) -> u32 {
+        self.extent.depth
+    }
+
+    #[inline(always)]
     pub fn full_viewport(&self) -> vk::Viewport {
         vk::Viewport {
             x: 0.0,
@@ -624,7 +629,7 @@ impl graphics::Context {
         prev_access: AccessKind,
         target_access: Option<AccessKind>,
         bytes: &[u8],
-        subregion: Option<vk::Rect2D>
+        subregion: Option<(vk::Offset3D, vk::Extent3D)>
     ) {
         puffin::profile_function!();
 
@@ -634,19 +639,7 @@ impl graphics::Context {
             memory_location: MemoryLocation::CpuToGpu,
         }, bytes);
 
-        let (image_offset, image_extent) = if let Some(subregion) = subregion {
-            let vk::Offset2D {x, y} = subregion.offset;
-            let vk::Extent2D { width, height } = subregion.extent;
-            (
-                vk::Offset3D { x, y, z: layers.start as i32 },
-                vk::Extent3D { width, height, depth: layers.end }
-            )
-        } else {
-            (
-                vk::Offset3D { x: 0, y: 0, z: layers.start as i32 },
-                vk::Extent3D { width: image.width(), height: image.height(), depth: layers.end }
-            )
-        };
+        let (image_offset, image_extent) = subregion.unwrap_or((vk::Offset3D::default(), image.extent));
         
         self.record_and_submit(|cmd| {
             cmd.barrier(&[], &[graphics::image_barrier(image, prev_access, AccessKind::TransferWrite)], &[]);

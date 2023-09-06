@@ -17,6 +17,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint irradiance_image_index;
     uint prefiltered_env_map_index;
     uint brdf_integration_map_index;
+    uint jitter_texture_index;
 };
 
 layout(location = 0) in VertexOutput {
@@ -91,7 +92,7 @@ float pcf_vogel(uint shadow_map, vec4 clip_pos) {
 
     float sum = 0.0;
     vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    float random_theta = interleaved_gradient_noise(gl_FragCoord.xy * screen_size) * 2 * PI;
+    float random_theta = interleaved_gradient_noise(gl_FragCoord.xy) * 2 * PI;
 
     float penumbra = penumbra(shadow_map, random_theta, clip_pos.xyz);
 
@@ -116,6 +117,56 @@ float pcf_vogel(uint shadow_map, vec4 clip_pos) {
     sum /= SHADOW_SAMPLE_COUNT * 4;
 
     return sum;
+}
+
+float pcf_branch(uint shadow_map, vec4 clip_pos) {
+    clip_pos.xyz /= clip_pos.w;
+    clip_pos.y *= -1.0;
+    clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
+
+    ivec3 offset_coord;
+    vec3 jitter_size = textureSize(GetSampledTexture3D(jitter_texture_index), 0);
+    offset_coord.yz = ivec2(mod(gl_FragCoord.xy, jitter_size.yz));
+
+    float sum = 0.0;
+
+    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
+    float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
+
+    for (int i = 0; i < 4; i++) {
+        offset_coord.x = i;
+        vec4 offsets = texelFetch(GetSampledTexture3D(jitter_texture_index), offset_coord, 0) * min_filter_radius;
+        
+        sum += texture(
+            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+            vec3(clip_pos.xy + offsets.xy * texel_size,clip_pos.z)
+        );
+
+        sum += texture(
+            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+            vec3(clip_pos.xy + offsets.zw * texel_size,clip_pos.z)
+        );
+    }
+
+    if (sum == 0.0 || sum == 8.0) return sum / 8.0;
+
+    for (int i = 4; i < 32; i++) {
+        offset_coord.x = i;
+        vec4 offsets = texelFetch(GetSampledTexture3D(jitter_texture_index), offset_coord, 0) * min_filter_radius;
+        
+        sum += texture(
+            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+            vec3(clip_pos.xy + offsets.xy * texel_size,clip_pos.z)
+        );
+
+        sum += texture(
+            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+            vec3(clip_pos.xy + offsets.zw * texel_size,clip_pos.z)
+        );
+    }
+
+    return sum / 64.0;
 }
 
 vec3 calculate_light(
@@ -250,6 +301,7 @@ void main() {
             GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.projection_matrices[cascade_index] * vout.world_pos;
         uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
         shadow = pcf_vogel(shadow_map, cascade_map_coord);
+        // shadow = pcf_branch(shadow_map, cascade_map_coord);
     }
 
     switch (render_mode) {

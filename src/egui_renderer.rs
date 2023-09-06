@@ -180,19 +180,11 @@ impl EguiRenderer {
             (image_view, true)
         };
 
-        let offset = delta
-            .pos
-            .map(|[x, y]| vk::Offset2D {
-                x: x as i32,
-                y: y as i32,
-            })
-            .unwrap_or_default();
-        let subregion = vk::Rect2D {
-            offset,
-            extent: vk::Extent2D {
-                width: delta.image.width() as u32,
-                height: delta.image.height() as u32,
-            },
+        let offset = delta.pos.map(|[x, y]| vk::Offset3D { x: x as i32, y: y as i32, z: 0 }).unwrap_or_default();
+        let extent = vk::Extent3D {
+            width: delta.image.width() as u32,
+            height: delta.image.height() as u32,
+            depth: 1,
         };
 
         let prev_access = if is_new {
@@ -208,7 +200,7 @@ impl EguiRenderer {
             prev_access,
             Some(graphics::AccessKind::FragmentShaderRead),
             &bytes,
-            Some(subregion),
+            Some((offset, extent)),
         );
     }
 

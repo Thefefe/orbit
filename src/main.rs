@@ -241,6 +241,7 @@ struct App {
     main_color_image: graphics::Image,
     main_color_resolve_image: Option<graphics::Image>,
     main_depth_image: graphics::Image,
+    main_depth_resolve_image: Option<graphics::Image>,
     depth_pyramid: DepthPyramid,
 
     forward_renderer: ForwardRenderer,
@@ -266,13 +267,18 @@ struct App {
     use_mock_camera: bool,
     show_cascade_view_frustum: bool,
     show_cascade_light_frustum: bool,
+
     show_bounding_boxes: bool,
     show_frustum_planes: bool,
+    show_depth_pyramid: bool,
+    depth_pyramid_level: u32,
+
     open_scene_editor_open: bool,
     open_graph_debugger: bool,
     open_profiler: bool,
     open_camera_light_editor: bool,
     open_settings: bool,
+    open_culling_debugger: bool,
 }
 
 impl App {
@@ -360,7 +366,7 @@ impl App {
             dimensions: [screen_extent.width, screen_extent.height, 1],
             mip_levels: 1,
             samples: graphics::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             aspect: vk::ImageAspectFlags::DEPTH,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
             ..Default::default()
@@ -377,7 +383,7 @@ impl App {
             },
         };
 
-        let depth_pyramid = DepthPyramid::new(context, [screen_extent.width, screen_extent.height]);
+        let depth_pyramid = DepthPyramid::new(context, [screen_extent.width / 2, screen_extent.height / 2]);
 
         let settings = Settings::default();
 
@@ -390,6 +396,7 @@ impl App {
             main_color_image,
             main_color_resolve_image: None,
             main_depth_image,
+            main_depth_resolve_image: None,
             depth_pyramid,
 
             forward_renderer: ForwardRenderer::new(context),
@@ -422,13 +429,18 @@ impl App {
             use_mock_camera: false,
             show_cascade_view_frustum: false,
             show_cascade_light_frustum: false,
+
             show_bounding_boxes: false,
             show_frustum_planes: false,
+            show_depth_pyramid: false,
+            depth_pyramid_level: 0,
+
             open_scene_editor_open: false,
             open_graph_debugger: false,
             open_profiler: false,
             open_camera_light_editor: false,
             open_settings: false,
+            open_culling_debugger: false
         }
     }
 
@@ -476,6 +488,9 @@ impl App {
         }
         if input.key_pressed(KeyCode::F5) {
             self.open_settings = !self.open_settings;
+        }
+        if input.key_pressed(KeyCode::F6) {
+            self.open_culling_debugger = !self.open_culling_debugger;
         }
 
         fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
@@ -549,10 +564,23 @@ impl App {
 
         if self.open_settings {
             egui::Window::new("settings").open(&mut self.open_settings).show(egui_ctx, |ui| {
-                // ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
-                // ui.checkbox(&mut self.show_frustum_planes, "show frustum planes");
-
                 self.settings.edit(&context.device, ui);
+            });
+        }
+
+        if self.open_culling_debugger {
+            egui::Window::new("culling debuger").open(&mut self.open_culling_debugger).show(egui_ctx, |ui| {
+                ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
+                ui.checkbox(&mut self.show_frustum_planes, "show frustum planes");
+                ui.checkbox(&mut self.show_depth_pyramid, "show depth pyramid");
+                ui.horizontal(|ui| {
+                    ui.set_enabled(self.show_depth_pyramid);
+                    ui.label("depth pyramid level");
+                    ui.add(egui::Slider::new(
+                        &mut self.depth_pyramid_level,
+                        0..=self.depth_pyramid.pyramid.mip_level(),
+                    ));
+                });
             });
         }
 
@@ -637,14 +665,28 @@ impl App {
                 });
                 self.main_color_resolve_image = Some(image);
             }
+
+            if let Some(main_depth_resolve_image) = self.main_depth_resolve_image.as_mut() {
+                main_depth_resolve_image.recreate(&graphics::ImageDesc {
+                    dimensions: [screen_extent.width, screen_extent.height, 1],
+                    ..main_depth_resolve_image.desc
+                });
+            } else {
+                let image = context.create_image("main_depth_resolve_image", &graphics::ImageDesc {
+                    samples: graphics::MultisampleCount::None,
+                    ..self.main_depth_image.desc
+                });
+                self.main_depth_resolve_image = Some(image);
+            }
         } else {
             self.main_color_resolve_image.take();
+            self.main_depth_resolve_image.take();
         }
 
         let color_target = context.import(&self.main_color_image);
         let color_resolve_target = self.main_color_resolve_image.as_ref().map(|i| context.import(i));
         let depth_target = context.import(&self.main_depth_image);
-
+        let depth_resolve_target = self.main_depth_resolve_image.as_ref().map(|i| context.import(i));
 
         let directional_light = render_directional_light(
             context,
@@ -663,7 +705,7 @@ impl App {
             &mut self.debug_line_renderer,
         );
 
-        self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
+        self.depth_pyramid.resize([screen_extent.width / 2, screen_extent.height / 2]);
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
         let forwad_draw_commands = create_draw_commands(
@@ -671,7 +713,7 @@ impl App {
             "forward_draw_commands".into(),
             &focused_camera_view_projection,
             FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR,
-            depth_pyramid,
+            self.depth_pyramid.usable.then_some(depth_pyramid),
             assets,
             scene,
         );
@@ -681,8 +723,9 @@ impl App {
             &self.settings,
             forwad_draw_commands,
             color_target,
-            None,
+            None, // resolved in debug line renderer
             depth_target,
+            depth_resolve_target,
             &self.camera,
             focused_camera,
             self.render_mode,
@@ -701,10 +744,13 @@ impl App {
             camera_view_projection,
         );
 
+        self.depth_pyramid.update(context, depth_resolve_target.unwrap_or(depth_target));
+
         render_post_process(
             context,
             if let Some(resolved) = color_resolve_target { resolved } else { color_target },
             self.camera_exposure,
+            self.show_depth_pyramid.then_some((depth_pyramid, self.depth_pyramid_level)),
         );
 
         egui::Window::new("camera_and_lighting")

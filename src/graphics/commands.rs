@@ -698,6 +698,8 @@ impl<'a> PushConstantBuilder<'a> {
         let address = buffer.descriptor_index.unwrap();
         self.push_bytes_with_align(bytemuck::bytes_of(&address), std::mem::align_of_val(&address))
     }
+
+    pub fn push(self) {}
 }
 
 impl Drop for PushConstantBuilder<'_> {

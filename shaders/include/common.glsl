@@ -7,9 +7,10 @@
 const float PI = 3.14159265359;
 const float EPSILON = 0.0000001;
 
-#define IMMUTABLE_SAMPLER_COUNT 6
+#define IMMUTABLE_SAMPLER_COUNT 7
 #define SHADOW_SAMPLER 4
 #define SHADOW_DEPTH_SAMPLER 5
+#define REDUCE_MIN_SAMPLER 6
 
 layout(set = 1, binding = 0) uniform sampler _u_sampler_registry[IMMUTABLE_SAMPLER_COUNT];
 layout(set = 1, binding = 0) uniform samplerShadow _u_sampler_comparisson_registry[IMMUTABLE_SAMPLER_COUNT];
@@ -17,12 +18,11 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2D _u_texture2
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture3D _u_texture3d_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2DMS _u_texture2dms_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_texture_cube_registry[];
-layout(set = 2, binding = 0) uniform writeonly image2D _u_image2d_registry[];
 
 #define RegisterImageFormat(Format) \
     layout(set = 2, binding = 0, Format) uniform writeonly image2D _u_image2d##Format##_registry[];
 
-#define GetImage(Format, Index) \
+#define GetImage2D(Format, Index) \
     _u_image2d##Format##_registry[nonuniformEXT(Index)]
 
 #define GetBufferRegistryName(Name) _u_##Name##Registry

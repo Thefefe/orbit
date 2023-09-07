@@ -549,6 +549,7 @@ impl Device {
             .uniform_and_storage_buffer8_bit_access(true)
             .draw_indirect_count(true)
             .host_query_reset(true)
+            .sampler_filter_minmax(true)
             .build();
 
         let mut vulkan13_features = vk::PhysicalDeviceVulkan13Features::builder()
@@ -616,9 +617,7 @@ impl Device {
         };
 
         // descriptor stuff
-        let immutable_samplers = SamplerKind::ALL.map(|sampler_kind| unsafe {
-            device.create_sampler(&sampler_kind.create_info(), None).unwrap()
-        });
+        let immutable_samplers = SamplerKind::ALL.map(|sampler_kind| sampler_kind.create(&device));
 
         let descriptor_layouts: Vec<_> = DescriptorTableType::all_types()
             .map(|desc_type| {
@@ -1026,9 +1025,10 @@ pub enum SamplerKind {
     NearestRepeat    = 3,
     ShadowComparison = 4,
     ShadowDepth      = 5,
+    ReduceMin        = 6,
 }
 
-const SAMPLER_COUNT: usize = 6;
+const SAMPLER_COUNT: usize = 7;
 
 impl SamplerKind {
     pub const ALL: [SamplerKind; SAMPLER_COUNT] = [
@@ -1038,81 +1038,122 @@ impl SamplerKind {
         Self::NearestRepeat,
         Self::ShadowComparison,
         Self::ShadowDepth,
+        Self::ReduceMin,
     ];
 
-    fn create_info(self) -> vk::SamplerCreateInfo {
+    fn create(self, device: &ash::Device) -> vk::Sampler {
         match self {
-            SamplerKind::LinearClamp => vk::SamplerCreateInfo::builder()
-                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .anisotropy_enable(true)
-                .max_anisotropy(16.0)
-                .min_filter(vk::Filter::LINEAR)
-                .mag_filter(vk::Filter::LINEAR)
-                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-                .min_lod(0.0)
-                .max_lod(vk::LOD_CLAMP_NONE)
-                .build(),
-            SamplerKind::LinearRepeat => vk::SamplerCreateInfo::builder()
-                .address_mode_u(vk::SamplerAddressMode::REPEAT)
-                .address_mode_v(vk::SamplerAddressMode::REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::REPEAT)
-                .anisotropy_enable(true)
-                .max_anisotropy(16.0)
-                .min_filter(vk::Filter::LINEAR)
-                .mag_filter(vk::Filter::LINEAR)
-                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-                .min_lod(0.0)
-                .max_lod(vk::LOD_CLAMP_NONE)
-                .build(),
-            SamplerKind::NearestClamp => vk::SamplerCreateInfo::builder()
-                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .anisotropy_enable(true)
-                .max_anisotropy(16.0)
-                .min_filter(vk::Filter::NEAREST)
-                .mag_filter(vk::Filter::NEAREST)
-                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                .min_lod(0.0)
-                .max_lod(vk::LOD_CLAMP_NONE)
-                .build(),
-            SamplerKind::NearestRepeat => vk::SamplerCreateInfo::builder()
-                .address_mode_u(vk::SamplerAddressMode::REPEAT)
-                .address_mode_v(vk::SamplerAddressMode::REPEAT)
-                .address_mode_w(vk::SamplerAddressMode::REPEAT)
-                .anisotropy_enable(true)
-                .max_anisotropy(16.0)
-                .min_filter(vk::Filter::NEAREST)
-                .mag_filter(vk::Filter::NEAREST)
-                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                .min_lod(0.0)
-                .max_lod(vk::LOD_CLAMP_NONE)
-                .build(),
-            SamplerKind::ShadowComparison => vk::SamplerCreateInfo::builder()
-                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .min_filter(vk::Filter::NEAREST)
-                .mag_filter(vk::Filter::NEAREST)
-                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                .min_lod(0.0)
-                .max_lod(vk::LOD_CLAMP_NONE)
-                .compare_enable(true)
-                .compare_op(vk::CompareOp::LESS_OR_EQUAL)
-                .build(),
-            SamplerKind::ShadowDepth => vk::SamplerCreateInfo::builder()
-                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .min_filter(vk::Filter::NEAREST)
-                .mag_filter(vk::Filter::NEAREST)
-                .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                .min_lod(0.0)
-                .max_lod(vk::LOD_CLAMP_NONE)
-                .build(),
-                
+            SamplerKind::LinearClamp => {
+                let create_info = vk::SamplerCreateInfo::builder()
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mag_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .min_lod(0.0)
+                    .max_lod(vk::LOD_CLAMP_NONE);
+
+                unsafe { device.create_sampler(&create_info, None).unwrap() }
+            },
+            SamplerKind::LinearRepeat => {
+                let create_info = vk::SamplerCreateInfo::builder()
+                    .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mag_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .min_lod(0.0)
+                    .max_lod(vk::LOD_CLAMP_NONE);
+
+                unsafe { device.create_sampler(&create_info, None).unwrap() }
+            },
+            SamplerKind::NearestClamp => {
+                let create_info = vk::SamplerCreateInfo::builder()
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .min_filter(vk::Filter::NEAREST)
+                    .mag_filter(vk::Filter::NEAREST)
+                    .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                    .min_lod(0.0)
+                    .max_lod(vk::LOD_CLAMP_NONE);
+
+                unsafe { device.create_sampler(&create_info, None).unwrap() }
+            },
+            SamplerKind::NearestRepeat => {
+                let create_info = vk::SamplerCreateInfo::builder()
+                    .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                    .address_mode_w(vk::SamplerAddressMode::REPEAT)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .min_filter(vk::Filter::NEAREST)
+                    .mag_filter(vk::Filter::NEAREST)
+                    .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                    .min_lod(0.0)
+                    .max_lod(vk::LOD_CLAMP_NONE);
+
+                unsafe { device.create_sampler(&create_info, None).unwrap() }
+            },
+            SamplerKind::ShadowComparison => {
+                let create_info = vk::SamplerCreateInfo::builder()
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .min_filter(vk::Filter::NEAREST)
+                    .mag_filter(vk::Filter::NEAREST)
+                    .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                    .min_lod(0.0)
+                    .max_lod(vk::LOD_CLAMP_NONE)
+                    .compare_enable(true)
+                    .compare_op(vk::CompareOp::LESS_OR_EQUAL);
+
+                unsafe { device.create_sampler(&create_info, None).unwrap() }
+            },
+            SamplerKind::ShadowDepth => {
+                let create_info = vk::SamplerCreateInfo::builder()
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .min_filter(vk::Filter::NEAREST)
+                    .mag_filter(vk::Filter::NEAREST)
+                    .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                    .min_lod(0.0)
+                    .max_lod(vk::LOD_CLAMP_NONE);
+
+                unsafe { device.create_sampler(&create_info, None).unwrap() }
+            },
+            SamplerKind::ReduceMin => {
+                let mut reduction_mode = vk::SamplerReductionModeCreateInfo::builder()
+                    .reduction_mode(vk::SamplerReductionMode::MIN);
+
+                let create_info = vk::SamplerCreateInfo::builder()
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .anisotropy_enable(true)
+                    .max_anisotropy(16.0)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mag_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                    .min_lod(0.0)
+                    .max_lod(vk::LOD_CLAMP_NONE)
+                    .push_next(&mut reduction_mode);
+
+                unsafe { device.create_sampler(&create_info, None).unwrap() }
+            },
         }
     }
 }

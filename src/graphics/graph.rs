@@ -137,11 +137,16 @@ impl RenderGraph {
         } else {
             None
         };
-        self.resources.push(resource_data);
 
         if let Some(handle) = imported_handle {
-            self.import_cache.insert(handle, index);
+            if let Some(index) = self.import_cache.get(&handle).copied() {
+                return index;
+            } else {
+                self.import_cache.insert(handle, index);
+            }
         }
+
+        self.resources.push(resource_data);
 
         index
     }

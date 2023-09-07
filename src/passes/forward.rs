@@ -103,6 +103,7 @@ impl ForwardRenderer {
         color_target: graphics::GraphImageHandle,
         color_resolve: Option<graphics::GraphImageHandle>,
         depth_target: graphics::GraphImageHandle,
+        depth_resolve: Option<graphics::GraphImageHandle>,
         
         camera: &Camera,
         focused_camera: &Camera,
@@ -178,7 +179,7 @@ impl ForwardRenderer {
                 }])
                 .depth_state(Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
-                    test: graphics::PipelineState::Static(true),
+                    test: graphics::PipelineState::Static(false),
                     write: false,
                     compare: vk::CompareOp::GREATER,
                 }))
@@ -192,12 +193,14 @@ impl ForwardRenderer {
             .with_dependency(color_target, graphics::AccessKind::ColorAttachmentWrite)
             .with_dependencies(color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
             .with_dependency(depth_target, graphics::AccessKind::DepthAttachmentWrite)
+            .with_dependencies(depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
             .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
             .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)))    
             .render(move |cmd, graph| {
                 let color_target = graph.get_image(color_target);
                 let color_resolve = color_resolve.map(|i| graph.get_image(i));
                 let depth_target = graph.get_image(depth_target);
+                let depth_resolve = depth_resolve.map(|i| graph.get_image(i));
 
                 let brdf_integration_map = graph.get_image(brdf_integration_map);
                 let jitter_texture = graph.get_image(jitter_texture);
@@ -230,10 +233,10 @@ impl ForwardRenderer {
                     color_attachment = color_attachment
                         .resolve_image_view(color_resolve.view)
                         .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+                        .resolve_mode(vk::ResolveModeFlags::MIN);
                 }
 
-                let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
+                let mut depth_attachemnt = vk::RenderingAttachmentInfo::builder()
                     .image_view(depth_target.view)
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
@@ -244,6 +247,13 @@ impl ForwardRenderer {
                         },
                     })
                     .store_op(vk::AttachmentStoreOp::STORE);
+
+                if let Some(depth_resolve) = depth_resolve {
+                    depth_attachemnt = depth_attachemnt
+                        .resolve_image_view(depth_resolve.view)
+                        .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+                }
 
                 let rendering_info = vk::RenderingInfo::builder()
                     .render_area(color_target.full_rect())

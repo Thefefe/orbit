@@ -509,7 +509,7 @@ impl ImageRaw {
 
         let SubresourceView { view, descriptor_index } = self.subresource_views[mip_level];
 
-        let [width, height, depth] = self.desc.dimensions;
+        let [width, height, depth] = self.desc.dimensions.map(|x| u32::max(x >> mip_level as u32, 1));
         let _descriptor_index = graphics::descriptor_index_with_sampler(
             descriptor_index.unwrap_or(0),
             self.desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)
@@ -546,7 +546,7 @@ impl ImageRaw {
         let SubresourceView { view, descriptor_index } =
             self.subresource_views[self.mip_view_count() + layer_view_index as usize];
 
-        let [width, height, depth] = self.desc.dimensions;
+        let [width, height, depth] = self.desc.dimensions.map(|x| u32::max(x >> mip_level as u32, 1));
         let _descriptor_index = graphics::descriptor_index_with_sampler(
             descriptor_index.unwrap_or(0),
             self.desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)

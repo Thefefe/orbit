@@ -7,6 +7,8 @@ layout(location = 0) out vec4 out_color;
 layout(push_constant, std430) uniform PushConstants {
     uint image_index;
     float exposure;
+    uint depth_pyramid;
+    uint depth_pyramid_level;
 };
 
 const mat3 ACES_INPUT_MATRIX = mat3(
@@ -47,7 +49,7 @@ vec3 aces_narkowicz(vec3 col) {
 }
 
 float luminance(vec3 radiance) {
-    return 0.2125 * radiance.r + 0.7154 * radiance.g +0.0721 * radiance.b;
+    return 0.2125 * radiance.r + 0.7154 * radiance.g + 0.0721 * radiance.b;
 }
 
 void main() {
@@ -55,4 +57,9 @@ void main() {
     // vec3 mapped = aces_narkowicz(hdr_color * exposure);
     vec3 mapped = aces_hill(hdr_color * exposure);
     out_color = vec4(mapped, 1.0);
+
+    if (depth_pyramid != 0xFFFFFFFF) {
+        float depth = textureLod(GetSampledTexture2D(depth_pyramid), in_uv, depth_pyramid_level).r;
+        out_color = vec4(depth, 0.0, 0.0, 1.0);
+    }
 }

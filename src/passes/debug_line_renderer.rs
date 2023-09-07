@@ -218,7 +218,7 @@ impl DebugLineRenderer {
 
         context.add_pass("debug_line_render")
             .with_dependency(target_image, graphics::AccessKind::ColorAttachmentWrite)
-            .with_dependency(depth_image, graphics::AccessKind::DepthAttachmentRead)
+            .with_dependency(depth_image, graphics::AccessKind::DepthAttachmentWrite)
             .with_dependencies(resolve_image.map(|h| (h, graphics::AccessKind::ColorAttachmentWrite)))
             .render(move |cmd, graph| {
                 let target_image = graph.get_image(target_image);

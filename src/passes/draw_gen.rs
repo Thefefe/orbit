@@ -58,8 +58,7 @@ pub fn create_draw_commands(
 
 pub struct DepthPyramid {
     pub pyramid: graphics::Image,
-    usable: bool,
-    current_access: graphics::AccessKind,
+    pub usable: bool,
 }
 
 impl DepthPyramid {
@@ -79,13 +78,13 @@ impl DepthPyramid {
                 mip_descriptors: graphics::ImageDescriptorFlags::STORAGE,
                 ..Default::default()
             },
+            default_sampler: Some(graphics::SamplerKind::NearestClamp),
             ..Default::default()
         });
 
         Self {
             pyramid,
             usable: false,
-            current_access: graphics::AccessKind::None,
         }
     }
 
@@ -94,33 +93,66 @@ impl DepthPyramid {
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
         if self.pyramid.recreate(&graphics::ImageDesc { dimensions, mip_levels, ..self.pyramid.desc }) {
             self.usable = false;
-            self.current_access = graphics::AccessKind::None;
         }
     }
 
-    pub fn get_current(&mut self, context: &mut graphics::Context) -> Option<graphics::GraphImageHandle> {
-        if !self.usable {
-            return None;
-        }
-
-        Some(context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
-            initial_access: graphics::AccessKind::ComputeShaderRead,
-            target_access: graphics::AccessKind::ComputeShaderRead,
+    pub fn get_current(&mut self, context: &mut graphics::Context) -> graphics::GraphImageHandle {
+        let pyramid = context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
+            initial_access: if self.usable { graphics::AccessKind::FragmentShaderRead } else { graphics::AccessKind::None },
+            target_access: graphics::AccessKind::None,
             ..Default::default()
-        }))
+        });
+        
+        pyramid
     }
 
-    pub fn update(&mut self, context: &mut graphics::Context) {
-        let _pyramid = if self.usable {
-            context.import(&self.pyramid)
-        } else {
-            self.usable = true;
-            context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
-                initial_access: graphics::AccessKind::None,
-                target_access: graphics::AccessKind::ComputeShaderRead,
-                ..Default::default()
-            })
-        };
+    pub fn update(&mut self, context: &mut graphics::Context, depth_buffer: graphics::GraphImageHandle) {
+        let pyramid = context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
+            initial_access: graphics::AccessKind::None,
+            target_access: graphics::AccessKind::None,
+            ..Default::default()
+        });
+
+        let reduce_pipeline = context.create_compute_pipeline(
+            "depth_reduce_pipeline",
+            graphics::ShaderSource::spv("shaders/depth_reduce.comp.spv")
+        );
+    
+        context.add_pass("depth_pyramid_reduce")
+            .with_dependency(pyramid, graphics::AccessKind::ComputeShaderWrite)
+            .with_dependency(depth_buffer, graphics::AccessKind::ComputeShaderRead)
+            .render(move |cmd, graph| {
+                let depth_buffer = graph.get_image(depth_buffer);
+                let pyramid = graph.get_image(pyramid);
+                
+                cmd.bind_compute_pipeline(reduce_pipeline);
+    
+                for mip_level in 0..pyramid.mip_view_count() {
+                    let src_view = if mip_level == 0 {
+                        depth_buffer.full_view
+                    } else {
+                        cmd.barrier(&[], &[], &[
+                            vk::MemoryBarrier2 {
+                                src_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                                src_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                                dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                                dst_access_mask: vk::AccessFlags2::SHADER_READ,
+                                ..Default::default()
+                            }
+                        ]);
+
+                        pyramid.mip_view(mip_level - 1).unwrap()
+                    };
+                    let dst_view = pyramid.mip_view(mip_level).unwrap();
+
+                    cmd.build_constants()
+                        .uint(dst_view.width())
+                        .uint(dst_view.height())
+                        .sampled_image(&src_view) 
+                        .storage_image(&dst_view);
+                    cmd.dispatch([dst_view.width() / 16 + 1, dst_view.height() / 16 + 1, 1]);
+                }
+            });
     }
 }
 

@@ -383,7 +383,7 @@ impl App {
             },
         };
 
-        let depth_pyramid = DepthPyramid::new(context, [screen_extent.width / 2, screen_extent.height / 2]);
+        let depth_pyramid = DepthPyramid::new(context, [screen_extent.width, screen_extent.height]);
 
         let settings = Settings::default();
 
@@ -705,7 +705,7 @@ impl App {
             &mut self.debug_line_renderer,
         );
 
-        self.depth_pyramid.resize([screen_extent.width / 2, screen_extent.height / 2]);
+        self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
         let forwad_draw_commands = create_draw_commands(

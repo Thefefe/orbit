@@ -63,6 +63,7 @@ pub struct DepthPyramid {
 
 impl DepthPyramid {
     pub fn new(context: &graphics::Context, [width, height]: [u32; 2]) -> Self {
+        let [width, height] = [width.next_power_of_two() / 4, height.next_power_of_two() / 4];
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
 
         let pyramid = context.create_image("depth_pyramid", &graphics::ImageDesc {
@@ -89,8 +90,8 @@ impl DepthPyramid {
     }
 
     pub fn resize(&mut self, [width, height]: [u32; 2]) {
-        let dimensions = [width, height, 1];
-        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
+        let dimensions = [width.next_power_of_two() / 4, height.next_power_of_two() / 4, 1];
+        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(dimensions[0], dimensions[1]));
         if self.pyramid.recreate(&graphics::ImageDesc { dimensions, mip_levels, ..self.pyramid.desc }) {
             self.usable = false;
         }

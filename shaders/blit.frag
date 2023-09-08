@@ -60,6 +60,6 @@ void main() {
 
     if (depth_pyramid != 0xFFFFFFFF) {
         float depth = textureLod(GetSampledTexture2D(depth_pyramid), in_uv, depth_pyramid_level).r;
-        out_color = vec4(depth, 0.0, 0.0, 1.0);
+        out_color = mix(out_color, vec4(1.0, 0.0, 0.0, 1.0), depth);
     }
 }

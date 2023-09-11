@@ -66,14 +66,14 @@ struct MaterialData {
     vec3  emissive_factor;
     float metallic_factor;
     float roughness_factor;
-    float occulusion_factor;
+    float occlusion_factor;
     
     float alpha_cutoff;
 
     uint base_texture_index;
     uint normal_texture_index;
     uint metallic_roughness_texture_index;
-    uint occulusion_texture_index;
+    uint occlusion_texture_index;
     uint emissive_texture_index;
 };
 
@@ -93,8 +93,16 @@ struct MeshInfo {
     uint index_offset;
     uint index_count;
     int  vertex_offset;
-    float sphere_radius;
+    uint _padding;
     Aabb aabb;
+    vec4 bounding_sphere;
+};
+
+struct CullInfo {
+    mat4 view_matrix;
+    mat4 projection_matrix;
+    uint plane_mask;
+    uint depth_pyramid;
 };
 
 struct LightData {
@@ -116,6 +124,10 @@ struct DebugLineVertex {
     vec3   position;
     u8vec4 color;
 };
+
+RegisterBuffer(CullInfoBuffer, {
+    CullInfo cull_info;
+});
 
 RegisterBuffer(EguiVertexBuffer, {
     EguiVertex vertices[];

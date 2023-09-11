@@ -6,7 +6,7 @@ pub fn render_post_process(
     context: &mut graphics::Context,
     src_image: graphics::GraphImageHandle,
     exposure: f32,
-    depth_pyramid_debug: Option<(graphics::GraphImageHandle, u32)>,
+    depth_pyramid_debug: Option<(graphics::GraphImageHandle, u32, f32)>,
 ) {
     let swapchain_image = context.get_swapchain_image();
     let pipeline = context.create_raster_pipeline(
@@ -28,7 +28,7 @@ pub fn render_post_process(
     context.add_pass("blit_present_pass")
         .with_dependency(swapchain_image, graphics::AccessKind::ColorAttachmentWrite)
         .with_dependency(src_image, graphics::AccessKind::FragmentShaderRead)
-        .with_dependencies(depth_pyramid_debug.map(|(pyramid, _)| (pyramid, graphics::AccessKind::FragmentShaderRead)))
+        .with_dependencies(depth_pyramid_debug.map(|(pyramid, _, _)| (pyramid, graphics::AccessKind::FragmentShaderReadGeneral)))
         .render(move |cmd, graph| {
             let swapchain_image = graph.get_image(swapchain_image);
             let src_image = graph.get_image(src_image);
@@ -52,11 +52,12 @@ pub fn render_post_process(
                 .sampled_image(&src_image)
                 .float(exposure);
 
-            if let Some((depth_pyramid, depth_pyramid_level)) = depth_pyramid_debug {
+            if let Some((depth_pyramid, depth_pyramid_level, far_depth)) = depth_pyramid_debug {
                 let depth_pyramid = graph.get_image(depth_pyramid);
                 constants = constants
                     .sampled_image(depth_pyramid)
                     .uint(depth_pyramid_level)
+                    .float(far_depth);
             } else {
                 constants = constants.uint(u32::MAX);
             }

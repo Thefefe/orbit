@@ -438,14 +438,14 @@ pub fn load_gltf(
                 emissive_factor,
                 metallic_factor,
                 roughness_factor,
-                occulusion_factor,
+                occlusion_factor: occulusion_factor,
 
                 alpha_cutoff,
                 
                 base_texture,
                 normal_texture,
                 metallic_roughness_texture,
-                occulusion_texture,
+                occlusion_texture: occulusion_texture,
                 emissive_texture,
                 
             },
@@ -525,13 +525,15 @@ pub fn load_gltf(
 
             let bounding_box = primitive.bounding_box();
             mesh_data.aabb = Aabb::from_arrays(bounding_box.min, bounding_box.max);
+            let bounding_sphere_center = (mesh_data.aabb.min + mesh_data.aabb.max) / 2.0;
 
-            let mut sphere_radius_sqr: f32 = 0.0;
+            let mut bounding_sphere_radius_sqr: f32 = 0.0;
             for vertex in mesh_data.vertices.iter() {
                 let position = Vec3A::from(vertex.position);
-                sphere_radius_sqr = sphere_radius_sqr.max(position.length_squared())
+                bounding_sphere_radius_sqr = bounding_sphere_radius_sqr
+                    .max(bounding_sphere_center.distance_squared(position));
             }
-            mesh_data.sphere_radius = sphere_radius_sqr.sqrt();
+            mesh_data.bounding_sphere = bounding_sphere_center.extend(bounding_sphere_radius_sqr.sqrt());
             
             let mesh_handle = asset_store.add_mesh(context, &mesh_data);
             submeshes.push(Submesh {

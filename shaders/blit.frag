@@ -9,6 +9,7 @@ layout(push_constant, std430) uniform PushConstants {
     float exposure;
     uint depth_pyramid;
     uint depth_pyramid_level;
+    float pyramid_far_depth;
 };
 
 const mat3 ACES_INPUT_MATRIX = mat3(
@@ -60,6 +61,6 @@ void main() {
 
     if (depth_pyramid != 0xFFFFFFFF) {
         float depth = textureLod(GetSampledTexture2D(depth_pyramid), in_uv, depth_pyramid_level).r;
-        out_color = mix(out_color, vec4(1.0, 0.0, 0.0, 1.0), depth);
+        out_color = mix(out_color, vec4(1.0, 0.0, 0.0, 1.0), min(depth, pyramid_far_depth) / pyramid_far_depth);
     }
 }

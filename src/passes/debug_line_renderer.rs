@@ -57,6 +57,21 @@ impl DebugLineRenderer {
         ]);
     }
 
+    pub fn draw_quad(&mut self, corners: &[Vec4; 4], color: Vec4) {
+        let color = color.to_array().map(|f| (f * 255.0) as u8);
+
+        self.add_vertices(&[
+            DebugLineVertex { position: corners[0].truncate(), color },
+            DebugLineVertex { position: corners[1].truncate(), color },
+            DebugLineVertex { position: corners[1].truncate(), color },
+            DebugLineVertex { position: corners[2].truncate(), color },
+            DebugLineVertex { position: corners[2].truncate(), color },
+            DebugLineVertex { position: corners[3].truncate(), color },
+            DebugLineVertex { position: corners[3].truncate(), color },
+            DebugLineVertex { position: corners[0].truncate(), color },
+        ]);
+    }
+
     pub fn draw_frustum(&mut self, corners: &[Vec4; 8], color: Vec4) {
         let color = color.to_array().map(|f| (f * 255.0) as u8);
 

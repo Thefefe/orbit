@@ -17,7 +17,7 @@ use crate::{
     MAX_SHADOW_CASCADE_COUNT,
 };
 
-use super::{draw_gen::{FrustumPlaneMask, create_draw_commands}, debug_line_renderer::DebugLineRenderer};
+use super::{draw_gen::{FrustumPlaneMask, create_draw_commands, CullInfo}, debug_line_renderer::DebugLineRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -257,7 +257,6 @@ pub fn render_directional_light(
     intensity: f32,
 
     camera: &Camera,
-    aspect_ratio: f32,
 
     assets: AssetGraphData,
     scene: SceneGraphData,
@@ -305,7 +304,7 @@ pub fn render_directional_light(
         let view_to_world_matrix = camera.transform.compute_matrix();
         let view_to_light_matrix = light_matrix * view_to_world_matrix;
 
-        let subfrustum_corners_light_space = math::perspective_corners(fov, aspect_ratio, near, far)
+        let subfrustum_corners_light_space = math::perspective_corners(fov, camera.aspect_ratio, near, far)
             .map(|corner| {
                 let v = view_to_light_matrix * corner;
                 v / v.w
@@ -379,7 +378,7 @@ pub fn render_directional_light(
         );
 
         if show_cascade_view_frustum && selected_cascade == cascade_index {
-            let subfrustum_corners_w = math::perspective_corners(fov, aspect_ratio, near, far)
+            let subfrustum_corners_w = math::perspective_corners(fov, camera.aspect_ratio, near, far)
                 .map(|v| view_to_world_matrix * v);
             debug_line_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
         }
@@ -391,14 +390,14 @@ pub fn render_directional_light(
         
         let light_projection_matrix = projection_matrix * light_matrix;
 
-        let shadow_map_draw_commands = create_draw_commands(
-            context,
-            format!("{name}_{cascade_index}_draw_commands").into(),
-            &light_projection_matrix,
-            FrustumPlaneMask::SIDES,
-            None,
-            assets,
-            scene,
+        let draw_commands_name = format!("{name}_{cascade_index}_draw_commands").into();
+        let shadow_map_draw_commands = create_draw_commands(context, draw_commands_name, assets, scene,
+            &CullInfo {
+                view_matrix: light_matrix,
+                projection_matrix: projection_matrix,
+                cull_plane_mask: FrustumPlaneMask::SIDES,
+                depth_pyramid: None,
+            }
         );
         
         let shadow_map = render_shadow_map(

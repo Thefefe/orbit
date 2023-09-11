@@ -106,7 +106,6 @@ impl ForwardRenderer {
         depth_resolve: Option<graphics::GraphImageHandle>,
         
         camera: &Camera,
-        focused_camera: &Camera,
         render_mode: u32,
         
         environment_map: Option<&EnvironmentMap>,
@@ -120,7 +119,6 @@ impl ForwardRenderer {
         let screen_extent = context.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
-        let focused_view_matrix = focused_camera.transform.compute_matrix().inverse();
         let camera_view_matrix = camera.transform.compute_matrix().inverse();
         let camera_projection_matrix = camera.projection.compute_matrix(aspect_ratio);
         let camera_view_projection_matrix = camera_projection_matrix * camera_view_matrix;
@@ -130,7 +128,7 @@ impl ForwardRenderer {
 
         let frame_data = context.transient_storage_data("per_frame_data", bytemuck::bytes_of(&ForwardFrameData {
             view_projection: camera_view_projection_matrix,
-            view: focused_view_matrix,
+            view: camera_view_matrix,
             view_pos: camera.transform.position,
             render_mode,
         }));
@@ -195,7 +193,7 @@ impl ForwardRenderer {
             .with_dependency(depth_target, graphics::AccessKind::DepthAttachmentWrite)
             .with_dependencies(depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
             .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
-            .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)))    
+            .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)))
             .render(move |cmd, graph| {
                 let color_target = graph.get_image(color_target);
                 let color_resolve = color_resolve.map(|i| graph.get_image(i));

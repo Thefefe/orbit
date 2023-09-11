@@ -4,13 +4,11 @@
 #include "include/types.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
-	mat4 view_projection_matrix;
-	uint plane_mask;
-
     uint submesh_buffer;
 	uint mesh_info_buffer;
 	uint draw_commands_buffer;
 	uint entity_buffer;
+	uint cull_info_buffer;
 };
 
 layout (local_size_x = 256) in;
@@ -30,6 +28,28 @@ bool aabb_plane_test(vec3 box_min, vec3 box_max, vec4 plane) {
 
     return center_distance > radius;
 }
+// 2D Polyhedral Bounds of a Clipped, Perspective-Projected 3D Sphere. Michael Mara, Morgan McGuire. 2013
+bool project_sphere(vec4 sphere, float znear, float P00, float P11, out vec4 aabb) {
+	vec3 C = sphere.xyz;
+	float r = sphere.w;
+
+	if (C.z < r + znear) return false;
+
+	vec2 cx = -C.xz;
+	vec2 vx = vec2(sqrt(dot(cx, cx) - r * r), r);
+	vec2 minx = mat2(vx.x, vx.y, -vx.y, vx.x) * cx;
+	vec2 maxx = mat2(vx.x, -vx.y, vx.y, vx.x) * cx;
+
+	vec2 cy = -C.yz;
+	vec2 vy = vec2(sqrt(dot(cy, cy) - r * r), r);
+	vec2 miny = mat2(vy.x, vy.y, -vy.y, vy.x) * cy;
+	vec2 maxy = mat2(vy.x, -vy.y, vy.y, vy.x) * cy;
+
+	aabb = vec4(minx.x / minx.y * P00, miny.x / miny.y * P11, maxx.x / maxx.y * P00, maxy.x / maxy.y * P11);
+	aabb = aabb.xwzy * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f); // clip space -> uv space
+
+	return true;
+}
 
 void main() {
 	GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count = 0;
@@ -40,11 +60,13 @@ void main() {
 		MeshInfo mesh_info = GetBuffer(MeshInfoBuffer, mesh_info_buffer).mesh_infos[submesh.mesh_index];
 		EntityData entity_data = GetBuffer(EntityBuffer, entity_buffer).entities[submesh.entity_index];
 		
-		bool visible = true;
+		CullInfo cull_info = GetBuffer(CullInfoBuffer, cull_info_buffer).cull_info;
 		
+		bool visible = true;
+
 		// frustum culling
 		Aabb aabb = mesh_info.aabb;
-		mat4 mvp = view_projection_matrix * entity_data.model_matrix;
+		mat4 mvp = cull_info.projection_matrix * cull_info.view_matrix  * entity_data.model_matrix;
 		mat4 mvp_t = transpose(mvp);
 		vec4 planes[6];
 		planes[0] = mvp_t[3] + mvp_t[0];
@@ -56,9 +78,50 @@ void main() {
 
 		for (uint i = 0; i < 5; i += 1) {
 			visible = visible && (
-				(plane_mask & (1 << i)) == 0 ||
+				(cull_info.plane_mask & (1 << i)) == 0 ||
 				!aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(-planes[i].xyz, planes[i].w))
 			);
+		}
+
+		if (visible && cull_info.depth_pyramid != TEXTURE_NONE) {
+			float largest_scale;
+			{
+				vec3 x = vec3(entity_data.model_matrix[0]);
+				vec3 y = vec3(entity_data.model_matrix[1]);
+				vec3 z = vec3(entity_data.model_matrix[2]); 
+
+				float largest_scale_sqr = max(dot(x, x), max(dot(y, y), dot(z, z)));
+				largest_scale = sqrt(largest_scale_sqr);
+			}
+			
+			vec4 bounding_sphere;
+
+			bounding_sphere = cull_info.view_matrix * entity_data.model_matrix * vec4(mesh_info.bounding_sphere.xyz, 1.0);
+			bounding_sphere.z = -bounding_sphere.z;
+			bounding_sphere.w = mesh_info.bounding_sphere.w * largest_scale;
+
+			float P00 = cull_info.projection_matrix[0][0];
+			float P11 = cull_info.projection_matrix[1][1];
+
+			float z_near = 0.01;
+
+			vec4 aabb;
+			if (project_sphere(bounding_sphere, z_near, P00, P11, aabb)) {
+				vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.depth_pyramid), 0);
+				float width = (aabb.z - aabb.x) * pyramid_size.x;
+				float height = (aabb.w - aabb.y) * pyramid_size.y;
+
+				//find the mipmap level that will match the screen size of the sphere
+				float level = floor(log2(max(width, height)));
+
+				//sample the depth pyramid at that specific level
+				float depth = textureLod(sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)), (aabb.xy + aabb.zw) * 0.5, level).x;
+
+				float depthSphere = z_near / (bounding_sphere.z - bounding_sphere.w);
+
+				//if the depth of the sphere is in front of the depth pyramid value, then the object is visible
+				visible = depthSphere >= depth;
+			};
 		}
 
 		if (visible) {

@@ -43,7 +43,7 @@ use passes::{
     forward::ForwardRenderer, shadow_renderer::ShadowSettings,
 };
 
-use crate::passes::{draw_gen::{FrustumPlaneMask, create_draw_commands}, shadow_renderer::render_directional_light, post_process::render_post_process};
+use crate::passes::{draw_gen::{FrustumPlaneMask, create_draw_commands, CullInfo}, shadow_renderer::render_directional_light, post_process::render_post_process};
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
@@ -167,15 +167,20 @@ impl Projection {
 pub struct Camera {
     pub transform: Transform,
     pub projection: Projection,
+    pub aspect_ratio: f32,
 }
 
 impl Camera {
     #[inline]
-    pub fn compute_matrix(&self, aspect_ratio: f32) -> glam::Mat4 {
-        let proj = self.projection.compute_matrix(aspect_ratio);
+    pub fn compute_matrix(&self) -> Mat4 {
+        let proj = self.projection.compute_matrix(self.aspect_ratio);
         let view = self.transform.compute_matrix().inverse();
 
         proj * view
+    }
+
+    pub fn compute_projection_matrix(&self) -> Mat4 {
+        self.projection.compute_matrix(self.aspect_ratio)
     }
 }
 
@@ -252,8 +257,7 @@ struct App {
 
     camera: Camera,
     camera_controller: CameraController,
-    mock_camera: Camera,
-    mock_camera_controller: CameraController,
+    frozen_camera: Camera,
     sun_light: Camera,
     light_dir_controller: CameraController,
 
@@ -262,15 +266,21 @@ struct App {
     light_color: Vec3,
     light_intensitiy: f32,
     selected_cascade: usize,
-    view_mock_camera: bool,
 
-    use_mock_camera: bool,
+    freeze_camera: bool,
     show_cascade_view_frustum: bool,
     show_cascade_light_frustum: bool,
 
-    show_bounding_boxes: bool,
+    enable_frustum_culling: bool,
+    enable_occlusion_culling: bool,
+
     show_frustum_planes: bool,
+    show_bounding_boxes: bool,
+    show_bounding_spheres: bool,
+    show_screen_aabb: bool,
+
     show_depth_pyramid: bool,
+    pyramid_display_far_depth: f32,
     depth_pyramid_level: u32,
 
     open_scene_editor_open: bool,
@@ -315,6 +325,18 @@ impl App {
         //         z: thread_rng.gen_range(-dist_size..dist_size),
         //     };
         //     scene.add_light(scene::LightData { position, ..light_data });
+        // }
+
+        // let prefab = scene.entities.pop().unwrap();
+        // let offset = 6.0;
+        // for x in 0..2 {
+        //     for y in 0..2 {
+        //         for z in 0..2 {
+        //             let mut entity = prefab.clone();
+        //             entity.transform.position = Vec3::from_array([x, y, z].map(|n| n as f32 * offset));
+        //             scene.add_entity(entity);
+        //         }
+        //     }
         // }
         
         scene.update_instances(context);
@@ -372,6 +394,8 @@ impl App {
             ..Default::default()
         });
 
+        let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
+
         let camera = Camera {
             transform: Transform {
                 position: vec3(0.0, 2.0, 0.0),
@@ -381,6 +405,7 @@ impl App {
                 fov: 90f32.to_radians(),
                 near_clip: 0.01,
             },
+            aspect_ratio,
         };
 
         let depth_pyramid = DepthPyramid::new(context, [screen_extent.width, screen_extent.height]);
@@ -407,8 +432,7 @@ impl App {
 
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
-            mock_camera: camera,
-            mock_camera_controller: CameraController::new(1.0, 0.003),
+            frozen_camera: camera,
             sun_light: Camera {
                 transform: Transform::default(),
                 projection: Projection::Orthographic {
@@ -416,6 +440,7 @@ impl App {
                     near_clip: -20.0,
                     far_clip: 20.0,
                 },
+                aspect_ratio: 1.0,
             },
             light_dir_controller: CameraController::new(1.0, 0.003),
 
@@ -424,15 +449,21 @@ impl App {
             light_color: Vec3::splat(1.0),
             light_intensitiy: 10.0,
             selected_cascade: 0,
-            view_mock_camera: false,
 
-            use_mock_camera: false,
+            freeze_camera: false,
             show_cascade_view_frustum: false,
             show_cascade_light_frustum: false,
 
-            show_bounding_boxes: false,
+            enable_frustum_culling: true,
+            enable_occlusion_culling: true,
+
             show_frustum_planes: false,
+            show_bounding_boxes: false,
+            show_bounding_spheres: false,
+            show_screen_aabb: false,
+            
             show_depth_pyramid: false,
+            pyramid_display_far_depth: 0.01,
             depth_pyramid_level: 0,
 
             open_scene_editor_open: false,
@@ -456,19 +487,11 @@ impl App {
 
         let delta_time = time.delta().as_secs_f32();
 
-        self.view_mock_camera = input.key_held(KeyCode::V);
 
-        if self.view_mock_camera {
-            if input.mouse_held(MouseButton::Right) {
-                self.mock_camera_controller.update_look(input, &mut self.mock_camera.transform);
-            }
-            self.mock_camera_controller.update_movement(input, delta_time, &mut self.mock_camera.transform);
-        } else {
-            if input.mouse_held(MouseButton::Right) {
-                self.camera_controller.update_look(input, &mut self.camera.transform);
-            }
-            self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
+        if input.mouse_held(MouseButton::Right) {
+            self.camera_controller.update_look(input, &mut self.camera.transform);
         }
+        self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
 
         if input.mouse_held(MouseButton::Left) {
             self.light_dir_controller.update_look(input, &mut self.sun_light.transform);
@@ -570,17 +593,28 @@ impl App {
 
         if self.open_culling_debugger {
             egui::Window::new("culling debuger").open(&mut self.open_culling_debugger).show(egui_ctx, |ui| {
-                ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
+                ui.checkbox(&mut self.enable_frustum_culling, "enable frustum culling");
+                ui.checkbox(&mut self.enable_occlusion_culling, "enable occlusion culling");
                 ui.checkbox(&mut self.show_frustum_planes, "show frustum planes");
+                ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
+                ui.checkbox(&mut self.show_bounding_spheres, "show bounding spheres");
+                ui.checkbox(&mut self.show_screen_aabb, "show screen aabb");
                 ui.checkbox(&mut self.show_depth_pyramid, "show depth pyramid");
-                ui.horizontal(|ui| {
-                    ui.set_enabled(self.show_depth_pyramid);
-                    ui.label("depth pyramid level");
-                    ui.add(egui::Slider::new(
-                        &mut self.depth_pyramid_level,
-                        0..=self.depth_pyramid.pyramid.mip_level(),
-                    ));
-                });
+                if self.show_depth_pyramid {
+                    ui.indent("depth_pyramid", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("depth pyramid max depth");
+                            ui.add(egui::DragValue::new(&mut self.pyramid_display_far_depth).speed(0.005).clamp_range(0.0..=1.0));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("depth pyramid level");
+                            ui.add(egui::Slider::new(
+                                &mut self.depth_pyramid_level,
+                                0..=self.depth_pyramid.pyramid.mip_level(),
+                            ));
+                        });
+                    });
+                }
             });
         }
 
@@ -622,22 +656,19 @@ impl App {
         let scene = self.scene.import_to_graph(context);
 
         let screen_extent = context.swapchain_extent();
-        let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
+        self.camera.aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
-        let focused_camera = if self.use_mock_camera {
-            &self.mock_camera
-        } else {
-            &self.camera
-        };
+        if !self.freeze_camera {
+            self.frozen_camera = self.camera;
+        }
 
-        let focused_camera_view_projection = focused_camera.compute_matrix(aspect_ratio);
-        let camera_view_projection = self.camera.compute_matrix(aspect_ratio);
+        let camera_view_projection_matrix = self.camera.compute_matrix();
 
-        if self.use_mock_camera {
-            let Projection::Perspective { fov, near_clip } = focused_camera.projection else { todo!() };
+        if self.freeze_camera {
+            let Projection::Perspective { fov, near_clip } = self.frozen_camera.projection else { todo!() };
             let far_clip = self.settings.shadow_settings.max_shadow_distance;
-            let frustum_corner = math::perspective_corners(fov, aspect_ratio, near_clip, far_clip)
-                .map(|corner| focused_camera.transform.compute_matrix() * corner);
+            let frustum_corner = math::perspective_corners(fov, self.frozen_camera.aspect_ratio, near_clip, far_clip)
+                .map(|corner| self.frozen_camera.transform.compute_matrix() * corner);
             self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
@@ -695,8 +726,7 @@ impl App {
             self.sun_light.transform.orientation,
             self.light_color,
             self.light_intensitiy,
-            &focused_camera,
-            aspect_ratio,
+            &self.frozen_camera,
             assets,
             scene,
             self.selected_cascade,
@@ -705,17 +735,18 @@ impl App {
             &mut self.debug_line_renderer,
         );
 
-        self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
+        if !self.freeze_camera {
+            self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
+        }
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
-        let forwad_draw_commands = create_draw_commands(
-            context,
-            "forward_draw_commands".into(),
-            &focused_camera_view_projection,
-            FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR,
-            self.depth_pyramid.usable.then_some(depth_pyramid),
-            assets,
-            scene,
+        let forwad_draw_commands = create_draw_commands(context, "forward_draw_commands".into(), assets, scene,
+            &CullInfo {
+                projection_matrix: self.frozen_camera.compute_projection_matrix(),
+                view_matrix: self.frozen_camera.transform.compute_matrix().inverse(),
+                cull_plane_mask: self.enable_frustum_culling.then_some(FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR).unwrap_or_default(),
+                depth_pyramid:  (self.depth_pyramid.usable && self.enable_occlusion_culling).then_some(depth_pyramid),
+            }
         );
 
         self.forward_renderer.render(
@@ -727,7 +758,6 @@ impl App {
             depth_target,
             depth_resolve_target,
             &self.camera,
-            focused_camera,
             self.render_mode,
             self.environment_map.as_ref(),
             directional_light,
@@ -741,24 +771,26 @@ impl App {
             color_target,
             color_resolve_target,
             depth_target,
-            camera_view_projection,
+            camera_view_projection_matrix,
         );
 
-        self.depth_pyramid.update(context, depth_resolve_target.unwrap_or(depth_target));
+        if !self.freeze_camera {
+            self.depth_pyramid.update(context, depth_resolve_target.unwrap_or(depth_target));
+        }
 
         render_post_process(
             context,
             if let Some(resolved) = color_resolve_target { resolved } else { color_target },
             self.camera_exposure,
-            self.show_depth_pyramid.then_some((depth_pyramid, self.depth_pyramid_level)),
+            (self.show_depth_pyramid).then_some((depth_pyramid, self.depth_pyramid_level, self.pyramid_display_far_depth)),
         );
 
         egui::Window::new("camera_and_lighting")
             .open(&mut self.open_camera_light_editor)
             .show(egui_ctx, |ui| {
-                ui.checkbox(&mut self.use_mock_camera, "use mock camera");
-                ui.checkbox(&mut self.show_cascade_view_frustum, "use cascade view frustum");
-                ui.checkbox(&mut self.show_cascade_light_frustum, "use cascade light frustum");
+                ui.checkbox(&mut self.freeze_camera, "freeze camera");
+                ui.checkbox(&mut self.show_cascade_view_frustum, "show cascade view frustum");
+                ui.checkbox(&mut self.show_cascade_light_frustum, "show cascade light frustum");
 
                 ui.horizontal(|ui| {
                     ui.label("camera_exposure");
@@ -790,31 +822,75 @@ impl App {
                 );
             });
 
-        if self.show_bounding_boxes {
+        if self.show_bounding_boxes || self.show_bounding_spheres || self.show_screen_aabb {
+            let view_matrix = self.frozen_camera.transform.compute_matrix().inverse();
+            let projection_matrix = self.frozen_camera.compute_projection_matrix();
+            let screen_to_world_matrix = self.frozen_camera.compute_matrix().inverse();
+
             for entity in self.scene.entities.iter() {
                 if let Some(model) = entity.model {
                     let transform_matrix = entity.transform.compute_matrix();
                     for submesh in self.gpu_assets.models[model].submeshes.iter() {
-                        let aabb = self.gpu_assets.mesh_infos[submesh.mesh_handle].aabb;
-                        let corners = [
-                            vec3a(0.0, 0.0, 0.0),
-                            vec3a(1.0, 0.0, 0.0),
-                            vec3a(1.0, 1.0, 0.0),
-                            vec3a(0.0, 1.0, 0.0),
-                            vec3a(0.0, 0.0, 1.0),
-                            vec3a(1.0, 0.0, 1.0),
-                            vec3a(1.0, 1.0, 1.0),
-                            vec3a(0.0, 1.0, 1.0),
-                        ]
-                        .map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
-                        self.debug_line_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0))
+                        if self.show_bounding_boxes {
+                            let aabb = self.gpu_assets.mesh_infos[submesh.mesh_handle].aabb;
+                            let corners = [
+                                vec3a(0.0, 0.0, 0.0),
+                                vec3a(1.0, 0.0, 0.0),
+                                vec3a(1.0, 1.0, 0.0),
+                                vec3a(0.0, 1.0, 0.0),
+                                vec3a(0.0, 0.0, 1.0),
+                                vec3a(1.0, 0.0, 1.0),
+                                vec3a(1.0, 1.0, 1.0),
+                                vec3a(0.0, 1.0, 1.0),
+                            ]
+                            .map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
+                            self.debug_line_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                        }
+
+                        if self.show_bounding_spheres || self.show_screen_aabb {
+                            let bounding_sphere = self.gpu_assets.mesh_infos[submesh.mesh_handle].bounding_sphere;
+                            let position_world = transform_matrix.transform_point3a(bounding_sphere.into());
+                            let radius = bounding_sphere.w * entity.transform.scale.max_element();
+    
+                            let p00 = projection_matrix.col(0)[0];
+                            let p11 = projection_matrix.col(1)[1];
+    
+                            let mut position_view = view_matrix.transform_point3a(position_world);
+                            position_view.z = -position_view.z;
+    
+                            let z_near = 0.01;
+    
+                            if let Some(aabb) = math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11) {
+                                if self.show_bounding_spheres {
+                                    self.debug_line_renderer.draw_sphere(position_world.into(), radius, vec4(0.0, 1.0, 0.0, 1.0));
+                                }
+                                
+                                if self.show_screen_aabb {
+                                    let depth = z_near / (position_view.z - radius);
+        
+                                    let corners = [
+                                        vec2(aabb.x, aabb.y),
+                                        vec2(aabb.x, aabb.w),
+                                        vec2(aabb.z, aabb.w),
+                                        vec2(aabb.z, aabb.y),
+                                    ].map(|c| {
+                                        let v = screen_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
+                                        v / v.w
+                                    });
+                                    self.debug_line_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                                }
+
+                            } else if self.show_bounding_spheres {
+                                self.debug_line_renderer.draw_sphere(position_world.into(), radius, vec4(1.0, 0.0, 0.0, 1.0));
+                            }
+                        }
                     }
                 }
             }
         }
 
         if self.show_frustum_planes {
-            let planes = math::frustum_planes_from_matrix(&focused_camera.compute_matrix(aspect_ratio));
+            let planes = math::frustum_planes_from_matrix(&self.frozen_camera.compute_matrix());
 
             for plane in planes {
                 self.debug_line_renderer

@@ -278,8 +278,8 @@ void main() {
             emissive *= texture(GetSampledTexture2D(material.emissive_texture_index), vout.uv).rgb;
         }
 
-        if (material.occulusion_texture_index != TEXTURE_NONE) {
-            ao = texture(GetSampledTexture2D(material.occulusion_texture_index), vout.uv).r * material.occulusion_factor;
+        if (material.occlusion_texture_index != TEXTURE_NONE) {
+            ao = texture(GetSampledTexture2D(material.occlusion_texture_index), vout.uv).r * material.occlusion_factor;
         }
     }
 

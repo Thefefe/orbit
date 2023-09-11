@@ -1,3 +1,4 @@
+use glam::mat2;
 #[allow(unused_imports)]
 use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
 
@@ -12,7 +13,6 @@ pub const NDC_BOUNDS: [Vec4; 8] = [
     vec4( 1.0,  1.0, 1.0,  1.0),
     vec4(-1.0,  1.0, 1.0,  1.0),
 ];
-
 
 pub fn lerp_element_wise(x: Vec4, y: Vec4, a: Vec4) -> Vec4 {
     x + ((y - x) * a)
@@ -70,4 +70,30 @@ pub fn perspective_corners(fovy: f32, aspect_ratio: f32, near: f32, far: f32) ->
         vec4( xf,  yf, -far,   1.0),
         vec4(-xf,  yf, -far,   1.0),
     ]
+}
+
+pub fn project_sphere_clip_space(sphere: Vec4, znear: f32, p00: f32, p11: f32) -> Option<Vec4> {
+    use glam::Vec3Swizzles;
+
+    let c = Vec3A::from(sphere);
+    let r = sphere.w;
+
+    if c.z < r + znear {
+        return None
+    };
+
+    let cx:   Vec2 = -c.xz();
+    let vx:   Vec2 = vec2(f32::sqrt(Vec2::dot(cx, cx) - r * r), r);
+    let minx: Vec2 = mat2(vec2(vx.x, vx.y), vec2(-vx.y, vx.x)) * cx;
+    let maxx: Vec2 = mat2(vec2(vx.x, -vx.y), vec2(vx.y, vx.x)) * cx;
+
+    let cy:   Vec2 = -c.yz();
+    let vy:   Vec2 = vec2(f32::sqrt(Vec2::dot(cy, cy) - r * r), r);
+    let miny: Vec2 = mat2(vec2(vy.x, vy.y), vec2(-vy.y, vy.x)) * cy;
+    let maxy: Vec2 = mat2(vec2(vy.x, -vy.y), vec2(vy.y, vy.x)) * cy;
+
+    let aabb = vec4(minx.x / minx.y * p00, miny.x / miny.y * p11, maxx.x / maxx.y * p00, maxy.x / maxy.y * p11);
+    // *aabb = aabb.xwzy() * vec4(0.5, -0.5, 0.5, -0.5) + Vec4::splat(0.5); // clip space -> uv space
+
+    return Some(aabb);
 }

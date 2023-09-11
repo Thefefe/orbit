@@ -41,6 +41,7 @@ impl Transform {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EntityData {
     pub name: Option<String>,
     pub transform: Transform,

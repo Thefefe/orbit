@@ -6,14 +6,29 @@ use gpu_allocator::MemoryLocation;
 
 use crate::{graphics, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
 
+pub struct CullInfo {
+    pub view_matrix: Mat4,
+    pub projection_matrix: Mat4,
+    pub cull_plane_mask: FrustumPlaneMask,
+    pub depth_pyramid: Option<graphics::GraphImageHandle>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuCullInfo {
+    view_matrix: Mat4,
+    projection_matrix: Mat4,
+    cull_plane_mask: u32,
+    depth_pyramid: u32,
+    _padding: [u32; 2],
+}
+
 pub fn create_draw_commands(
     context: &mut graphics::Context,
     draw_commands_name: Cow<'static, str>,
-    view_projection_matrix: &Mat4,
-    cull_plane_mask: FrustumPlaneMask,
-    _depth_pyramid: Option<graphics::GraphImageHandle>,
     assets: AssetGraphData,
     scene: SceneGraphData,
+    cull_info: &CullInfo
 ) -> graphics::GraphBufferHandle {
     let pass_name = format!("{draw_commands_name}_generation");
     
@@ -28,27 +43,37 @@ pub fn create_draw_commands(
         graphics::ShaderSource::spv("shaders/scene_draw_gen.comp.spv")
     );
 
-    let view_projection_matrix = view_projection_matrix.clone();
+    let depth_pyramid_descriptor_index = cull_info.depth_pyramid
+        .map(|i| context.get_transient_resource_descriptor_index(i)).flatten();
+
+    let cull_data = context.transient_storage_data("cull_data",bytemuck::bytes_of(&GpuCullInfo {
+        view_matrix: cull_info.view_matrix,
+        projection_matrix: cull_info.projection_matrix,
+        cull_plane_mask: cull_info.cull_plane_mask.0,
+        depth_pyramid: depth_pyramid_descriptor_index.unwrap_or(u32::MAX),
+        _padding: [0; 2],
+    }));
 
     context.add_pass(pass_name)
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
         // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
         .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
+        .with_dependencies(cull_info.depth_pyramid.map(|i| (i, graphics::AccessKind::ComputeShaderReadGeneral)))
         .render(move |cmd, graph| {
             let mesh_infos = graph.get_buffer(assets.mesh_info_buffer);
             let scene_submeshes = graph.get_buffer(scene.submesh_buffer);
             let entity_buffer = graph.get_buffer(scene.entity_buffer);
             let draw_commands = graph.get_buffer(draw_commands);
+            let cull_data = graph.get_buffer(cull_data);
             
             cmd.bind_compute_pipeline(pipeline);
 
             cmd.build_constants()
-                .mat4(&view_projection_matrix)
-                .uint(cull_plane_mask.0)
                 .buffer(&scene_submeshes)
                 .buffer(&mesh_infos)
                 .buffer(&draw_commands)
-                .buffer(&entity_buffer);
+                .buffer(&entity_buffer)
+                .buffer(&cull_data);
 
             cmd.dispatch([scene.submesh_count as u32 / 256 + 1, 1, 1]);
         });
@@ -63,7 +88,7 @@ pub struct DepthPyramid {
 
 impl DepthPyramid {
     pub fn new(context: &graphics::Context, [width, height]: [u32; 2]) -> Self {
-        let [width, height] = [width.next_power_of_two() / 4, height.next_power_of_two() / 4];
+        let [width, height] = [width.next_power_of_two() / 2, height.next_power_of_two() / 2];
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
 
         let pyramid = context.create_image("depth_pyramid", &graphics::ImageDesc {
@@ -90,7 +115,7 @@ impl DepthPyramid {
     }
 
     pub fn resize(&mut self, [width, height]: [u32; 2]) {
-        let dimensions = [width.next_power_of_two() / 4, height.next_power_of_two() / 4, 1];
+        let dimensions = [width.next_power_of_two() / 2, height.next_power_of_two() / 2, 1];
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(dimensions[0], dimensions[1]));
         if self.pyramid.recreate(&graphics::ImageDesc { dimensions, mip_levels, ..self.pyramid.desc }) {
             self.usable = false;
@@ -99,7 +124,7 @@ impl DepthPyramid {
 
     pub fn get_current(&mut self, context: &mut graphics::Context) -> graphics::GraphImageHandle {
         let pyramid = context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
-            initial_access: if self.usable { graphics::AccessKind::FragmentShaderRead } else { graphics::AccessKind::None },
+            initial_access: graphics::AccessKind::ComputeShaderReadGeneral,
             target_access: graphics::AccessKind::None,
             ..Default::default()
         });
@@ -108,8 +133,10 @@ impl DepthPyramid {
     }
 
     pub fn update(&mut self, context: &mut graphics::Context, depth_buffer: graphics::GraphImageHandle) {
+        self.usable = true;        
+        
         let pyramid = context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
-            initial_access: graphics::AccessKind::None,
+            initial_access: graphics::AccessKind::ComputeShaderReadGeneral,
             target_access: graphics::AccessKind::None,
             ..Default::default()
         });

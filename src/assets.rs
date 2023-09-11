@@ -66,8 +66,9 @@ pub struct GpuMeshInfo {
     index_offset: u32,
     index_count: u32,
     vertex_offset: u32,
-    sphere_radius: f32,
+    _padding: u32,
     aabb: GpuAabb,
+    bounding_sphere: Vec4,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +78,7 @@ pub struct MeshInfo {
     pub vertex_alloc_index: arena::Index,
     pub index_alloc_index: arena::Index,
     pub aabb: Aabb,
+    pub bounding_sphere: Vec4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,7 +96,7 @@ pub struct MaterialData {
     pub base_color: Vec4,
     pub metallic_factor: f32,
     pub roughness_factor: f32,
-    pub occulusion_factor: f32,
+    pub occlusion_factor: f32,
     pub emissive_factor: Vec3,
 
     pub alpha_cutoff: f32,
@@ -102,7 +104,7 @@ pub struct MaterialData {
     pub base_texture: Option<TextureHandle>,
     pub normal_texture: Option<TextureHandle>,
     pub metallic_roughness_texture: Option<TextureHandle>,
-    pub occulusion_texture: Option<TextureHandle>,
+    pub occlusion_texture: Option<TextureHandle>,
     pub emissive_texture: Option<TextureHandle>,
 }
 
@@ -220,6 +222,7 @@ impl GpuAssetStore {
             vertex_alloc_index,
             index_alloc_index,
             aabb: mesh.aabb,
+            bounding_sphere: mesh.bounding_sphere,
         };
         let mesh_index = self.mesh_infos.insert(mesh_block);
 
@@ -228,8 +231,9 @@ impl GpuAssetStore {
             index_offset: index_range.start as u32,
             index_count: index_range.size() as u32,
             vertex_offset: vertex_range.start as u32,
-            sphere_radius: mesh.sphere_radius,
+            _padding: 0,
             aabb: mesh.aabb.into(),
+            bounding_sphere: mesh.bounding_sphere,
         };
         context.immediate_write_buffer(
             &self.mesh_info_buffer,
@@ -267,7 +271,7 @@ impl GpuAssetStore {
         let metallic_roughness_texture_index = material_data.metallic_roughness_texture
             .map(|handle| self.get_texture_desc_index(handle))
             .unwrap_or(u32::MAX);
-        let occulusion_texture_index = material_data.occulusion_texture
+        let occulusion_texture_index = material_data.occlusion_texture
             .map(|handle| self.get_texture_desc_index(handle))
             .unwrap_or(u32::MAX);
         let emissive_texture_index = material_data.emissive_texture
@@ -279,7 +283,7 @@ impl GpuAssetStore {
             emissive_factor: material_data.emissive_factor,
             metallic_factor: material_data.metallic_factor,
             roughness_factor: material_data.roughness_factor,
-            occulusion_factor: material_data.occulusion_factor,
+            occulusion_factor: material_data.occlusion_factor,
             
             alpha_cutoff: material_data.alpha_cutoff,
 
@@ -377,7 +381,7 @@ pub struct MeshData {
     pub vertices: Vec<GpuMeshVertex>,
     pub indices: Vec<u32>,
     pub aabb: Aabb,
-    pub sphere_radius: f32,
+    pub bounding_sphere: Vec4,
 }
 
 impl MeshData {
@@ -386,7 +390,7 @@ impl MeshData {
             vertices: Vec::new(),
             indices: Vec::new(),
             aabb: Aabb::default(),
-            sphere_radius: 0.0,
+            bounding_sphere: Vec4::ZERO,
         }
     }
 

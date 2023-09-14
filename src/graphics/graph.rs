@@ -351,15 +351,19 @@ impl CompiledRenderGraph {
     pub fn get_buffer(&self, handle: graphics::GraphHandle<graphics::BufferRaw>) -> &graphics::BufferRaw {
         match self.resources[handle.resource_index].resource.as_ref() {
             graphics::AnyResourceRef::Buffer(buffer) => buffer,
-            _ => unreachable!(),
+            graphics::AnyResourceRef::Image(image)
+                => panic!("attempted to access image as buffer: {:?} [{}]", image.name, handle.resource_index),
         }
     }
 
     #[track_caller]
     pub fn get_image(&self, handle: graphics::GraphHandle<graphics::ImageRaw>) -> &graphics::ImageRaw {
-        match self.resources[handle.resource_index].resource.as_ref() {
+        let resource_ref = self.resources[handle.resource_index].resource.as_ref();
+
+        match resource_ref {
             graphics::AnyResourceRef::Image(image) => image,
-            _ => unreachable!(),
+            graphics::AnyResourceRef::Buffer(buffer)
+                => panic!("attempted to access buffer as image: {:?} [{}]", buffer.name, handle.resource_index),
         }
     }
 }

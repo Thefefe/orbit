@@ -327,17 +327,17 @@ impl App {
         //     scene.add_light(scene::LightData { position, ..light_data });
         // }
 
-        let prefab = scene.entities.pop().unwrap();
-        let offset = 1.4;
-        for x in 0..8 {
-            for y in 0..8 {
-                for z in 0..8 {
-                    let mut entity = prefab.clone();
-                    entity.transform.position = Vec3::from_array([x, y, z].map(|n| n as f32 * offset));
-                    scene.add_entity(entity);
-                }
-            }
-        }
+        // let prefab = scene.entities.pop().unwrap();
+        // let offset = 1.4;
+        // for x in 0..8 {
+        //     for y in 0..8 {
+        //         for z in 0..8 {
+        //             let mut entity = prefab.clone();
+        //             entity.transform.position = Vec3::from_array([x, y, z].map(|n| n as f32 * offset));
+        //             scene.add_entity(entity);
+        //         }
+        //     }
+        // }
         
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
@@ -816,9 +816,7 @@ impl App {
                     ));
                 });
 
-                ui.image(
-                    directional_light.shadow_maps[self.selected_cascade],
-                    egui::Vec2::new(250.0, 250.0),
+                ui.image(directional_light.shadow_maps[self.selected_cascade], egui::Vec2::new(250.0, 250.0),
                 );
             });
 
@@ -946,9 +944,6 @@ fn main() {
             time.update_now();
             app.update(&input, &time, &egui_ctx, &mut context, control_flow);
 
-            let full_output = egui_ctx.end_frame();
-            egui_state.handle_platform_output(&context.window(), &egui_ctx, full_output.platform_output);
-
             let window_size = context.window().inner_size();
             if window_size.width == 0 || window_size.height == 0 {
                 return;
@@ -959,6 +954,9 @@ fn main() {
             let swapchain_image = context.get_swapchain_image();
 
             app.render(&mut context, &egui_ctx);
+
+            let full_output = egui_ctx.end_frame();
+            egui_state.handle_platform_output(&context.window(), &egui_ctx, full_output.platform_output);
 
             let clipped_primitives = {
                 puffin::profile_scope!("egui_tessellate");

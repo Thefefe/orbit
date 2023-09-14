@@ -300,8 +300,6 @@ void main() {
     
     float shadow = 1.0;
     if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
-        vec4 cascade_map_coord =
-            GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.projection_matrices[cascade_index] * vout.world_pos;
         uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
         shadow = pcf_vogel(shadow_map, cascade_map_coord);
         // shadow = pcf_branch(shadow_map, cascade_map_coord);

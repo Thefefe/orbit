@@ -347,6 +347,7 @@ impl CompiledRenderGraph {
         self.batches.clear();
     }
 
+    #[track_caller]
     pub fn get_buffer(&self, handle: graphics::GraphHandle<graphics::BufferRaw>) -> &graphics::BufferRaw {
         match self.resources[handle.resource_index].resource.as_ref() {
             graphics::AnyResourceRef::Buffer(buffer) => buffer,
@@ -354,6 +355,7 @@ impl CompiledRenderGraph {
         }
     }
 
+    #[track_caller]
     pub fn get_image(&self, handle: graphics::GraphHandle<graphics::ImageRaw>) -> &graphics::ImageRaw {
         match self.resources[handle.resource_index].resource.as_ref() {
             graphics::AnyResourceRef::Image(image) => image,

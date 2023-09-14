@@ -327,17 +327,17 @@ impl App {
         //     scene.add_light(scene::LightData { position, ..light_data });
         // }
 
-        // let prefab = scene.entities.pop().unwrap();
-        // let offset = 6.0;
-        // for x in 0..2 {
-        //     for y in 0..2 {
-        //         for z in 0..2 {
-        //             let mut entity = prefab.clone();
-        //             entity.transform.position = Vec3::from_array([x, y, z].map(|n| n as f32 * offset));
-        //             scene.add_entity(entity);
-        //         }
-        //     }
-        // }
+        let prefab = scene.entities.pop().unwrap();
+        let offset = 1.4;
+        for x in 0..8 {
+            for y in 0..8 {
+                for z in 0..8 {
+                    let mut entity = prefab.clone();
+                    entity.transform.position = Vec3::from_array([x, y, z].map(|n| n as f32 * offset));
+                    scene.add_entity(entity);
+                }
+            }
+        }
         
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);

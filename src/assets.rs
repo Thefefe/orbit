@@ -1,3 +1,4 @@
+use crate::math;
 use crate::{graphics, collections::arena};
 use crate::collections::freelist_alloc::*;
 
@@ -11,16 +12,13 @@ use ash::vk;
 // UUUU UUUU
 // NNNN NNNN NNNN
 // TTTT TTTT TTTT TTTT
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMeshVertex {
     pub position: Vec3,
-    pub _padding0: u32,
+    pub packed_normals: [i8; 4],
     pub uv_coord: Vec2,
-    pub _padding1: [u32; 2],
-    pub normal: Vec3,
-    pub _padding2: u32,
-    pub tangent: Vec4,
+    pub _padding0: [u32; 2],
 }
 
 impl GpuMeshVertex {
@@ -32,12 +30,9 @@ impl GpuMeshVertex {
     ) -> Self {
         Self {
             position,
-            _padding0: 0,
+            packed_normals: math::pack_normal_tangent_bitangent(normal, tangent),
             uv_coord,
-            _padding1: [0; 2],
-            normal,
-            _padding2: 0,
-            tangent,
+            _padding0: [0; 2],
         }
     }
 
@@ -49,13 +44,18 @@ impl GpuMeshVertex {
     ) -> Self {
         Self {
             position: Vec3::from_array(position),
+            packed_normals: math::pack_normal_tangent_bitangent(Vec3::from_array(normal), Vec4::from_array(tangent)),
             uv_coord: Vec2::from_array(uv_coord),
-            normal: Vec3::from_array(normal),
-            tangent: Vec4::from_array(tangent),
-            _padding0: 0,
-            _padding1: [0; 2],
-            _padding2: 0,
+            _padding0: [0; 2],
         }
+    }
+
+    pub fn pack_normals(&mut self, normal: Vec3, tangent: Vec4) {
+        self.packed_normals = math::pack_normal_tangent_bitangent(normal, tangent);
+    }
+
+    pub fn unpack_normals(&self) -> (Vec3, Vec4) {
+        math::unpack_normal_tangent_bitangent(self.packed_normals)
     }
 }
 
@@ -360,20 +360,12 @@ impl Iterator for SepVertexIter<'_> {
     type Item = GpuMeshVertex;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let pos = self.next_pos()?;
-        let uv = self.next_uv().unwrap_or_default();
-        let norm = self.next_normal().unwrap_or_default();
-        let tan = self.next_tangent().unwrap_or_default();
+        let position = self.next_pos()?;
+        let uv_coord = self.next_uv().unwrap_or_default();
+        let normal = self.next_normal().unwrap_or_default();
+        let tangent = self.next_tangent().unwrap_or_default();
 
-        Some(GpuMeshVertex {
-            position: pos,
-            _padding0: 0,
-            uv_coord: uv,
-            _padding1: [0; 2],
-            normal: norm,
-            _padding2: 0,
-            tangent: tan,
-        })
+        Some(GpuMeshVertex::new(position, uv_coord, normal, tangent))
     }
 }
 
@@ -404,11 +396,6 @@ impl MeshData {
     }
 
     pub fn compute_tangents(&mut self) {
-        // just to be safe
-        for vertex in self.vertices.iter_mut() {
-            vertex.normal = vertex.normal.normalize()
-        }
-        
         compute_tangents(&mut self.vertices, &self.indices);
     }
 
@@ -493,23 +480,26 @@ impl From<Aabb> for GpuAabb {
 ///
 /// The normals have to be zero before calling.
 pub fn compute_normals(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
-    for chunk in indices.chunks_exact(3) {
-        let v0 = vertices[chunk[0] as usize].position;
-        let v1 = vertices[chunk[1] as usize].position;
-        let v2 = vertices[chunk[2] as usize].position;
+    let mut normals = vec![Vec3A::ZERO; vertices.len()];
+
+    for triangle in indices.chunks_exact(3) {
+        let v0 = Vec3A::from(vertices[triangle[0] as usize].position);
+        let v1 = Vec3A::from(vertices[triangle[1] as usize].position);
+        let v2 = Vec3A::from(vertices[triangle[2] as usize].position);
 
         let edge_a = v1 - v0;
         let edge_b = v2 - v0;
 
-        let face_normal = Vec3::cross(edge_a, edge_b);
+        let face_normal = edge_a.cross(edge_b);
 
-        vertices[chunk[0] as usize].normal += face_normal;
-        vertices[chunk[1] as usize].normal += face_normal;
-        vertices[chunk[2] as usize].normal += face_normal;
+        normals[triangle[0] as usize] += face_normal;
+        normals[triangle[1] as usize] += face_normal;
+        normals[triangle[2] as usize] += face_normal;
     }
 
-    for vertex in vertices {
-        vertex.normal = vertex.normal.normalize();
+    for (vertex_index, vertex) in vertices.iter_mut().enumerate() {
+        let (_, tangent) = vertex.unpack_normals();
+        vertex.pack_normals(normals[vertex_index].normalize().into(), tangent);
     }
 }
 
@@ -561,15 +551,15 @@ fn compute_tangents(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
         tan2[i3] += tdir;
     }
 
-    for a in 0..vertices.len() {
-        let n = vertices[a].normal;
-        let t = tan1[a];
+    for i in 0..vertices.len() {
+        let (normal, _) = vertices[i].unpack_normals();
+        let t = tan1[i];
         // Gram-Schmidt orthogonalize
-        let tangent = (t - n * n.dot(t)).normalize();
+        let tangent = (t - normal * normal.dot(t)).normalize();
         // Calculate handedness
-        let bitangent = if n.cross(t).dot(tan2[a]).is_sign_negative() { -1.0 } else { 1.0 };
+        let bitangent = if normal.cross(t).dot(tan2[i]).is_sign_negative() { -1.0 } else { 1.0 };
 
-        vertices[a].tangent = tangent.extend(bitangent);
+        vertices[i].pack_normals(normal, tangent.extend(bitangent));
     }
 }
 

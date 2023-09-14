@@ -32,13 +32,9 @@ struct PerFrameData {
 
 struct MeshVertex {
     vec3 pos;
-    uint _padding0;
+    i8vec4 packed_normals;
     vec2 uv;
-    uint _padding1;
-    uint _padding2;
-    vec3 norm;
-    uint _padding3;
-    vec4 tang;
+    vec2 _padding0;
 };
 
 struct EntityData {

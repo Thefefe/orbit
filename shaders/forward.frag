@@ -258,12 +258,15 @@ void main() {
         if (material.normal_texture_index != TEXTURE_NONE) {
             mat3 TBN = mat3(
                 vout.tangent.xyz,
-                cross(vout.normal, vout.tangent.xyz) * vout.tangent.w,
+                cross(vout.normal, vout.tangent.xyz) * sign(vout.tangent.w),
                 vout.normal
             );
+
             vec4 normal_tex = texture(GetSampledTexture2D(material.normal_texture_index), vout.uv);
             vec3 normal_tang = normal_tex.xyz * 2.0 - 1.0;
             normal_tang.z = sqrt(abs(1 - normal_tang.x*normal_tang.x - normal_tang.y * normal_tang.y));
+            normal_tang = normalize(normal_tang);
+
             normal = normalize(TBN * normal_tang);
         }
         
@@ -388,7 +391,7 @@ void main() {
             
             out_color = vec4(cascade_color * base_color.rgb * shadow, 1.0);
             break;
-        case 2: 
+        case 2:
             out_color = vec4(normal * 0.5 + 0.5, 1.0);
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;

@@ -1,3 +1,5 @@
+use std::f32::consts::PI;
+
 use glam::mat2;
 #[allow(unused_imports)]
 use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
@@ -96,4 +98,171 @@ pub fn project_sphere_clip_space(sphere: Vec4, znear: f32, p00: f32, p11: f32) -
     // *aabb = aabb.xwzy() * vec4(0.5, -0.5, 0.5, -0.5) + Vec4::splat(0.5); // clip space -> uv space
 
     return Some(aabb);
+}
+
+pub fn pack_f32_to_snorm_u8(f: f32) -> i8 {
+    (f.clamp(-1.0, 1.0) * i8::MAX as f32) as i8
+}
+
+pub fn unpack_snorm_u8_to_f32(i: i8) -> f32 {
+    f32::max(-1.0, i as f32 / i8::MAX as f32)
+}
+
+fn octahedron_wrap(v: Vec2) -> Vec2 {
+    (Vec2::splat(1.0) - vec2(v.y, v.x).abs()) * Vec2::select(v.cmpge(Vec2::ZERO), Vec2::splat(1.0), Vec2::splat(-1.0))
+}
+
+pub fn octahedron_normal_encode(mut n: Vec3) -> Vec2 {
+    n /= n.x.abs() + n.y.abs() + n.z.abs();
+    let mut xy = vec2(n.x, n.y);
+    xy = if n.z >= 0.0 { xy } else { octahedron_wrap(xy) };
+    return xy;
+}
+
+pub fn octahedron_normal_decode(f: Vec2) -> Vec3 {
+    let mut n = vec3(f.x, f.y, 1.0 - f.x.abs() - f.y.abs());
+    let t = f32::max(-n.z , 0.0);
+    n += Vec3::select(n.cmpge(Vec3::ZERO), vec3(-t, -t, 0.0), vec3(t, t, 0.0));
+    return n.normalize();
+}
+
+fn reference_orhonormal_vector(v: Vec3A) -> Vec3A {
+    // if v.x.abs() > v.z.abs() {
+    //     vec3a(-v.y, v.x, 0.0)
+    // } else {
+    //     vec3a(0.0, -v.z, v.y)
+    // }.normalize()
+    v.any_orthonormal_vector()
+}
+
+// https://advances.realtimerendering.com/s2020/RenderingDoomEternal.pdf page 35
+pub fn rotational_tangent_encode(normal: Vec3A, tangent: Vec3A) -> f32 {
+    let normal = normal.normalize();
+    let tangent = tangent.normalize();
+    let reference_tangent = reference_orhonormal_vector(normal).normalize();
+
+    let alpha = f32::atan2(
+        tangent.cross(reference_tangent).dot(normal),
+        tangent.dot(reference_tangent)
+    );
+
+    // let tangent0 = reference_tangent * alpha.cos() - normal.cross(reference_tangent) * alpha.sin();
+    // assert_kinda_eq!(tangent, tangent0);
+
+    alpha
+}
+
+pub fn rotational_tangent_decode(normal: Vec3A, alpha: f32) -> Vec3A {
+    let reference_tangent = reference_orhonormal_vector(normal);
+
+    let tangent = reference_tangent * alpha.cos() + reference_tangent.cross(normal) * alpha.sin();
+    tangent.into()
+}
+
+pub fn pack_normal_tangent_bitangent(normal: Vec3, tangent: Vec4) -> [i8; 4] {
+    let octahedron_normal = octahedron_normal_encode(normal);
+    let tangent_alpha = rotational_tangent_encode(normal.into(), tangent.truncate().into()) / PI;
+
+    [octahedron_normal.x, octahedron_normal.y, tangent_alpha, tangent.w].map(pack_f32_to_snorm_u8)
+}
+
+pub fn unpack_normal_tangent_bitangent(packed: [i8; 4]) -> (Vec3, Vec4) {
+    let [oct_norm_x, oct_norm_y, tangent_alpha, bitangent] = packed.map(unpack_snorm_u8_to_f32);
+    let normal = octahedron_normal_decode(vec2(oct_norm_x, oct_norm_y));
+    let tangent = rotational_tangent_decode(normal.into(), tangent_alpha);
+
+    (normal, tangent.extend(bitangent))
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::*;
+    use crate::math::*;
+
+    use super::octahedron_normal_decode;
+
+    macro_rules! assert_kinda_eq {
+        ($left:expr, $right:expr $(,)?) => {
+            match (&$left, &$right) {
+                (left_val, right_val) => {
+                    if !left_val.abs_diff_eq(*right_val, 1e-6) {
+                        panic!("assert_kinda_eq failed: {:?}, {:?}", left_val, right_val);
+                    }
+                }
+            }
+        };
+    }
+
+    #[test]
+    fn octahedron_normal() {
+        fn encode_decode(v: Vec3) -> Vec3 {
+            octahedron_normal_decode(octahedron_normal_encode(v))
+        }
+        
+        let normals = [
+            vec3( 1.0,  0.0,  0.0),
+            vec3( 0.0,  1.0,  0.0),
+            vec3( 0.0,  0.0,  1.0),
+            vec3(-1.0,  0.0,  0.0),
+            vec3( 0.0, -1.0,  0.0),
+            vec3( 0.0,  0.0, -1.0),
+            vec3(-1.0,  0.0,  0.0),
+            vec3( 0.0, -1.0,  0.0),
+            vec3( 0.0,  0.0, -1.0),
+            vec3( 1.0,  1.0,  0.0).normalize(),
+            vec3( 0.0,  1.0,  1.0).normalize(),
+            vec3( 1.0,  0.0,  1.0).normalize(),
+            vec3(-1.0,  1.0,  0.0).normalize(),
+            vec3( 0.0, -1.0,  1.0).normalize(),
+            vec3( 1.0,  0.0, -1.0).normalize(),
+            vec3( 321.0,  12.0,  543.0).normalize(),
+            vec3( 432.0,  23.0,  43.0).normalize(),
+            vec3( -431.0,  -20.0,  21.0).normalize(),
+            vec3(-1.0,  21.0,  -30.0).normalize(),
+            vec3( -30.0, -1.0,  1.0).normalize(),
+            vec3( 1.0,  10.0, -1.0).normalize(),
+        ];
+
+        for normal in normals {
+            assert_kinda_eq!(normal, encode_decode(normal));
+        }
+    }
+
+    #[test]
+    fn rotational_tangent() {
+        fn encode_decode(normal: Vec3, tangent: Vec3) -> Vec3 {
+            rotational_tangent_decode(normal.into(), rotational_tangent_encode(normal.into(), tangent.into())).into()
+        }
+
+        let normals = [
+            vec3( 1.0,  0.0,  0.0),
+            vec3( 0.0,  1.0,  0.0),
+            vec3( 0.0,  0.0,  1.0),
+            vec3(-1.0,  0.0,  0.0),
+            vec3( 0.0, -1.0,  0.0),
+            vec3( 0.0,  0.0, -1.0),
+            vec3(-1.0,  0.0,  0.0),
+            vec3( 0.0, -1.0,  0.0),
+            vec3( 0.0,  0.0, -1.0),
+            vec3( 1.0,  1.0,  0.0).normalize(),
+            vec3( 0.0,  1.0,  1.0).normalize(),
+            vec3( 1.0,  0.0,  1.0).normalize(),
+            vec3(-1.0,  1.0,  0.0).normalize(),
+            vec3( 0.0, -1.0,  1.0).normalize(),
+            vec3( 1.0,  0.0, -1.0).normalize(),
+            vec3( 321.0,  12.0,  543.0).normalize(),
+            vec3( 432.0,  23.0,  43.0).normalize(),
+            vec3( -431.0,  -20.0,  21.0).normalize(),
+            vec3(-1.0,  21.0,  -30.0).normalize(),
+            vec3( -30.0, -1.0,  1.0).normalize(),
+            vec3( 1.0,  10.0, -1.0).normalize(),
+        ];
+
+        for normal in normals {
+            let (tangent0, tangent1) = normal.any_orthonormal_pair();
+
+            assert_kinda_eq!(tangent0, encode_decode(normal, tangent0));
+            assert_kinda_eq!(tangent1, encode_decode(normal, tangent1));
+        }
+    }
 }

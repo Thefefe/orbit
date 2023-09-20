@@ -36,7 +36,7 @@ pub struct ForwardFrameData {
 
 pub struct ForwardRenderer {
     brdf_integration_map: graphics::Image,
-    jittered_offset_texture: graphics::Image,
+    jitter_offset_texture: graphics::Image,
     visibility_buffer: graphics::Buffer,
     is_visibility_buffer_initialized: bool,
     pub depth_pyramid: DepthPyramid,
@@ -81,7 +81,7 @@ impl ForwardRenderer {
         });
 
         
-        let visibility_buffer = context.create_buffer("visiblity_buffer", &graphics::BufferDesc {
+        let visibility_buffer = context.create_buffer("visibility_buffer", &graphics::BufferDesc {
             size: 4 * MAX_DRAW_COUNT,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: gpu_allocator::MemoryLocation::GpuOnly,
@@ -124,7 +124,7 @@ impl ForwardRenderer {
 
         Self {
             brdf_integration_map,
-            jittered_offset_texture: create_jittered_offset_texture(context, 16, 8),
+            jitter_offset_texture: create_jittered_offset_texture(context, 16, 8),
             visibility_buffer,
             is_visibility_buffer_initialized: false,
             depth_pyramid,
@@ -176,7 +176,7 @@ impl ForwardRenderer {
         let environment_map = environment_map.map(|e| e.import_to_graph(context));
 
         let brdf_integration_map = context.import(&self.brdf_integration_map);
-        let jitter_texture = context.import(&self.jittered_offset_texture);
+        let jitter_texture = context.import(&self.jitter_offset_texture);
 
         let forward_pipeline = context.create_raster_pipeline(
             "forward_pipeline",
@@ -249,7 +249,11 @@ impl ForwardRenderer {
 
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
-        let draw_commands = create_draw_commands(context, "forward_draw_commands_1".into(), assets, scene,
+        let draw_commands = create_draw_commands(
+            context,
+            if occlusion_culling { "forward_draw_commands_1".into() } else { "forward_draw_commands".into() },
+            assets,
+            scene,
             &CullInfo {
                 view_matrix,
                 projection_matrix,
@@ -303,7 +307,7 @@ impl ForwardRenderer {
                         .unwrap_or_default(),
                     occlusion_culling: OcclusionCullInfo::SecondPass { visibility_buffer, depth_pyramid },
                 },
-                Some(draw_commands),
+                None,
             );
 
             forward_pass(
@@ -401,7 +405,7 @@ fn forward_pass(
                     .resolve_mode(vk::ResolveModeFlags::AVERAGE);
             }
 
-            let mut depth_attachemnt = vk::RenderingAttachmentInfo::builder()
+            let mut depth_attachment = vk::RenderingAttachmentInfo::builder()
                 .image_view(depth_target.view)
                 .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                 .load_op(if first_pass { vk::AttachmentLoadOp::CLEAR } else { vk::AttachmentLoadOp::LOAD })
@@ -414,7 +418,7 @@ fn forward_pass(
                 .store_op(vk::AttachmentStoreOp::STORE);
 
             if let Some(depth_resolve) = depth_resolve {
-                depth_attachemnt = depth_attachemnt
+                depth_attachment = depth_attachment
                     .resolve_image_view(depth_resolve.view)
                     .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                     .resolve_mode(vk::ResolveModeFlags::MIN);
@@ -424,7 +428,7 @@ fn forward_pass(
                 .render_area(color_target.full_rect())
                 .layer_count(1)
                 .color_attachments(std::slice::from_ref(&color_attachment))
-                .depth_attachment(&depth_attachemnt);
+                .depth_attachment(&depth_attachment);
 
             cmd.begin_rendering(&rendering_info);
             
@@ -511,7 +515,7 @@ fn create_jittered_offset_texture(context: &mut graphics::Context, window_size: 
     let data = gen_offset_texture_data(window_size, filter_size);
     let num_filter_samples = filter_size * filter_size;
     
-    let image = context.create_image("jitterd_offset_texture", &graphics::ImageDesc {
+    let image = context.create_image("jittered_offset_texture", &graphics::ImageDesc {
         ty: graphics::ImageType::Single3D,
         format: vk::Format::R32G32B32A32_SFLOAT,
         dimensions: [num_filter_samples as u32 / 2, window_size as u32, window_size as u32],

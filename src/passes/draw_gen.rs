@@ -141,7 +141,8 @@ pub fn create_draw_commands(
         // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
         .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
         .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
-        .with_dependencies(cull_info.occlusion_culling.depth_pyramid().map(|i| (i, graphics::AccessKind::ComputeShaderReadGeneral)))
+        .with_dependencies(cull_info.occlusion_culling.depth_pyramid()
+            .map(|i| (i, graphics::AccessKind::ComputeShaderReadGeneral)))
         .render(move |cmd, graph| {
             let mesh_infos = graph.get_buffer(assets.mesh_info_buffer);
             let scene_submeshes = graph.get_buffer(scene.submesh_buffer);

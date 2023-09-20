@@ -5,7 +5,7 @@ use winit::window::Window;
 
 use crate::graphics;
 
-use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, ResourceKind, BatchDependecy};
+use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, ResourceKind, BatchDependency};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -589,7 +589,7 @@ impl Context {
 
                 memory_barrier = vk::MemoryBarrier2::default();
                 image_barriers.clear();
-                for BatchDependecy { resoure_index, src_access, dst_access } in batch.begin_dependencies.iter().copied() {
+                for BatchDependency { resource_index: resoure_index, src_access, dst_access } in batch.begin_dependencies.iter().copied() {
                     let resource = &frame.compiled_graph.resources[resoure_index].resource.as_ref();
 
                     if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
@@ -654,7 +654,7 @@ impl Context {
                 );
 
                 image_barriers.clear();
-                for BatchDependecy { resoure_index, src_access, dst_access } in batch.finish_dependencies.iter().copied() {
+                for BatchDependency { resource_index: resoure_index, src_access, dst_access } in batch.finish_dependencies.iter().copied() {
                     if let graphics::AnyResourceRef::Image(image) = frame.compiled_graph.resources[resoure_index].resource.as_ref() {
                         image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
                     }
@@ -720,7 +720,7 @@ impl Context {
                     .id_source([i, 1])
                     .show(ui, |ui| {
                         for (j, dependency) in batch.begin_dependencies.iter().enumerate() {
-                            let resource = &graph.resources[dependency.resoure_index].resource.as_ref();
+                            let resource = &graph.resources[dependency.resource_index].resource.as_ref();
                             egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 1, j]).show(ui, |ui| {
                                 ui.label(format!("src_access: {:?}", dependency.src_access));
                                 ui.label(format!("dst_access: {:?}", dependency.dst_access));
@@ -740,7 +740,7 @@ impl Context {
                     .id_source([i, 3])
                     .show(ui, |ui| {
                         for (j, dependency) in batch.finish_dependencies.iter().enumerate() {
-                            let resource = &graph.resources[dependency.resoure_index].resource.as_ref();
+                            let resource = &graph.resources[dependency.resource_index].resource.as_ref();
                             egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 3, j]).show(ui, |ui| {
                                 ui.label(format!("src_access: {:?}", dependency.src_access));
                                 ui.label(format!("dst_access: {:?}", dependency.dst_access));

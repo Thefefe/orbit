@@ -1,4 +1,5 @@
 use std::{collections::HashMap, ops::Range, borrow::Cow};
+use std::hint::black_box;
 
 use ash::vk;
 
@@ -176,6 +177,12 @@ impl RenderGraph {
             resource_version,
         });
 
+        let resource_name: &str = self.resources[resource_handle].name.as_ref();
+
+        if resource_name == "forward_draw_commands" {
+            let _ = black_box(10);
+        }
+
         self.passes[pass_handle].dependencies.push(dependency);
 
         if access.read_write_kind() == graphics::ReadWriteKind::Write {
@@ -269,8 +276,8 @@ pub struct BatchData {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct BatchDependecy {
-    pub resoure_index: usize,
+pub struct BatchDependency {
+    pub resource_index: usize,
     pub src_access: graphics::AccessKind,
     pub dst_access: graphics::AccessKind,
 }
@@ -307,18 +314,18 @@ pub struct CompiledGraphResource {
 pub struct CompiledRenderGraph {
     pub resources: Vec<CompiledGraphResource>,
     pub passes: Vec<CompiledPassData>,
-    pub dependencies: Vec<BatchDependecy>,
+    pub dependencies: Vec<BatchDependency>,
     pub semaphores: Vec<(graphics::Semaphore, vk::PipelineStageFlags2)>,
     pub batches: Vec<BatchData>,
 }
 
 pub struct BatchRef<'a> {
     pub wait_semaphores: &'a [(graphics::Semaphore, vk::PipelineStageFlags2)],
-    pub begin_dependencies: &'a [BatchDependecy],
+    pub begin_dependencies: &'a [BatchDependency],
 
     pub passes: &'a [CompiledPassData],
 
-    pub finish_dependencies: &'a [BatchDependecy],
+    pub finish_dependencies: &'a [BatchDependency],
     pub signal_semaphores: &'a [(graphics::Semaphore, vk::PipelineStageFlags2)],
 }
 
@@ -401,10 +408,10 @@ impl RenderGraph {
                     let src_access = resource_data.last_access(dependency.resource_version);
                     let dst_access = dependency.access;
 
-                    // TODO: remove duplicate dependencies, handle seperate image
+                    // TODO: remove duplicate dependencies, handle separate image
                     // layouts for same image (rare, but can happen) 
-                    compiled.dependencies.push(BatchDependecy {
-                        resoure_index: dependency.resource_handle,
+                    compiled.dependencies.push(BatchDependency {
+                        resource_index: dependency.resource_handle,
                         src_access,
                         dst_access
                     })
@@ -435,8 +442,8 @@ impl RenderGraph {
                            resource_data.target_access != graphics::AccessKind::None &&
                            dependency.access.image_layout() != resource_data.target_access.image_layout()
                         {
-                            compiled.dependencies.push(BatchDependecy {
-                                resoure_index: dependency.resource_handle,
+                            compiled.dependencies.push(BatchDependency {
+                                resource_index: dependency.resource_handle,
                                 src_access: dependency.access,
                                 dst_access: resource_data.target_access,
                             });

@@ -4,6 +4,8 @@ use std::hint::black_box;
 use ash::vk;
 
 use crate::{graphics, collections::arena};
+
+use super::ReadWriteKind;
 pub type GraphResourceIndex = usize;
 pub type GraphPassIndex = arena::Index;
 pub type GraphDependencyIndex = usize;
@@ -22,9 +24,10 @@ pub enum ResourceSource {
 }
 
 #[derive(Debug)]
-pub struct ResourceVersion {
-    last_access: graphics::AccessKind,
-    source_pass: GraphPassIndex,
+pub struct GraphResourceVersion {
+    pub last_access: graphics::AccessKind,
+    pub source_pass: Option<GraphPassIndex>,
+    pub read_by: Vec<GraphPassIndex>,
 }
 
 #[derive(Debug)]
@@ -39,7 +42,7 @@ pub struct GraphResourceData {
     pub wait_semaphore: Option<graphics::Semaphore>,
     pub finish_semaphore: Option<graphics::Semaphore>,
 
-    pub versions: Vec<ResourceVersion>,
+    pub versions: Vec<GraphResourceVersion>,
 }
 
 impl GraphResourceData {
@@ -51,24 +54,16 @@ impl GraphResourceData {
     }
 
     fn current_version(&self) -> usize {
-        self.versions.len()
+        self.versions.len() - 1
     }
 
     fn last_access(&self, version: usize) -> graphics::AccessKind {
-        assert!(version <= self.versions.len());
-        if version == 0 {
-            self.initial_access
-        } else {
-            self.versions[version - 1].last_access
-        }
+        assert!(version < self.versions.len());
+        self.versions[version].last_access
     }
 
     fn source_pass(&self, version: usize) -> Option<GraphPassIndex> {
-        if version != 0 {
-            Some(self.versions[version - 1].source_pass)
-        } else {
-            None
-        }
+        self.versions[version].source_pass
     }
 }
 
@@ -131,7 +126,9 @@ impl RenderGraph {
         self.import_cache.clear();
     }
 
-    pub fn add_resource(&mut self, resource_data: GraphResourceData) -> GraphResourceIndex {
+    pub fn add_resource(&mut self, mut resource_data: GraphResourceData) -> GraphResourceIndex {
+        assert!(resource_data.versions.is_empty());
+
         let index = self.resources.len();
         let imported_handle = if let ResourceSource::Import { resource, .. } = &resource_data.source {
             Some(resource.as_ref().handle())
@@ -146,6 +143,12 @@ impl RenderGraph {
                 self.import_cache.insert(handle, index);
             }
         }
+
+        resource_data.versions = vec![GraphResourceVersion {
+            last_access: resource_data.initial_access,
+            source_pass: None,
+            read_by: vec![]
+        }];
 
         self.resources.push(resource_data);
 
@@ -186,10 +189,13 @@ impl RenderGraph {
         self.passes[pass_handle].dependencies.push(dependency);
 
         if access.read_write_kind() == graphics::ReadWriteKind::Write {
-            self.resources[resource_handle].versions.push(ResourceVersion {
+            self.resources[resource_handle].versions.push(GraphResourceVersion {
                 last_access: access,
-                source_pass: pass_handle,
+                source_pass: Some(pass_handle),
+                read_by: Vec::new(),
             });
+        } else if access.read_write_kind() == graphics::ReadWriteKind::Read {
+            self.resources[resource_handle].versions.last_mut().unwrap().read_by.push(pass_handle);
         }
 
         dependency
@@ -594,11 +600,22 @@ impl RenderGraph {
     }
 
     fn prev_passes(&self, pass: GraphPassIndex) -> impl Iterator<Item = GraphPassIndex> + '_ {
-        self.passes.get(pass).map(|pass| pass.dependencies.iter().filter_map(|&dependency_handle| {
-            let handle = self.dependencies[dependency_handle].resource_handle;
-            let version = self.dependencies[dependency_handle].resource_version;
+        self.passes
+            .get(pass)
+            .map(|pass| pass.dependencies.iter().map(|&dependency_handle| {
+                let dependency = &self.dependencies[dependency_handle];
+                let resource = &self.resources[dependency.resource_handle];
+                let resource_version = &resource.versions[dependency.resource_version];
 
-            self.resources[handle].source_pass(version)
-        })).into_iter().flatten()
+                let is_write = dependency.access.read_write_kind() == ReadWriteKind::Write;
+
+                let prev_reads = is_write.then_some(resource_version.read_by.iter().clone()).into_iter().flatten().copied();
+                let source_pass = resource.source_pass(dependency.resource_version);
+
+                prev_reads.chain(source_pass)
+            }).flatten())
+            .into_iter()
+            .flatten()
+
     }
 }

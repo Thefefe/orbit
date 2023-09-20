@@ -307,7 +307,7 @@ impl ForwardRenderer {
                         .unwrap_or_default(),
                     occlusion_culling: OcclusionCullInfo::SecondPass { visibility_buffer, depth_pyramid },
                 },
-                None,
+                Some(draw_commands),
             );
 
             forward_pass(

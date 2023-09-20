@@ -212,6 +212,24 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
+    pub fn fill_buffer(
+        &self,
+        buffer: &graphics::BufferView,
+        offset: u64,
+        size: u64,
+        data: u32,
+    ) {
+        unsafe {
+            self.device.raw.cmd_fill_buffer(
+                self.buffer(),
+                buffer.handle,
+                offset, size,
+                data,
+            )
+        }
+    }
+
+    #[inline(always)]
     pub fn copy_buffer(&self, src: &graphics::BufferView, dst: &graphics::BufferView, regions: &[vk::BufferCopy]) {
         unsafe {
             self.device.raw.cmd_copy_buffer(

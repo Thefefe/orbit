@@ -4,7 +4,6 @@
 #include "include/types.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
-    ivec2 screen_size;
     uint per_frame_buffer;
     uint vertex_buffer;
     uint entity_buffer;
@@ -42,7 +41,7 @@ vec3 octahedron_decode(vec2 f) {
     return normalize(n);
 }
 
-void unpack_normal_tanget(i8vec4 packed, out vec3 n, out vec4 t) {
+void unpack_normal_tangent(i8vec4 packed, out vec3 n, out vec4 t) {
     vec4 unpacked = vec4(packed) / 127.0;
     
     n = octahedron_decode(unpacked.xy);
@@ -65,7 +64,7 @@ void main() {
     
     mat3 normal_matrix = mat3(GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].normal_matrix);
 
-    unpack_normal_tanget(vertex.packed_normals, vout.normal, vout.tangent);
+    unpack_normal_tangent(vertex.packed_normals, vout.normal, vout.tangent);
     vout.normal  = normalize(normal_matrix * vout.normal);
     vout.tangent = vec4(normalize(normal_matrix * vout.tangent.xyz), vout.tangent.w);
 

@@ -17,7 +17,7 @@ use crate::{
     MAX_SHADOW_CASCADE_COUNT,
 };
 
-use super::{draw_gen::{FrustumPlaneMask, create_draw_commands, CullInfo}, debug_line_renderer::DebugLineRenderer};
+use super::{draw_gen::{FrustumPlaneMask, create_draw_commands, CullInfo, OcclusionCullInfo}, debug_line_renderer::DebugLineRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -396,8 +396,9 @@ pub fn render_directional_light(
                 view_matrix: light_matrix,
                 projection_matrix: projection_matrix,
                 cull_plane_mask: FrustumPlaneMask::SIDES,
-                depth_pyramid: None,
-            }
+                occlusion_culling: OcclusionCullInfo::None,
+            },
+            None,
         );
         
         let shadow_map = render_shadow_map(
@@ -413,7 +414,7 @@ pub fn render_directional_light(
         
         directional_light_data.projection_matrices[cascade_index] = light_projection_matrix;
         directional_light_data.shadow_maps[cascade_index] = context
-            .get_transient_resource_descriptor_index(shadow_map)
+            .get_resource_descriptor_index(shadow_map)
             .unwrap();
         shadow_maps[cascade_index] = shadow_map;
     };

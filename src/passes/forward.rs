@@ -2,9 +2,28 @@ use ash::vk;
 use glam::{Mat4, Vec3};
 use rand::prelude::Distribution;
 
-use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App, Settings};
+use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App, Settings, passes::draw_gen::{create_draw_commands, CullInfo, FrustumPlaneMask, OcclusionCullInfo}};
 
-use super::shadow_renderer::DirectionalLightGraphData;
+use super::{shadow_renderer::DirectionalLightGraphData, env_map_loader::GraphEnvironmentMap, draw_gen::DepthPyramid};
+
+#[derive(Debug, Clone, Copy)]
+pub struct TargetAttachments {
+    pub color_target: graphics::GraphImageHandle,
+    pub color_resolve: Option<graphics::GraphImageHandle>,
+    pub depth_target: graphics::GraphImageHandle,
+    pub depth_resolve: Option<graphics::GraphImageHandle>,
+}
+
+impl TargetAttachments {
+    fn dependencies(&self) -> impl Iterator<Item = (graphics::GraphImageHandle, graphics::AccessKind)> {
+        [
+            (self.color_target, graphics::AccessKind::ColorAttachmentWrite),
+            (self.depth_target, graphics::AccessKind::DepthAttachmentWrite),
+        ].into_iter()
+        .chain(self.color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
+        .chain(self.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -18,6 +37,9 @@ pub struct ForwardFrameData {
 pub struct ForwardRenderer {
     brdf_integration_map: graphics::Image,
     jittered_offset_texture: graphics::Image,
+    visibility_buffer: graphics::Buffer,
+    is_visibility_buffer_initialized: bool,
+    pub depth_pyramid: DepthPyramid,
 }
 
 impl ForwardRenderer {
@@ -58,7 +80,16 @@ impl ForwardRenderer {
             ..Default::default()
         });
 
+        
+        let visibility_buffer = context.create_buffer("visiblity_buffer", &graphics::BufferDesc {
+            size: 4 * MAX_DRAW_COUNT,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            memory_location: gpu_allocator::MemoryLocation::GpuOnly,
+        });
+
         context.record_and_submit(|cmd| {
+            cmd.fill_buffer(&visibility_buffer, 0, vk::WHOLE_SIZE, 0);
+
             cmd.barrier(&[], &[graphics::image_barrier(
                 &brdf_integration_map,
                 graphics::AccessKind::None,
@@ -88,9 +119,15 @@ impl ForwardRenderer {
             )], &[]);
         });
 
+        let screen_extent = context.swapchain.extent();
+        let depth_pyramid = DepthPyramid::new(context, [screen_extent.width, screen_extent.height]);
+
         Self {
             brdf_integration_map,
             jittered_offset_texture: create_jittered_offset_texture(context, 16, 8),
+            visibility_buffer,
+            is_visibility_buffer_initialized: false,
+            depth_pyramid,
         }
     }
 
@@ -99,22 +136,25 @@ impl ForwardRenderer {
         context: &mut graphics::Context,
         settings: &Settings,
         
-        draw_commands: graphics::GraphBufferHandle,
-        color_target: graphics::GraphImageHandle,
-        color_resolve: Option<graphics::GraphImageHandle>,
-        depth_target: graphics::GraphImageHandle,
-        depth_resolve: Option<graphics::GraphImageHandle>,
-        
-        camera: &Camera,
-        render_mode: u32,
-        
-        environment_map: Option<&EnvironmentMap>,
-        directional_light: DirectionalLightGraphData,
-        
         assets: AssetGraphData,
         scene: SceneGraphData,
+
+        camera_frozen: bool,
+        frustum_culling: bool,
+        occlusion_culling: bool,
+
+        environment_map: Option<&EnvironmentMap>,
+        directional_light: DirectionalLightGraphData,
+
+        target_attachments: &TargetAttachments,
+        
+        camera: &Camera,
+        frozen_camera: &Camera,
+        render_mode: u32,
     ) {
         puffin::profile_function!();
+
+        let target_attachments = target_attachments.clone();
 
         let screen_extent = context.swapchain_extent();
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
@@ -187,136 +227,258 @@ impl ForwardRenderer {
                 })
         );
 
-        context.add_pass("forward_pass")
-            .with_dependency(color_target, graphics::AccessKind::ColorAttachmentWrite)
-            .with_dependencies(color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
-            .with_dependency(depth_target, graphics::AccessKind::DepthAttachmentWrite)
-            .with_dependencies(depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
-            .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
-            .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)))
-            .render(move |cmd, graph| {
-                let color_target = graph.get_image(color_target);
-                let color_resolve = color_resolve.map(|i| graph.get_image(i));
-                let depth_target = graph.get_image(depth_target);
-                let depth_resolve = depth_resolve.map(|i| graph.get_image(i));
-
-                let brdf_integration_map = graph.get_image(brdf_integration_map);
-                let jitter_texture = graph.get_image(jitter_texture);
-                
-                let environment_map = environment_map.map(|e| e.get(graph));
-
-                let per_frame_data = graph.get_buffer(frame_data);
-                
-                let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-                let index_buffer = graph.get_buffer(assets.index_buffer);
-                let materials_buffer = graph.get_buffer(assets.materials_buffer);
-
-                let instance_buffer = graph.get_buffer(scene.entity_buffer);
-                let light_buffer = graph.get_buffer(scene.light_data_buffer);
-                let draw_commands_buffer = graph.get_buffer(draw_commands);
-                let directional_light_buffer = graph.get_buffer(directional_light.buffer);
-
-                let mut color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(color_target.view)
-                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(if environment_map.is_some() {
-                        vk::AttachmentLoadOp::DONT_CARE 
-                    } else {
-                        vk::AttachmentLoadOp::CLEAR
-                    })
-                    .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } })
-                    .store_op(vk::AttachmentStoreOp::STORE);
-
-                if let Some(color_resolve) = color_resolve {
-                    color_attachment = color_attachment
-                        .resolve_image_view(color_resolve.view)
-                        .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                        .resolve_mode(vk::ResolveModeFlags::MIN);
-                }
-
-                let mut depth_attachemnt = vk::RenderingAttachmentInfo::builder()
-                    .image_view(depth_target.view)
-                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .clear_value(vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 0.0,
-                            stencil: 0,
-                        },
-                    })
-                    .store_op(vk::AttachmentStoreOp::STORE);
-
-                if let Some(depth_resolve) = depth_resolve {
-                    depth_attachemnt = depth_attachemnt
-                        .resolve_image_view(depth_resolve.view)
-                        .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
-                }
-
-                let rendering_info = vk::RenderingInfo::builder()
-                    .render_area(color_target.full_rect())
-                    .layer_count(1)
-                    .color_attachments(std::slice::from_ref(&color_attachment))
-                    .depth_attachment(&depth_attachemnt);
-
-                cmd.begin_rendering(&rendering_info);
-                
-                if let Some(environment_map) = &environment_map {
-                    cmd.bind_raster_pipeline(skybox_pipeline);
-
-                    cmd.build_constants()
-                        .mat4(&skybox_view_projection_matrix)
-                        .sampled_image(environment_map.skybox);
-    
-                    cmd.draw(0..36, 0..1);    
-                }
-
-                cmd.bind_raster_pipeline(forward_pipeline);
-                cmd.bind_index_buffer(&index_buffer, 0);
-
-                let mut push_constants = cmd.build_constants()
-                    .uint(screen_extent.width)
-                    .uint(screen_extent.height)
-                    .buffer(per_frame_data)
-                    .buffer(vertex_buffer)
-                    .buffer(instance_buffer)
-                    .buffer(draw_commands_buffer)
-                    .buffer(materials_buffer)
-                    .buffer(directional_light_buffer)
-                    .uint(scene.light_count as u32)
-                    .buffer(light_buffer);
-
-                if let Some(environment_map) = &environment_map {
-                    push_constants = push_constants
-                        .sampled_image(environment_map.irradiance)
-                        .sampled_image(environment_map.prefiltered)
+        let visibility_buffer = context.import_with(
+            "visibility_buffer",
+            &self.visibility_buffer,
+            graphics::GraphResourceImportDesc {
+                initial_access: if self.is_visibility_buffer_initialized {
+                    graphics::AccessKind::ComputeShaderWrite
                 } else {
-                    push_constants = push_constants
-                        .uint(u32::MAX)
-                        .uint(u32::MAX)
-                };
+                    graphics::AccessKind::None
+                },
+                ..Default::default()
+            }
+        );
 
-                push_constants = push_constants
-                    .sampled_image(brdf_integration_map)
-                    .sampled_image(jitter_texture);
+        if !camera_frozen {
+            self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
+        }
 
-                drop(push_constants);
+        let view_matrix = frozen_camera.transform.compute_matrix().inverse();
+        let projection_matrix = frozen_camera.compute_projection_matrix();
 
-                cmd.draw_indexed_indirect_count(
-                    draw_commands_buffer,
-                    4,
-                    draw_commands_buffer,
-                    0,
-                    MAX_DRAW_COUNT as u32,
-                    std::mem::size_of::<GpuDrawCommand>() as u32,
-                );
+        let depth_pyramid = self.depth_pyramid.get_current(context);
 
-                cmd.end_rendering();
-            });
+        let draw_commands = create_draw_commands(context, "forward_draw_commands_1".into(), assets, scene,
+            &CullInfo {
+                view_matrix,
+                projection_matrix,
+                cull_plane_mask: frustum_culling
+                    .then_some(FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR)
+                    .unwrap_or_default(),
+                occlusion_culling: occlusion_culling
+                    .then_some(OcclusionCullInfo::FirstPass { visibility_buffer })
+                    .unwrap_or_default(),
+            },
+            None
+        );
+
+        forward_pass(
+            context,
+            if occlusion_culling { "first_forward_pass" } else { "forward_pass" },
+
+            assets,
+            scene,
+
+            forward_pipeline,
+            skybox_pipeline,
+            skybox_view_projection_matrix,
+            
+            frame_data,
+            
+            target_attachments,
+            draw_commands,
+            
+            environment_map,
+            directional_light,
+            
+            brdf_integration_map,
+            jitter_texture,
+            
+            true,
+        );
+
+        if !camera_frozen {
+            self.depth_pyramid.update(context, target_attachments.depth_resolve
+                .unwrap_or(target_attachments.depth_target));
+        }
+
+        if occlusion_culling {
+            let draw_commands = create_draw_commands(context, "forward_draw_commands_2".into(), assets, scene,
+                &CullInfo {
+                    view_matrix,
+                    projection_matrix,
+                    cull_plane_mask: frustum_culling
+                        .then_some(FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR)
+                        .unwrap_or_default(),
+                    occlusion_culling: OcclusionCullInfo::SecondPass { visibility_buffer, depth_pyramid },
+                },
+                Some(draw_commands),
+            );
+
+            forward_pass(
+                context,
+                "second_forward_pass",
+                assets,
+                scene,
+
+                forward_pipeline,
+                skybox_pipeline,
+                skybox_view_projection_matrix,
+                
+                frame_data,
+                
+                target_attachments,
+                draw_commands,
+                
+                environment_map,
+                directional_light,
+                
+                brdf_integration_map,
+                jitter_texture,
+                
+                false,
+            );
+        }
     }
 }
 
+fn forward_pass(
+    context: &mut graphics::Context,
+    pass_name: &'static str,
+        
+    assets: AssetGraphData,
+    scene: SceneGraphData,
 
+    forward_pipeline: graphics::RasterPipeline,
+    skybox_pipeline: graphics::RasterPipeline,
+    skybox_view_projection_matrix: Mat4,
+
+    frame_data: graphics::GraphBufferHandle,
+
+    target_attachments: TargetAttachments,
+    draw_commands: graphics::GraphBufferHandle,
+        
+    environment_map: Option<GraphEnvironmentMap>,
+    directional_light: DirectionalLightGraphData,
+
+    brdf_integration_map: graphics::GraphImageHandle,
+    jitter_texture: graphics::GraphImageHandle,
+
+    first_pass: bool,
+) {
+    // HACK: the rendergraph doesn't handle reads in different batches well without writes in-between
+    let shadows = first_pass.then_some(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)).into_iter()).into_iter().flatten();
+
+    context.add_pass(pass_name)
+        .with_dependencies(target_attachments.dependencies())
+        .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
+        // .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)))
+        .with_dependencies(shadows)
+        .render(move |cmd, graph| {
+            let color_target = graph.get_image(target_attachments.color_target);
+            let color_resolve = target_attachments.color_resolve.map(|i| graph.get_image(i));
+            let depth_target = graph.get_image(target_attachments.depth_target);
+            let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
+
+            let brdf_integration_map = graph.get_image(brdf_integration_map);
+            let jitter_texture = graph.get_image(jitter_texture);
+            
+            let environment_map = environment_map.map(|e| e.get(graph));
+
+            let per_frame_data = graph.get_buffer(frame_data);
+            
+            let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
+            let index_buffer = graph.get_buffer(assets.index_buffer);
+            let materials_buffer = graph.get_buffer(assets.materials_buffer);
+
+            let entity_buffer = graph.get_buffer(scene.entity_buffer);
+            let light_buffer = graph.get_buffer(scene.light_data_buffer);
+            let draw_commands_buffer = graph.get_buffer(draw_commands);
+            let directional_light_buffer = graph.get_buffer(directional_light.buffer);
+
+            let mut color_attachment = vk::RenderingAttachmentInfo::builder()
+                .image_view(color_target.view)
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } })
+                .store_op(vk::AttachmentStoreOp::STORE);
+
+            if let Some(color_resolve) = color_resolve {
+                color_attachment = color_attachment
+                    .resolve_image_view(color_resolve.view)
+                    .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+            }
+
+            let mut depth_attachemnt = vk::RenderingAttachmentInfo::builder()
+                .image_view(depth_target.view)
+                .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .load_op(if first_pass { vk::AttachmentLoadOp::CLEAR } else { vk::AttachmentLoadOp::LOAD })
+                .clear_value(vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 0.0,
+                        stencil: 0,
+                    },
+                })
+                .store_op(vk::AttachmentStoreOp::STORE);
+
+            if let Some(depth_resolve) = depth_resolve {
+                depth_attachemnt = depth_attachemnt
+                    .resolve_image_view(depth_resolve.view)
+                    .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .resolve_mode(vk::ResolveModeFlags::MIN);
+            }
+
+            let rendering_info = vk::RenderingInfo::builder()
+                .render_area(color_target.full_rect())
+                .layer_count(1)
+                .color_attachments(std::slice::from_ref(&color_attachment))
+                .depth_attachment(&depth_attachemnt);
+
+            cmd.begin_rendering(&rendering_info);
+            
+            if let Some(environment_map) = first_pass.then_some(environment_map).flatten() {
+                cmd.bind_raster_pipeline(skybox_pipeline);
+
+                cmd.build_constants()
+                    .mat4(&skybox_view_projection_matrix)
+                    .sampled_image(environment_map.skybox);
+
+                cmd.draw(0..36, 0..1);
+            }
+
+            cmd.bind_raster_pipeline(forward_pipeline);
+            cmd.bind_index_buffer(&index_buffer, 0);
+
+            let mut push_constants = cmd.build_constants()
+                .buffer(per_frame_data)
+                .buffer(vertex_buffer)
+                .buffer(entity_buffer)
+                .buffer(draw_commands_buffer)
+                .buffer(materials_buffer)
+                .buffer(directional_light_buffer)
+                .uint(scene.light_count as u32)
+                .buffer(light_buffer);
+
+            if let Some(environment_map) = &environment_map {
+                push_constants = push_constants
+                    .sampled_image(environment_map.irradiance)
+                    .sampled_image(environment_map.prefiltered)
+            } else {
+                push_constants = push_constants
+                    .uint(u32::MAX)
+                    .uint(u32::MAX)
+            };
+
+            push_constants = push_constants
+                .sampled_image(brdf_integration_map)
+                .sampled_image(jitter_texture);
+
+            drop(push_constants);
+
+            cmd.draw_indexed_indirect_count(
+                draw_commands_buffer,
+                4,
+                draw_commands_buffer,
+                0,
+                MAX_DRAW_COUNT as u32,
+                std::mem::size_of::<GpuDrawCommand>() as u32,
+            );
+
+            cmd.end_rendering();
+        });
+}
 
 fn gen_offset_texture_data(window_size: usize, filter_size: usize) -> Vec<f32> {
     use std::f32::consts::PI;

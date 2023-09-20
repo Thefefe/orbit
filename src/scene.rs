@@ -84,7 +84,6 @@ pub struct GpuDrawCommand {
 
     // other per-draw data
     pub material_index: u32,
-    _padding: [u32; 2],
 }
 
 #[derive(Debug, Clone, Copy)]

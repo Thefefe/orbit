@@ -38,12 +38,15 @@ use scene::{SceneData, Transform};
 
 use passes::{
     debug_line_renderer::DebugLineRenderer,
-    draw_gen::DepthPyramid,
     env_map_loader::EnvironmentMap,
     forward::ForwardRenderer, shadow_renderer::ShadowSettings,
 };
 
-use crate::passes::{draw_gen::{FrustumPlaneMask, create_draw_commands, CullInfo}, shadow_renderer::render_directional_light, post_process::render_post_process};
+use crate::passes::{
+    shadow_renderer::render_directional_light,
+    post_process::render_post_process,
+    forward::TargetAttachments
+};
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
@@ -68,7 +71,7 @@ struct CameraController {
 
 impl CameraController {
     #[rustfmt::skip]
-    const CONTROL_KEYS: &[(KeyCode, glam::Vec3)] = &[
+    const CONTROL_KEYS: &'static [(KeyCode, glam::Vec3)] = &[
         (KeyCode::W, glam::vec3(  0.0,  0.0, -1.0)),
         (KeyCode::S, glam::vec3(  0.0,  0.0,  1.0)),
         (KeyCode::D, glam::vec3(  1.0,  0.0,  0.0)),
@@ -132,18 +135,9 @@ impl Projection {
     #[inline]
     #[rustfmt::skip]
     pub fn compute_matrix(self, aspect_ratio: f32) -> glam::Mat4 {
-    match self {
-        Projection::Perspective {
-                fov,
-                near_clip,
-            } => {
-                glam::Mat4::perspective_infinite_reverse_rh(fov, aspect_ratio, near_clip)
-            },
-            Projection::Orthographic {
-                half_width,
-                near_clip,
-                far_clip,
-            } => {
+        match self {
+            Projection::Perspective {fov, near_clip } => glam::Mat4::perspective_infinite_reverse_rh(fov, aspect_ratio, near_clip),
+            Projection::Orthographic { half_width, near_clip, far_clip } => {
                 let half_height = half_width * aspect_ratio.recip();
 
                 glam::Mat4::orthographic_rh(
@@ -247,7 +241,6 @@ struct App {
     main_color_resolve_image: Option<graphics::Image>,
     main_depth_image: graphics::Image,
     main_depth_resolve_image: Option<graphics::Image>,
-    depth_pyramid: DepthPyramid,
 
     forward_renderer: ForwardRenderer,
     debug_line_renderer: DebugLineRenderer,
@@ -408,8 +401,6 @@ impl App {
             aspect_ratio,
         };
 
-        let depth_pyramid = DepthPyramid::new(context, [screen_extent.width, screen_extent.height]);
-
         let settings = Settings::default();
 
         context.swapchain.set_present_mode(settings.present_mode);
@@ -422,7 +413,6 @@ impl App {
             main_color_resolve_image: None,
             main_depth_image,
             main_depth_resolve_image: None,
-            depth_pyramid,
 
             forward_renderer: ForwardRenderer::new(context),
             debug_line_renderer: DebugLineRenderer::new(context),
@@ -610,7 +600,7 @@ impl App {
                             ui.label("depth pyramid level");
                             ui.add(egui::Slider::new(
                                 &mut self.depth_pyramid_level,
-                                0..=self.depth_pyramid.pyramid.mip_level(),
+                                0..=self.forward_renderer.depth_pyramid.pyramid.mip_level(),
                             ));
                         });
                     });
@@ -717,7 +707,7 @@ impl App {
         let color_target = context.import(&self.main_color_image);
         let color_resolve_target = self.main_color_resolve_image.as_ref().map(|i| context.import(i));
         let depth_target = context.import(&self.main_depth_image);
-        let depth_resolve_target = self.main_depth_resolve_image.as_ref().map(|i| context.import(i));
+        let depth_resolve = self.main_depth_resolve_image.as_ref().map(|i| context.import(i));
 
         let directional_light = render_directional_light(
             context,
@@ -735,34 +725,30 @@ impl App {
             &mut self.debug_line_renderer,
         );
 
-        if !self.freeze_camera {
-            self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
-        }
-        let depth_pyramid = self.depth_pyramid.get_current(context);
-
-        let forwad_draw_commands = create_draw_commands(context, "forward_draw_commands".into(), assets, scene,
-            &CullInfo {
-                projection_matrix: self.frozen_camera.compute_projection_matrix(),
-                view_matrix: self.frozen_camera.transform.compute_matrix().inverse(),
-                cull_plane_mask: self.enable_frustum_culling.then_some(FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR).unwrap_or_default(),
-                depth_pyramid:  (self.depth_pyramid.usable && self.enable_occlusion_culling).then_some(depth_pyramid),
-            }
-        );
-
         self.forward_renderer.render(
             context,
             &self.settings,
-            forwad_draw_commands,
-            color_target,
-            None, // resolved in debug line renderer
-            depth_target,
-            depth_resolve_target,
-            &self.camera,
-            self.render_mode,
-            self.environment_map.as_ref(),
-            directional_light,
+
             assets,
             scene,
+
+            self.freeze_camera,
+            self.enable_frustum_culling,
+            self.enable_occlusion_culling,
+            
+            self.environment_map.as_ref(),
+            directional_light,
+
+            &TargetAttachments {
+                color_target,
+                color_resolve: None,
+                depth_target,
+                depth_resolve,
+            },
+            
+            &self.camera,
+            &self.frozen_camera,
+            self.render_mode,
         );
 
         self.debug_line_renderer.render(
@@ -774,9 +760,7 @@ impl App {
             camera_view_projection_matrix,
         );
 
-        if !self.freeze_camera {
-            self.depth_pyramid.update(context, depth_resolve_target.unwrap_or(depth_target));
-        }
+        let depth_pyramid = self.forward_renderer.depth_pyramid.get_current(context);
 
         render_post_process(
             context,

@@ -52,8 +52,6 @@ struct DrawCommand {
     
     // other per-draw data
     uint material_index;
-    uint _padding0;
-    uint _padding1;
 };
 
 struct MaterialData {
@@ -98,6 +96,9 @@ struct CullInfo {
     mat4 view_matrix;
     mat4 projection_matrix;
     uint plane_mask;
+
+    uint occlusion_pass;
+    uint visibility_buffer;
     uint depth_pyramid;
 };
 
@@ -120,6 +121,10 @@ struct DebugLineVertex {
     vec3   position;
     u8vec4 color;
 };
+
+RegisterBuffer(VisibilityBuffer, {
+    uint submeshes[];
+});
 
 RegisterBuffer(CullInfoBuffer, {
     CullInfo cull_info;

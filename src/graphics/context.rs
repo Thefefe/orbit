@@ -406,7 +406,7 @@ impl Context {
         self.frames[self.frame_index].global_buffer.descriptor_index.unwrap()
     }
 
-    pub fn get_transient_resource_descriptor_index<T>(&self, handle: GraphHandle<T>) -> Option<graphics::DescriptorIndex> {
+    pub fn get_resource_descriptor_index<T>(&self, handle: GraphHandle<T>) -> Option<graphics::DescriptorIndex> {
         self.graph.resources[handle.resource_index].descriptor_index
     }
 

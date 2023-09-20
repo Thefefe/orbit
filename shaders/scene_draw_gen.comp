@@ -28,6 +28,7 @@ bool aabb_plane_test(vec3 box_min, vec3 box_max, vec4 plane) {
 
     return center_distance > radius;
 }
+
 // 2D Polyhedral Bounds of a Clipped, Perspective-Projected 3D Sphere. Michael Mara, Morgan McGuire. 2013
 bool project_sphere(vec4 sphere, float znear, float P00, float P11, out vec4 aabb) {
 	vec3 C = sphere.xyz;
@@ -49,6 +50,29 @@ bool project_sphere(vec4 sphere, float znear, float P00, float P11, out vec4 aab
 	aabb = aabb.xwzy * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f); // clip space -> uv space
 
 	return true;
+	
+}
+
+bool is_aabb_inside_frustum(mat4 mvp_matrix, Aabb aabb, uint plane_mask) {
+	bool inside_frustum = true;
+
+	mat4 mvp_t = transpose(mvp_matrix);
+	vec4 planes[6];
+	planes[0] = mvp_t[3] + mvp_t[0];
+	planes[1] = mvp_t[3] - mvp_t[0];
+	planes[2] = mvp_t[3] + mvp_t[1];
+	planes[3] = mvp_t[3] - mvp_t[1];
+	planes[4] = mvp_t[3] + mvp_t[2];
+	planes[5] = mvp_t[3] - mvp_t[2];
+
+	for (uint i = 0; i < 5; i += 1) {
+		inside_frustum = inside_frustum && (
+			(plane_mask & (1 << i)) == 0 ||
+			!aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(-planes[i].xyz, planes[i].w))
+		);
+	}
+
+	return inside_frustum;
 }
 
 void main() {
@@ -64,26 +88,20 @@ void main() {
 		
 		bool visible = true;
 
-		// frustum culling
-		Aabb aabb = mesh_info.aabb;
-		mat4 mvp = cull_info.projection_matrix * cull_info.view_matrix  * entity_data.model_matrix;
-		mat4 mvp_t = transpose(mvp);
-		vec4 planes[6];
-		planes[0] = mvp_t[3] + mvp_t[0];
-		planes[1] = mvp_t[3] - mvp_t[0];
-		planes[2] = mvp_t[3] + mvp_t[1];
-		planes[3] = mvp_t[3] - mvp_t[1];
-		planes[4] = mvp_t[3] + mvp_t[2];
-		planes[5] = mvp_t[3] - mvp_t[2];
+		// first occlusion pass: only proccess if submesh was visible last frame
+		if (cull_info.occlusion_pass == 1)
+			visible = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] == 1;
 
-		for (uint i = 0; i < 5; i += 1) {
-			visible = visible && (
-				(cull_info.plane_mask & (1 << i)) == 0 ||
-				!aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(-planes[i].xyz, planes[i].w))
-			);
+		// frustum culling
+		if (visible) {
+			Aabb aabb = mesh_info.aabb;
+			mat4 mvp = cull_info.projection_matrix * cull_info.view_matrix * entity_data.model_matrix;
+
+			visible = is_aabb_inside_frustum(mvp, aabb, cull_info.plane_mask);
 		}
 
-		if (visible && cull_info.depth_pyramid != TEXTURE_NONE) {
+		// occlusion cull
+		if (cull_info.occlusion_pass == 2 && visible) {
 			float largest_scale;
 			{
 				vec3 x = vec3(entity_data.model_matrix[0]);
@@ -121,10 +139,17 @@ void main() {
 
 				//if the depth of the sphere is in front of the depth pyramid value, then the object is visible
 				visible = depthSphere >= depth;
-			};
+			}
 		}
 
-		if (visible) {
+		bool should_draw = visible;
+
+		// second occlusion pass: only proccess if submesh wasn't visible last frame
+		if (cull_info.occlusion_pass == 2)
+			should_draw = visible && GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] != 1;
+
+		// draw command fill
+		if (should_draw) {
 			DrawCommand draw_command;
 			draw_command.index_count 	  = mesh_info.index_count;
 			draw_command.instance_count   = 1;
@@ -136,5 +161,9 @@ void main() {
 			uint draw_index = atomicAdd(GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count, 1);
 			GetBuffer(DrawCommandsBuffer, draw_commands_buffer).commands[draw_index] = draw_command;
 		}
+
+		// update visibility buffer, only on second occlusion pass
+		if (cull_info.occlusion_pass == 2)
+			GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] = visible ? 1 : 0;
 	}
 }

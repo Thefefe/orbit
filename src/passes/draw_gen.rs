@@ -6,11 +6,78 @@ use gpu_allocator::MemoryLocation;
 
 use crate::{graphics, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
 
+#[derive(Debug, Clone, Copy, Default)]
+pub enum OcclusionCullInfo {
+    #[default]
+    None,
+    FirstPass {
+        visibility_buffer: graphics::GraphBufferHandle,
+    },
+    SecondPass {
+        visibility_buffer: graphics::GraphBufferHandle,
+        depth_pyramid: graphics::GraphImageHandle,
+    },
+}
+
+impl OcclusionCullInfo {
+    fn visibility_buffer(self) -> Option<graphics::GraphBufferHandle> {
+        match self {
+            OcclusionCullInfo::None                                 => None,
+            OcclusionCullInfo::FirstPass { visibility_buffer, .. }  => Some(visibility_buffer),
+            OcclusionCullInfo::SecondPass { visibility_buffer, .. } => Some(visibility_buffer),
+        }
+    }
+
+    fn visibility_buffer_dependency(self) -> Option<(graphics::GraphBufferHandle, graphics::AccessKind)> {
+        match self {
+            OcclusionCullInfo::None => None,
+            OcclusionCullInfo::FirstPass { visibility_buffer } => Some(
+                (visibility_buffer, graphics::AccessKind::ComputeShaderRead)
+            ),
+            OcclusionCullInfo::SecondPass { visibility_buffer, .. } => Some(
+                (visibility_buffer, graphics::AccessKind::ComputeShaderWrite)
+            ),
+        }
+    }
+
+    fn write_visibility_buffer(self) -> bool {
+        match self {
+            OcclusionCullInfo::None              => false,
+            OcclusionCullInfo::FirstPass { .. }  => false,
+            OcclusionCullInfo::SecondPass { .. } => true,
+        }
+    }
+
+    fn depth_pyramid(self) -> Option<graphics::GraphImageHandle> {
+        match self {
+            OcclusionCullInfo::None                             => None,
+            OcclusionCullInfo::FirstPass { .. }                 => None,
+            OcclusionCullInfo::SecondPass { depth_pyramid, .. } => Some(depth_pyramid),
+        }
+    }
+
+    fn depth_pyramid_dependency(self) -> Option<(graphics::GraphImageHandle, graphics::AccessKind)> {
+        match self {
+            OcclusionCullInfo::None                             => None,
+            OcclusionCullInfo::FirstPass { .. }                 => None,
+            OcclusionCullInfo::SecondPass { depth_pyramid, .. } => Some((depth_pyramid, graphics::AccessKind::ComputeShaderReadGeneral)),
+        }
+    }
+
+    fn pass_index(&self) -> u32 {
+        match self {
+            OcclusionCullInfo::None              => 0,
+            OcclusionCullInfo::FirstPass { .. }  => 1,
+            OcclusionCullInfo::SecondPass { .. } => 2,
+        }
+    }
+}
+
 pub struct CullInfo {
     pub view_matrix: Mat4,
     pub projection_matrix: Mat4,
     pub cull_plane_mask: FrustumPlaneMask,
-    pub depth_pyramid: Option<graphics::GraphImageHandle>,
+    pub occlusion_culling: OcclusionCullInfo,
 }
 
 #[repr(C)]
@@ -19,8 +86,10 @@ pub struct GpuCullInfo {
     view_matrix: Mat4,
     projection_matrix: Mat4,
     cull_plane_mask: u32,
+
+    occlusion_pass: u32,
+    visibility_buffer: u32,
     depth_pyramid: u32,
-    _padding: [u32; 2],
 }
 
 pub fn create_draw_commands(
@@ -28,37 +97,51 @@ pub fn create_draw_commands(
     draw_commands_name: Cow<'static, str>,
     assets: AssetGraphData,
     scene: SceneGraphData,
-    cull_info: &CullInfo
+    cull_info: &CullInfo,
+    reuse_buffer: Option<graphics::GraphBufferHandle>,
 ) -> graphics::GraphBufferHandle {
     let pass_name = format!("{draw_commands_name}_generation");
     
-    let draw_commands = context.create_transient(draw_commands_name, graphics::BufferDesc {
-        size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
-        usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
-        memory_location: MemoryLocation::GpuOnly,
-    });
+    let draw_commands = reuse_buffer.unwrap_or_else(|| context.create_transient(
+        draw_commands_name,
+        graphics::BufferDesc {
+            size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+            memory_location: MemoryLocation::GpuOnly,
+        }
+    ));
     
     let pipeline = context.create_compute_pipeline(
         "scene_draw_gen_pipeline",
         graphics::ShaderSource::spv("shaders/scene_draw_gen.comp.spv")
     );
 
-    let depth_pyramid_descriptor_index = cull_info.depth_pyramid
-        .map(|i| context.get_transient_resource_descriptor_index(i)).flatten();
+    let visibility_buffer_descriptor_index = cull_info.occlusion_culling
+        .visibility_buffer()
+        .map(|b| context.get_resource_descriptor_index(b))
+        .flatten();
 
-    let cull_data = context.transient_storage_data("cull_data",bytemuck::bytes_of(&GpuCullInfo {
+    let depth_pyramid_descriptor_index = cull_info.occlusion_culling
+        .depth_pyramid()
+        .map(|i| context.get_resource_descriptor_index(i))
+        .flatten();
+
+    let cull_data = context.transient_storage_data("cull_data", bytemuck::bytes_of(&GpuCullInfo {
         view_matrix: cull_info.view_matrix,
         projection_matrix: cull_info.projection_matrix,
         cull_plane_mask: cull_info.cull_plane_mask.0,
+
+        occlusion_pass: cull_info.occlusion_culling.pass_index(),
+        visibility_buffer: visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
         depth_pyramid: depth_pyramid_descriptor_index.unwrap_or(u32::MAX),
-        _padding: [0; 2],
     }));
 
     context.add_pass(pass_name)
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
         // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
         .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
-        .with_dependencies(cull_info.depth_pyramid.map(|i| (i, graphics::AccessKind::ComputeShaderReadGeneral)))
+        .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
+        .with_dependencies(cull_info.occlusion_culling.depth_pyramid().map(|i| (i, graphics::AccessKind::ComputeShaderReadGeneral)))
         .render(move |cmd, graph| {
             let mesh_infos = graph.get_buffer(assets.mesh_info_buffer);
             let scene_submeshes = graph.get_buffer(scene.submesh_buffer);

@@ -5,7 +5,6 @@
 #include "include/functions.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
-    ivec2 screen_size;
     uint per_frame_buffer;
     uint vertex_buffer;
     uint entity_buffer;
@@ -52,7 +51,7 @@ float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers
 }
 
 #define PENUMBRA_SAMPLE_COUNT 8
-#define SHADOW_SAMPLE_COUNT 16
+#define SHADOW_SAMPLE_COUNT 24
 #define SHADOW_FILTER_MULTIPLIER 0.01
 
 float penumbra(uint shadow_map, float vogel_theta, vec3 light_space_pos) {

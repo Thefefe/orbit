@@ -13,8 +13,20 @@ layout(push_constant, std430) uniform PushConstants {
 
 layout (local_size_x = 256) in;
 
-float point_on_plane(vec3 point, vec4 plane) {
-	return dot(plane.xyz, point) - plane.w;
+float largest_scale_from_matrix(mat3 matrix) {
+	vec3 x = matrix[0];
+	vec3 y = matrix[1];
+	vec3 z = matrix[2]; 
+
+	float largest_scale_sqr = max(dot(x, x), max(dot(y, y), dot(z, z)));
+	return sqrt(largest_scale_sqr);
+}
+
+vec4 transform_sphere(mat4 matrix, vec4 sphere) {
+	vec4 bounding_sphere = matrix * vec4(sphere.xyz, 1.0);
+	bounding_sphere.w = sphere.w * largest_scale_from_matrix(mat3(matrix));
+
+	return bounding_sphere;
 }
 
 bool aabb_plane_test(vec3 box_min, vec3 box_max, vec4 plane) {
@@ -27,6 +39,28 @@ bool aabb_plane_test(vec3 box_min, vec3 box_max, vec4 plane) {
     float center_distance = dot(plane.xyz, c) - plane.w;
 
     return center_distance > radius;
+}
+
+bool is_aabb_inside_frustum(mat4 mvp_matrix, Aabb aabb, uint plane_mask) {
+	bool inside_frustum = true;
+
+	mat4 mvp_t = transpose(mvp_matrix);
+	vec4 planes[6];
+	planes[0] = mvp_t[3] + mvp_t[0];
+	planes[1] = mvp_t[3] - mvp_t[0];
+	planes[2] = mvp_t[3] + mvp_t[1];
+	planes[3] = mvp_t[3] - mvp_t[1];
+	planes[4] = mvp_t[3] + mvp_t[2];
+	planes[5] = mvp_t[3] - mvp_t[2];
+
+	for (uint i = 0; i < 5; i += 1) {
+		inside_frustum = inside_frustum && (
+			(plane_mask & (1 << i)) == 0 ||
+			!aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(-planes[i].xyz, planes[i].w))
+		);
+	}
+
+	return inside_frustum;
 }
 
 // 2D Polyhedral Bounds of a Clipped, Perspective-Projected 3D Sphere. Michael Mara, Morgan McGuire. 2013
@@ -53,28 +87,6 @@ bool project_sphere(vec4 sphere, float znear, float P00, float P11, out vec4 aab
 	
 }
 
-bool is_aabb_inside_frustum(mat4 mvp_matrix, Aabb aabb, uint plane_mask) {
-	bool inside_frustum = true;
-
-	mat4 mvp_t = transpose(mvp_matrix);
-	vec4 planes[6];
-	planes[0] = mvp_t[3] + mvp_t[0];
-	planes[1] = mvp_t[3] - mvp_t[0];
-	planes[2] = mvp_t[3] + mvp_t[1];
-	planes[3] = mvp_t[3] - mvp_t[1];
-	planes[4] = mvp_t[3] + mvp_t[2];
-	planes[5] = mvp_t[3] - mvp_t[2];
-
-	for (uint i = 0; i < 5; i += 1) {
-		inside_frustum = inside_frustum && (
-			(plane_mask & (1 << i)) == 0 ||
-			!aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(-planes[i].xyz, planes[i].w))
-		);
-	}
-
-	return inside_frustum;
-}
-
 void main() {
 	GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count = 0;
 	memoryBarrier();
@@ -88,43 +100,37 @@ void main() {
 		
 		bool visible = true;
 
+		vec4 view_space_sphere = transform_sphere(
+			cull_info.view_matrix * entity_data.model_matrix,
+			mesh_info.bounding_sphere
+		);
+
 		// first occlusion pass: only proccess if submesh was visible last frame
 		if (cull_info.occlusion_pass == 1)
 			visible = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] == 1;
 
 		// frustum culling
 		if (visible) {
-			Aabb aabb = mesh_info.aabb;
-			mat4 mvp = cull_info.projection_matrix * cull_info.view_matrix * entity_data.model_matrix;
-
-			visible = is_aabb_inside_frustum(mvp, aabb, cull_info.plane_mask);
+			for (uint i = 0; i < cull_info.cull_plane_count; i++) {
+				vec4 plane = cull_info.cull_planes[i];
+				float point_plane_distance = dot(plane.xyz, view_space_sphere.xyz) + plane.w;
+				bool inside_frustum = point_plane_distance > -view_space_sphere.w;
+				visible = visible && inside_frustum;
+			}
 		}
 
 		// occlusion cull
 		if (cull_info.occlusion_pass == 2 && visible) {
-			float largest_scale;
-			{
-				vec3 x = vec3(entity_data.model_matrix[0]);
-				vec3 y = vec3(entity_data.model_matrix[1]);
-				vec3 z = vec3(entity_data.model_matrix[2]); 
-
-				float largest_scale_sqr = max(dot(x, x), max(dot(y, y), dot(z, z)));
-				largest_scale = sqrt(largest_scale_sqr);
-			}
-			
-			vec4 bounding_sphere;
-
-			bounding_sphere = cull_info.view_matrix * entity_data.model_matrix * vec4(mesh_info.bounding_sphere.xyz, 1.0);
-			bounding_sphere.z = -bounding_sphere.z;
-			bounding_sphere.w = mesh_info.bounding_sphere.w * largest_scale;
-
-			float P00 = cull_info.projection_matrix[0][0];
-			float P11 = cull_info.projection_matrix[1][1];
-
-			float z_near = 0.01;
+			view_space_sphere.z = -view_space_sphere.z;
 
 			vec4 aabb;
-			if (project_sphere(bounding_sphere, z_near, P00, P11, aabb)) {
+			if (project_sphere(
+				view_space_sphere,
+				cull_info.z_near,
+				cull_info.p00,
+				cull_info.p11,
+				aabb
+			)) {
 				vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.depth_pyramid), 0);
 				float width = (aabb.z - aabb.x) * pyramid_size.x;
 				float height = (aabb.w - aabb.y) * pyramid_size.y;
@@ -135,7 +141,7 @@ void main() {
 				//sample the depth pyramid at that specific level
 				float depth = textureLod(sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)), (aabb.xy + aabb.zw) * 0.5, level).x;
 
-				float depthSphere = z_near / (bounding_sphere.z - bounding_sphere.w);
+				float depthSphere = cull_info.z_near / (view_space_sphere.z - view_space_sphere.w);
 
 				//if the depth of the sphere is in front of the depth pyramid value, then the object is visible
 				visible = depthSphere >= depth;

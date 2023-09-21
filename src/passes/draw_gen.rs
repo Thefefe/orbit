@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use ash::vk;
-use glam::Mat4;
+use glam::{Mat4, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{graphics, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
@@ -16,6 +16,9 @@ pub enum OcclusionCullInfo {
     SecondPass {
         visibility_buffer: graphics::GraphBufferHandle,
         depth_pyramid: graphics::GraphImageHandle,
+        p00: f32,
+        p11: f32,
+        z_near: f32,
     },
 }
 
@@ -73,23 +76,33 @@ impl OcclusionCullInfo {
     }
 }
 
-pub struct CullInfo {
+pub struct ShadowCasterCull {
+    pub camera_view_projection_matrix: Mat4,
+    pub light_to_world_matrix: Mat4,
+}
+
+pub struct CullInfo<'a> {
     pub view_matrix: Mat4,
-    pub projection_matrix: Mat4,
-    pub cull_plane_mask: FrustumPlaneMask,
+    pub view_space_cull_planes: &'a [Vec4],
     pub occlusion_culling: OcclusionCullInfo,
 }
+
+const MAX_CULL_PLANES: usize = 12;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuCullInfo {
     view_matrix: Mat4,
-    projection_matrix: Mat4,
-    cull_plane_mask: u32,
+    cull_planes: [Vec4; MAX_CULL_PLANES],
+    cull_plane_count: u32,
 
     occlusion_pass: u32,
     visibility_buffer: u32,
     depth_pyramid: u32,
+    p00: f32,
+    p11: f32,
+    z_near: f32,
+    _padding: u32,
 }
 
 pub fn create_draw_commands(
@@ -100,6 +113,8 @@ pub fn create_draw_commands(
     cull_info: &CullInfo,
     reuse_buffer: Option<graphics::GraphBufferHandle>,
 ) -> graphics::GraphBufferHandle {
+    assert!(cull_info.view_space_cull_planes.len() <= MAX_CULL_PLANES);
+
     let pass_name = format!("{draw_commands_name}_generation");
     
     let draw_commands = reuse_buffer.unwrap_or_else(|| context.create_transient(
@@ -116,25 +131,44 @@ pub fn create_draw_commands(
         graphics::ShaderSource::spv("shaders/scene_draw_gen.comp.spv")
     );
 
-    let visibility_buffer_descriptor_index = cull_info.occlusion_culling
-        .visibility_buffer()
-        .map(|b| context.get_resource_descriptor_index(b))
-        .flatten();
-
     let depth_pyramid_descriptor_index = cull_info.occlusion_culling
         .depth_pyramid()
         .map(|i| context.get_resource_descriptor_index(i))
         .flatten();
 
-    let cull_data = context.transient_storage_data("cull_data", bytemuck::bytes_of(&GpuCullInfo {
-        view_matrix: cull_info.view_matrix,
-        projection_matrix: cull_info.projection_matrix,
-        cull_plane_mask: cull_info.cull_plane_mask.0,
+    let visibility_buffer_descriptor_index = cull_info.occlusion_culling
+        .visibility_buffer()
+        .map(|b| context.get_resource_descriptor_index(b))
+        .flatten();
 
+    let mut gpu_cull_info_data = GpuCullInfo {
+        view_matrix: cull_info.view_matrix,
+        cull_plane_count: cull_info.view_space_cull_planes.len() as u32,
+            
         occlusion_pass: cull_info.occlusion_culling.pass_index(),
         visibility_buffer: visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
         depth_pyramid: depth_pyramid_descriptor_index.unwrap_or(u32::MAX),
-    }));
+        
+        ..Default::default()
+    };
+
+    if cull_info.view_space_cull_planes.len() > 0 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                cull_info.view_space_cull_planes.as_ptr(),
+                gpu_cull_info_data.cull_planes.as_mut_ptr(),
+                cull_info.view_space_cull_planes.len(),
+            );
+        }
+    }
+
+    if let OcclusionCullInfo::SecondPass { p00, p11, z_near, ..  } = cull_info.occlusion_culling {
+        gpu_cull_info_data.p00    = p00;
+        gpu_cull_info_data.p11    = p11;
+        gpu_cull_info_data.z_near = z_near;
+    }
+
+    let cull_data = context.transient_storage_data("cull_data", bytemuck::bytes_of(&gpu_cull_info_data));
 
     context.add_pass(pass_name)
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)

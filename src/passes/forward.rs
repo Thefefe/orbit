@@ -2,7 +2,7 @@ use ash::vk;
 use glam::{Mat4, Vec3};
 use rand::prelude::Distribution;
 
-use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App, Settings, passes::draw_gen::{create_draw_commands, CullInfo, FrustumPlaneMask, OcclusionCullInfo}};
+use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App, Settings, passes::draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo}, math};
 
 use super::{shadow_renderer::DirectionalLightGraphData, env_map_loader::GraphEnvironmentMap, draw_gen::DepthPyramid};
 
@@ -244,22 +244,17 @@ impl ForwardRenderer {
             self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
         }
 
-        let view_matrix = frozen_camera.transform.compute_matrix().inverse();
         let projection_matrix = frozen_camera.compute_projection_matrix();
+        let view_matrix = frozen_camera.transform.compute_matrix().inverse();
+        let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
+            .map(math::normalize_plane);
 
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
-        let draw_commands = create_draw_commands(
-            context,
-            if occlusion_culling { "forward_draw_commands_1".into() } else { "forward_draw_commands".into() },
-            assets,
-            scene,
+        let draw_commands = create_draw_commands(context, "forward_draw_commands".into(), assets, scene,
             &CullInfo {
                 view_matrix,
-                projection_matrix,
-                cull_plane_mask: frustum_culling
-                    .then_some(FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR)
-                    .unwrap_or_default(),
+                view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
                 occlusion_culling: occlusion_culling
                     .then_some(OcclusionCullInfo::FirstPass { visibility_buffer })
                     .unwrap_or_default(),
@@ -298,14 +293,17 @@ impl ForwardRenderer {
         }
 
         if occlusion_culling {
-            let draw_commands = create_draw_commands(context, "forward_draw_commands_2".into(), assets, scene,
+            let draw_commands = create_draw_commands(context, "forward_draw_command".into(), assets, scene,
                 &CullInfo {
                     view_matrix,
-                    projection_matrix,
-                    cull_plane_mask: frustum_culling
-                        .then_some(FrustumPlaneMask::SIDES | FrustumPlaneMask::NEAR)
-                        .unwrap_or_default(),
-                    occlusion_culling: OcclusionCullInfo::SecondPass { visibility_buffer, depth_pyramid },
+                    view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
+                    occlusion_culling: OcclusionCullInfo::SecondPass {
+                        visibility_buffer,
+                        depth_pyramid,
+                        p00: projection_matrix.col(0)[0],
+                        p11: projection_matrix.col(1)[1],
+                        z_near: frozen_camera.projection.near(),
+                    },
                 },
                 Some(draw_commands),
             );
@@ -394,7 +392,11 @@ fn forward_pass(
             let mut color_attachment = vk::RenderingAttachmentInfo::builder()
                 .image_view(color_target.view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::LOAD)
+                .load_op(if first_pass && environment_map.is_none() {
+                    vk::AttachmentLoadOp::CLEAR
+                } else {
+                    vk::AttachmentLoadOp::LOAD
+                })
                 .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } })
                 .store_op(vk::AttachmentStoreOp::STORE);
 

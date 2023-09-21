@@ -263,6 +263,7 @@ struct App {
     freeze_camera: bool,
     show_cascade_view_frustum: bool,
     show_cascade_light_frustum: bool,
+    show_cascade_light_frustum_planes: bool,
 
     enable_frustum_culling: bool,
     enable_occlusion_culling: bool,
@@ -443,6 +444,7 @@ impl App {
             freeze_camera: false,
             show_cascade_view_frustum: false,
             show_cascade_light_frustum: false,
+            show_cascade_light_frustum_planes: false,
 
             enable_frustum_culling: true,
             enable_occlusion_culling: true,
@@ -722,6 +724,7 @@ impl App {
             self.selected_cascade,
             self.show_cascade_view_frustum,
             self.show_cascade_light_frustum,
+            self.show_cascade_light_frustum_planes,
             &mut self.debug_line_renderer,
         );
 
@@ -775,6 +778,7 @@ impl App {
                 ui.checkbox(&mut self.freeze_camera, "freeze camera");
                 ui.checkbox(&mut self.show_cascade_view_frustum, "show cascade view frustum");
                 ui.checkbox(&mut self.show_cascade_light_frustum, "show cascade light frustum");
+                ui.checkbox(&mut self.show_cascade_light_frustum_planes, "show cascade light frustum planes");
 
                 ui.horizontal(|ui| {
                     ui.label("camera_exposure");
@@ -875,8 +879,7 @@ impl App {
             let planes = math::frustum_planes_from_matrix(&self.frozen_camera.compute_matrix());
 
             for plane in planes {
-                self.debug_line_renderer
-                    .draw_plane(plane * vec4(-1.0, -1.0, -1.0, 1.0), 2.0, vec4(1.0, 1.0, 1.0, 1.0));
+                self.debug_line_renderer.draw_plane(plane, 2.0, vec4(1.0, 1.0, 1.0, 1.0));
             }
         }
     }

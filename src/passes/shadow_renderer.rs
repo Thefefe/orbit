@@ -17,7 +17,7 @@ use crate::{
     MAX_SHADOW_CASCADE_COUNT,
 };
 
-use super::{draw_gen::{FrustumPlaneMask, create_draw_commands, CullInfo, OcclusionCullInfo}, debug_line_renderer::DebugLineRenderer};
+use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo}, debug_line_renderer::DebugLineRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -264,6 +264,7 @@ pub fn render_directional_light(
     selected_cascade: usize,
     show_cascade_view_frustum: bool,
     show_cascade_light_frustum: bool,
+    show_cascade_light_frustum_planes: bool,
     debug_line_renderer: &mut DebugLineRenderer,
 ) -> DirectionalLightGraphData {
     let light_direction = -direction.mul_vec3(vec3(0.0, 0.0, -1.0));
@@ -370,10 +371,7 @@ pub fn render_directional_light(
         let projection_matrix = Mat4::orthographic_rh(
             min_extent.x, max_extent.x,
             min_extent.y, max_extent.y,
-            // min_coords_light_space.x, max_coords_light_space.x,
-            // min_coords_light_space.y, max_coords_light_space.y,
             -max_coords_light_space.z - 200.0,
-            // -min_coords_light_space.z + 200.0,
             -subfrustum_center_modified_light_space.z + radius,
         );
 
@@ -390,12 +388,20 @@ pub fn render_directional_light(
         
         let light_projection_matrix = projection_matrix * light_matrix;
 
+        if show_cascade_light_frustum_planes && selected_cascade == cascade_index {
+            for plane in math::frustum_planes_from_matrix(&light_projection_matrix) {
+                debug_line_renderer.draw_plane(plane, 2.0, vec4(1.0, 1.0, 0.0, 1.0));
+            }
+        }
+
+        let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
+            .map(math::normalize_plane);
+
         let draw_commands_name = format!("{name}_{cascade_index}_draw_commands").into();
         let shadow_map_draw_commands = create_draw_commands(context, draw_commands_name, assets, scene,
             &CullInfo {
                 view_matrix: light_matrix,
-                projection_matrix: projection_matrix,
-                cull_plane_mask: FrustumPlaneMask::SIDES,
+                view_space_cull_planes: &frustum_planes,
                 occlusion_culling: OcclusionCullInfo::None,
             },
             None,

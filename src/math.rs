@@ -27,24 +27,27 @@ pub fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
     log * lambda + (1.0 - lambda) * uniform
 }
 
+#[inline]
 pub fn frustum_planes_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
-    let mut planes = [matrix.row(3); 6];
+    let matrix_t = matrix.transpose();
+    let mut planes = [matrix_t.col(3); 6];
     
-    planes[0] += matrix.row(0);
-    planes[1] -= matrix.row(0);
-    planes[2] += matrix.row(1);
-    planes[3] -= matrix.row(1);
-    planes[4] += matrix.row(2);
-    planes[5] -= matrix.row(2);
-    
-    // normalize planes
-    // for plane in planes.iter_mut() {
-    //     *plane /= Vec3A::from(*plane).length();
-    // }
+    planes[0] += matrix_t.col(0);
+    planes[1] -= matrix_t.col(0);
+    planes[2] += matrix_t.col(1);
+    planes[3] -= matrix_t.col(1);
+    planes[4] += matrix_t.col(2);
+    planes[5] -= matrix_t.col(2);
 
     planes
 }
 
+#[inline]
+pub fn normalize_plane(plane: Vec4) -> Vec4 {
+    plane / Vec3A::from(plane).length()
+}
+
+#[inline]
 pub fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec4; 8] {
     let inv_matrix = matrix.inverse();
     NDC_BOUNDS.map(|v| {
@@ -53,6 +56,7 @@ pub fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec4; 8] {
     })
 }
 
+#[inline]
 pub fn perspective_corners(fovy: f32, aspect_ratio: f32, near: f32, far: f32) -> [Vec4; 8] {
     let tan_half_h = f32::tan(fovy / 2.0) * aspect_ratio;
     let tan_half_v = f32::tan(fovy / 2.0);

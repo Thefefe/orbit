@@ -343,17 +343,6 @@ pub fn render_directional_light(
             offset
         };
 
-        // if cascade_index == selected_cascade {
-        //     let min_max_corners = math::NDC_BOUNDS.map(|corner| {
-        //         let mut a = (corner + Vec4::ONE) / 2.0;
-        //         a.w = 1.0;
-        //         let min = min_coords_light_space.extend(1.0);
-        //         let max = max_coords_light_space.extend(1.0);
-        //         light_matrix.inverse() * math::lerp_element_wise(min, max, a)
-        //     });
-        //     debug_line_renderer.draw_frustum(&min_max_corners, vec4(0.0, 0.0, 1.0, 1.0));
-        // }
-
         let texel_size_vs = radius * 2.0 / settings.shadow_resolution as f32;
         
         // modifications:
@@ -388,20 +377,47 @@ pub fn render_directional_light(
         
         let light_projection_matrix = projection_matrix * light_matrix;
 
-        if show_cascade_light_frustum_planes && selected_cascade == cascade_index {
-            for plane in math::frustum_planes_from_matrix(&light_projection_matrix) {
-                debug_line_renderer.draw_plane(plane, 2.0, vec4(1.0, 1.0, 0.0, 1.0));
-            }
+        let light_frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
+            .map(math::normalize_plane);
+
+
+        let light_to_world_matrix = light_matrix.inverse();
+        let camera_view_projection_matrix = camera.compute_matrix();
+        let camera_clip_to_light_matrix = camera_view_projection_matrix * light_to_world_matrix;
+
+        let camera_frustum_planes = math::frustum_planes_from_matrix(&camera_clip_to_light_matrix)
+            .into_iter()
+            .map(math::normalize_plane)
+            .filter(|&plane| Vec3A::dot(plane.into(), Vec3A::Z) > 0.0)
+            .take(5);
+        
+        let mut culling_planes = [Vec4::ZERO; 12];
+        let mut culling_plane_count = 0;
+
+        for (i, plane) in light_frustum_planes.into_iter().chain(camera_frustum_planes).enumerate() {
+            culling_planes[i] = plane;
+            culling_plane_count += 1;
         }
 
-        let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
-            .map(math::normalize_plane);
+        let culling_planes = &culling_planes[..culling_plane_count];
+
+        if show_cascade_light_frustum_planes && selected_cascade == cascade_index {
+            for (i, light_space_plane) in culling_planes.iter().copied().enumerate() {
+                let world_space_plane = math::transform_plane(&light_to_world_matrix, light_space_plane);
+                if i > 5 {
+                    debug_line_renderer.draw_plane(world_space_plane, 2.0, vec4(0.0, 0.0, 1.0, 1.0));
+                } else {
+                    debug_line_renderer.draw_plane(world_space_plane, 2.0, vec4(1.0, 1.0, 0.0, 1.0));
+                }
+            }
+        }
 
         let draw_commands_name = format!("{name}_{cascade_index}_draw_commands").into();
         let shadow_map_draw_commands = create_draw_commands(context, draw_commands_name, assets, scene,
             &CullInfo {
                 view_matrix: light_matrix,
-                view_space_cull_planes: &frustum_planes,
+                view_space_cull_planes: culling_planes,
+                // view_space_cull_planes: &light_frustum_planes,
                 occlusion_culling: OcclusionCullInfo::None,
             },
             None,

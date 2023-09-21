@@ -47,6 +47,15 @@ pub fn normalize_plane(plane: Vec4) -> Vec4 {
     plane / Vec3A::from(plane).length()
 }
 
+pub fn transform_plane(matrix: &Mat4, plane: Vec4) -> Vec4 {
+    let plane_normal = Vec3A::from(plane);
+    let mut o = (plane_normal * plane.w).extend(1.0);
+    let mut n = plane_normal.extend(0.0);
+    o = matrix.mul_vec4(o);
+    n = matrix.inverse().transpose() * n;
+    Vec3A::from(n).extend(Vec3A::dot(o.into(), n.into()))
+}
+
 #[inline]
 pub fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec4; 8] {
     let inv_matrix = matrix.inverse();

@@ -36,12 +36,12 @@ float interleaved_gradient_noise(vec2 seed) {
 }
 
 vec2 vogel_disk_sample(int sampleIndex, int samplesCount, float phi) {
-  float GoldenAngle = 2.4;
+    float GoldenAngle = 2.4;
 
-  float r = sqrt(float(sampleIndex) + 0.5) / sqrt(float(samplesCount));
-  float theta = sampleIndex * GoldenAngle + phi;
-  
-  return vec2(r * sin(theta), r * cos(theta));
+    float r = sqrt(float(sampleIndex) + 0.5) / sqrt(float(samplesCount));
+    float theta = sampleIndex * GoldenAngle + phi;
+
+    return vec2(r * cos(theta), r * sin(theta));
 }
 
 float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers_depth) {
@@ -50,8 +50,8 @@ float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers
     return clamp(80.0f * penumbra, 0.0, 1.0);
 }
 
-#define PENUMBRA_SAMPLE_COUNT 8
-#define SHADOW_SAMPLE_COUNT 24
+#define PENUMBRA_SAMPLE_COUNT 4
+#define SHADOW_SAMPLE_COUNT 12
 #define SHADOW_FILTER_MULTIPLIER 0.01
 
 float penumbra(uint shadow_map, float vogel_theta, vec3 light_space_pos) {
@@ -167,6 +167,64 @@ float pcf_branch(uint shadow_map, vec4 clip_pos) {
 
     return sum / 64.0;
 }
+
+#define PCF_HYBRID_DISC_COUNT 4
+#define PCF_HYBRID_SEGMENT_COUNT 4
+
+vec2 warp_to_disc(vec2 coord, uint disc_index, uint disc_size, uint segment_index, uint segment_count) {
+    return coord;
+}
+
+float pcf_hybrid(uint shadow_map, vec4 clip_pos) {
+    clip_pos.xyz /= clip_pos.w;
+    clip_pos.y *= -1.0;
+    clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
+
+    ivec3 offset_coord;
+    vec3 jitter_size = textureSize(GetSampledTexture3D(jitter_texture_index), 0);
+    offset_coord.yz = ivec2(mod(gl_FragCoord.xy, jitter_size.yz));
+
+    float sum = 0.0;
+
+    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
+    float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
+
+    for (int i = 0; i < 4; i++) {
+        offset_coord.x = i;
+        vec4 offsets = texelFetch(GetSampledTexture3D(jitter_texture_index), offset_coord, 0) * min_filter_radius;
+        
+        sum += texture(
+            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+            vec3(clip_pos.xy + offsets.xy * texel_size,clip_pos.z)
+        );
+
+        sum += texture(
+            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+            vec3(clip_pos.xy + offsets.zw * texel_size,clip_pos.z)
+        );
+    }
+
+    if (sum == 0.0 || sum == 8.0) return sum / 8.0;
+
+    for (int i = 4; i < 32; i++) {
+        offset_coord.x = i;
+        vec4 offsets = texelFetch(GetSampledTexture3D(jitter_texture_index), offset_coord, 0) * min_filter_radius;
+        
+        sum += texture(
+            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+            vec3(clip_pos.xy + offsets.xy * texel_size,clip_pos.z)
+        );
+
+        sum += texture(
+            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+            vec3(clip_pos.xy + offsets.zw * texel_size,clip_pos.z)
+        );
+    }
+
+    return sum / 64.0;
+}
+
 
 vec3 calculate_light(
     vec3 view_dir,
@@ -300,8 +358,8 @@ void main() {
     float shadow = 1.0;
     if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
         uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
-        shadow = pcf_vogel(shadow_map, cascade_map_coord);
-        // shadow = pcf_branch(shadow_map, cascade_map_coord);
+        // shadow = pcf_vogel(shadow_map, cascade_map_coord);
+        shadow = pcf_branch(shadow_map, cascade_map_coord);
     }
 
     switch (render_mode) {

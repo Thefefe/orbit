@@ -10,7 +10,6 @@ use crate::{
     math,
     assets::AssetGraphData,
     scene::{SceneGraphData, GpuDrawCommand},
-    App,
     Camera,
     Projection,
     MAX_DRAW_COUNT,
@@ -69,12 +68,12 @@ impl Default for ShadowSettings {
             depth_bias_clamp: 0.0,
             depth_bias_slope_factor: 6.0,
             
-            cascade_split_lambda: 0.91,
-            max_shadow_distance: 100.0,
+            cascade_split_lambda: 0.8,
+            max_shadow_distance: 32.0,
             split_blend_ratio: 0.5,
 
             penumbra_filter_max_size: 6.0,
-            min_filter_radius: 1.0,
+            min_filter_radius: 2.0,
             max_filter_radius: 6.0,
         }
     }
@@ -156,7 +155,7 @@ pub fn render_shadow_map(
     let pass_name = format!("shadow_pass_for_{name}");
     let shadow_map = context.create_transient(name, graphics::ImageDesc {
         ty: graphics::ImageType::Single2D,
-        format: App::DEPTH_FORMAT,
+        format: vk::Format::D16_UNORM,
         dimensions: [resolution, resolution, 1],
         mip_levels: 1,
         samples: graphics::MultisampleCount::None,
@@ -179,7 +178,7 @@ pub fn render_shadow_map(
             })
             .depth_bias_dynamic()
             .depth_state(Some(graphics::DepthState {
-                format: App::DEPTH_FORMAT,
+                format: vk::Format::D16_UNORM,
                 test: graphics::PipelineState::Static(true),
                 write: true,
                 compare: vk::CompareOp::LESS,
@@ -388,7 +387,7 @@ pub fn render_directional_light(
         let camera_frustum_planes = math::frustum_planes_from_matrix(&camera_clip_to_light_matrix)
             .into_iter()
             .map(math::normalize_plane)
-            .filter(|&plane| Vec3A::dot(plane.into(), Vec3A::Z) > 0.0)
+            .filter(|&plane| Vec3A::dot(plane.into(), Vec3A::Z) >= 0.0)
             .take(5);
         
         let mut culling_planes = [Vec4::ZERO; 12];
@@ -417,7 +416,6 @@ pub fn render_directional_light(
             &CullInfo {
                 view_matrix: light_matrix,
                 view_space_cull_planes: culling_planes,
-                // view_space_cull_planes: &light_frustum_planes,
                 occlusion_culling: OcclusionCullInfo::None,
             },
             None,

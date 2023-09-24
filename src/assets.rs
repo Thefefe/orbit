@@ -7,18 +7,12 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 use ash::vk;
 
-//    4    8   12   16
-// PPPP PPPP PPPP
-// UUUU UUUU
-// NNNN NNNN NNNN
-// TTTT TTTT TTTT TTTT
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMeshVertex {
-    pub position: Vec3,
+    pub position:       [f32; 3],
     pub packed_normals: [i8; 4],
-    pub uv_coord: Vec2,
-    pub _padding0: [u32; 2],
+    pub uv_coord:       [f32; 2],
 }
 
 impl GpuMeshVertex {
@@ -29,10 +23,9 @@ impl GpuMeshVertex {
         tangent: Vec4
     ) -> Self {
         Self {
-            position,
+            position: position.to_array(),
             packed_normals: math::pack_normal_tangent_bitangent(normal, tangent),
-            uv_coord,
-            _padding0: [0; 2],
+            uv_coord: uv_coord.to_array(),
         }
     }
 
@@ -43,11 +36,18 @@ impl GpuMeshVertex {
         tangent: [f32; 4],
     ) -> Self {
         Self {
-            position: Vec3::from_array(position),
+            position,
             packed_normals: math::pack_normal_tangent_bitangent(Vec3::from_array(normal), Vec4::from_array(tangent)),
-            uv_coord: Vec2::from_array(uv_coord),
-            _padding0: [0; 2],
+            uv_coord,
         }
+    }
+
+    pub fn position_a(&self) -> Vec3A {
+        Vec3A::from_array(self.position)
+    }
+    
+    pub fn uv(&self) -> Vec2 {
+        Vec2::from_array(self.uv_coord)
     }
 
     pub fn pack_normals(&mut self, normal: Vec3, tangent: Vec4) {
@@ -66,9 +66,8 @@ pub struct GpuMeshInfo {
     index_offset: u32,
     index_count: u32,
     vertex_offset: u32,
-    _padding: u32,
     aabb: GpuAabb,
-    bounding_sphere: Vec4,
+    bounding_sphere: [f32; 4],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -231,9 +230,8 @@ impl GpuAssetStore {
             index_offset: index_range.start as u32,
             index_count: index_range.size() as u32,
             vertex_offset: vertex_range.start as u32,
-            _padding: 0,
             aabb: mesh.aabb.into(),
-            bounding_sphere: mesh.bounding_sphere,
+            bounding_sphere: mesh.bounding_sphere.to_array(),
         };
         context.immediate_write_buffer(
             &self.mesh_info_buffer,
@@ -463,15 +461,15 @@ impl Default for Aabb {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuAabb {
-    min: Vec4,
-    max: Vec4,
+    min: [f32; 3],
+    max: [f32; 3],
 }
 
 impl From<Aabb> for GpuAabb {
     fn from(value: Aabb) -> Self {
         Self {
-            min: value.min.extend(1.0),
-            max: value.max.extend(1.0),
+            min: value.min.to_array(),
+            max: value.max.to_array(),
         }
     }
 }
@@ -515,12 +513,12 @@ fn compute_tangents(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
         let i1 = triangle[0] as usize;
         let i2 = triangle[1] as usize;
         let i3 = triangle[2] as usize;
-        let v1 = vertices[i1].position;
-        let v2 = vertices[i2].position;
-        let v3 = vertices[i3].position;
-        let w1 = vertices[i1].uv_coord;
-        let w2 = vertices[i2].uv_coord;
-        let w3 = vertices[i3].uv_coord;
+        let v1 = vertices[i1].position_a();
+        let v2 = vertices[i2].position_a();
+        let v3 = vertices[i3].position_a();
+        let w1 = vertices[i1].uv();
+        let w2 = vertices[i2].uv();
+        let w3 = vertices[i3].uv();
         let x1 = v2.x - v1.x;
         let x2 = v3.x - v1.x;
         let y1 = v2.y - v1.y;

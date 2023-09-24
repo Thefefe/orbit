@@ -56,11 +56,11 @@ void unpack_normal_tangent(i8vec4 packed, out vec3 n, out vec4 t) {
 void main() {
     MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex];
     mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].model_matrix;
-    vout.world_pos = model_matrix * vec4(vertex.pos, 1.0);
+    vout.world_pos = model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
     gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_projection * vout.world_pos;
 
-    vout.uv = vertex.uv;
+    vout.uv = vec2(vertex.position[0], vertex.position[1]);
     
     mat3 normal_matrix = mat3(GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].normal_matrix);
 

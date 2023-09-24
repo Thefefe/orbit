@@ -44,6 +44,9 @@ bool aabb_plane_test(vec3 box_min, vec3 box_max, vec4 plane) {
 bool is_aabb_inside_frustum(mat4 mvp_matrix, Aabb aabb, uint plane_mask) {
 	bool inside_frustum = true;
 
+	vec3 aabb_min = vec3(aabb.min_pos[0], aabb.min_pos[1], aabb.min_pos[2]);
+	vec3 aabb_max = vec3(aabb.max_pos[0], aabb.max_pos[1], aabb.max_pos[2]);
+
 	mat4 mvp_t = transpose(mvp_matrix);
 	vec4 planes[6];
 	planes[0] = mvp_t[3] + mvp_t[0];
@@ -56,7 +59,7 @@ bool is_aabb_inside_frustum(mat4 mvp_matrix, Aabb aabb, uint plane_mask) {
 	for (uint i = 0; i < 5; i += 1) {
 		inside_frustum = inside_frustum && (
 			(plane_mask & (1 << i)) == 0 ||
-			!aabb_plane_test(aabb.min_pos.xyz, aabb.max_pos.xyz, vec4(-planes[i].xyz, planes[i].w))
+			!aabb_plane_test(aabb_min, aabb_max	, vec4(-planes[i].xyz, planes[i].w))
 		);
 	}
 
@@ -100,9 +103,15 @@ void main() {
 		
 		bool visible = true;
 
+		vec4 model_space_bounding_sphere = vec4(
+			mesh_info.bounding_sphere[0],
+			mesh_info.bounding_sphere[1],
+			mesh_info.bounding_sphere[2],
+			mesh_info.bounding_sphere[3]
+		);
 		vec4 view_space_sphere = transform_sphere(
 			cull_info.view_matrix * entity_data.model_matrix,
-			mesh_info.bounding_sphere
+			model_space_bounding_sphere
 		);
 
 		// first occlusion pass: only proccess if submesh was visible last frame

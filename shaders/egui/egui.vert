@@ -22,7 +22,7 @@ vec3 srgb_to_linear(vec3 srgb) {
 
 void main() {
     EguiVertex vertex = GetBuffer(EguiVertexBuffer, vertex_buffer).vertices[gl_VertexIndex + vertex_offset];
-    vec2 normal_pos = vec2(vertex.pos_x, vertex.pos_y) / screen_size;
+    vec2 normal_pos = vec2(vertex.position[0], vertex.position[1]) / screen_size;
     vec2 ndc_pos = 2.0 * normal_pos - 1.0;
 
     gl_Position = vec4(ndc_pos.x, -ndc_pos.y, 0.0, 1.0);
@@ -30,5 +30,5 @@ void main() {
     vec4 color = vec4(vertex.color) / 255.0;
 
     outColor = vec4(srgb_to_linear(color.rgb), color.a);
-    outUV = vec2(vertex.u, vertex.v);
+    outUV = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
 }

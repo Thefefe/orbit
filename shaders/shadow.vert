@@ -21,11 +21,13 @@ void main() {
     uint material_index = GetBuffer(DrawCommandsBuffer, draw_commands_buffer)
         .commands[gl_DrawID].material_index;
 
-    vout.uv = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex].uv;
+    MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex];
+
+    vout.uv = vec2(vertex.position[0], vertex.position[1]);
     vout.alpha_cutoff = GetBuffer(MaterialsBuffer, materials_buffer).materials[material_index].alpha_cutoff;
     vout.texture_index = GetBuffer(MaterialsBuffer, materials_buffer).materials[material_index].base_texture_index;
     
-    vec3 pos = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex].pos;
+    vec3 pos = vec3(vertex.position[0], vertex.position[1], vertex.position[2]);
     mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].model_matrix;
     
     gl_Position = view_proj * model_matrix * vec4(pos, 1.0);

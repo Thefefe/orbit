@@ -31,10 +31,9 @@ struct PerFrameData {
 };
 
 struct MeshVertex {
-    vec3 pos;
+    float position[3];
     i8vec4 packed_normals;
-    vec2 uv;
-    vec2 _padding0;
+    float uv_coord[2];
 };
 
 struct EntityData {
@@ -75,21 +74,19 @@ struct Submesh {
     uint entity_index;
     uint mesh_index;
     uint material_index;
-    uint _padding;
 };
 
 struct Aabb {
-    vec4 min_pos;
-    vec4 max_pos;  
+    float min_pos[3];
+    float max_pos[3];  
 };
 
 struct MeshInfo {
     uint index_offset;
     uint index_count;
     int  vertex_offset;
-    uint _padding;
     Aabb aabb;
-    vec4 bounding_sphere;
+    float bounding_sphere[4];
 };
 
 struct CullInfo {
@@ -114,10 +111,8 @@ struct LightData {
 };
 
 struct EguiVertex {
-    float pos_x;
-    float pos_y;
-    float u;
-    float v;
+    float position[2];
+    float uv_coord[2];
     u8vec4 color;
 };
 

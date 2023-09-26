@@ -68,13 +68,13 @@ impl Default for ShadowSettings {
             depth_bias_clamp: 0.0,
             depth_bias_slope_factor: 6.0,
             
-            cascade_split_lambda: 0.8,
+            cascade_split_lambda: 0.85,
             max_shadow_distance: 32.0,
             split_blend_ratio: 0.5,
 
-            penumbra_filter_max_size: 6.0,
+            penumbra_filter_max_size: 8.0,
             min_filter_radius: 2.0,
-            max_filter_radius: 6.0,
+            max_filter_radius: 8.0,
         }
     }
 }

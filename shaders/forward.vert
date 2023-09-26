@@ -60,7 +60,7 @@ void main() {
 
     gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_projection * vout.world_pos;
 
-    vout.uv = vec2(vertex.position[0], vertex.position[1]);
+    vout.uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
     
     mat3 normal_matrix = mat3(GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].normal_matrix);
 

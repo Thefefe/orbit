@@ -89,10 +89,9 @@ impl CameraController {
         }
     }
 
-    pub fn update_look(&mut self, input: &Input, transform: &mut Transform) {
-        let mouse_delta = input.mouse_delta();
-        self.pitch -= mouse_delta.x * self.mouse_sensitivity;
-        self.yaw = f32::clamp(self.yaw + mouse_delta.y * self.mouse_sensitivity, -PI / 2.0, PI / 2.0);
+    pub fn update_look(&mut self, delta: Vec2, transform: &mut Transform) {
+        self.pitch -= delta.x * self.mouse_sensitivity;
+        self.yaw = f32::clamp(self.yaw + delta.y * self.mouse_sensitivity, -PI / 2.0, PI / 2.0);
 
         transform.orientation = glam::Quat::from_euler(glam::EulerRot::YXZ, self.pitch, self.yaw, 0.0);
     }
@@ -433,7 +432,7 @@ impl App {
                 },
                 aspect_ratio: 1.0,
             },
-            light_dir_controller: CameraController::new(1.0, 0.003),
+            light_dir_controller: CameraController::new(1.0, 0.0003),
 
             render_mode: 0,
             camera_exposure: 1.0,
@@ -479,14 +478,23 @@ impl App {
 
         let delta_time = time.delta().as_secs_f32();
 
-
         if input.mouse_held(MouseButton::Right) {
-            self.camera_controller.update_look(input, &mut self.camera.transform);
+            self.camera_controller.update_look(input.mouse_delta(), &mut self.camera.transform);
         }
         self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
 
         if input.mouse_held(MouseButton::Left) {
-            self.light_dir_controller.update_look(input, &mut self.sun_light.transform);
+            let mut delta = input.mouse_delta();
+
+            if input.key_held(KeyCode::LShift) {
+                delta *= 8.0;
+            }
+
+            if input.key_held(KeyCode::LControl) {
+                delta /= 8.0;
+            }
+
+            self.light_dir_controller.update_look(delta, &mut self.sun_light.transform);
         }
 
         if input.key_pressed(KeyCode::F1) {

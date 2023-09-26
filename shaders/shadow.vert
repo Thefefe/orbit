@@ -23,7 +23,7 @@ void main() {
 
     MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex];
 
-    vout.uv = vec2(vertex.position[0], vertex.position[1]);
+    vout.uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
     vout.alpha_cutoff = GetBuffer(MaterialsBuffer, materials_buffer).materials[material_index].alpha_cutoff;
     vout.texture_index = GetBuffer(MaterialsBuffer, materials_buffer).materials[material_index].base_texture_index;
     

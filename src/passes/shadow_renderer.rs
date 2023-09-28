@@ -64,9 +64,9 @@ impl Default for ShadowSettings {
         Self {
             shadow_resolution: 2048,
 
-            depth_bias_constant_factor: 6.0,
+            depth_bias_constant_factor: -6.0,
             depth_bias_clamp: 0.0,
-            depth_bias_slope_factor: 6.0,
+            depth_bias_slope_factor: -6.0,
             
             cascade_split_lambda: 0.85,
             max_shadow_distance: 32.0,
@@ -148,7 +148,11 @@ pub struct ShadowRenderer {
 impl ShadowRenderer {
     pub fn new(context: &graphics::Context, settings: ShadowSettings) -> Self {
         let shadow_size = [settings.shadow_resolution; 2];
-        let shadow_map_depth_pyramids = std::array::from_fn(|_| DepthPyramid::new(context, shadow_size));
+        let shadow_map_depth_pyramids = std::array::from_fn(|i| DepthPyramid::new(
+            context,
+            format!("shadow_cascade_{i}_depth_pyramid").into(),
+            shadow_size
+        ));
         
         Self {
             settings,
@@ -204,7 +208,7 @@ impl ShadowRenderer {
                     format: vk::Format::D16_UNORM,
                     test: graphics::PipelineState::Static(true),
                     write: true,
-                    compare: vk::CompareOp::LESS,
+                    compare: vk::CompareOp::GREATER,
                 }))
         );
     
@@ -226,7 +230,7 @@ impl ShadowRenderer {
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
                         depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 1.0,
+                            depth: 0.0,
                             stencil: 0,
                         },
                     })
@@ -372,20 +376,24 @@ impl ShadowRenderer {
             // modifications:
             //  - aligned to view space texel sizes
             //  - offset in the direction of the camera
-            let subfrustum_center_modified_light_space =
+            let mut subfrustum_center_modified_light_space =
                 ((Vec3A::from(subfrustum_center_light_space) + forward_offset) / texel_size_vs).floor() * texel_size_vs;
-    
+            subfrustum_center_modified_light_space.z = -subfrustum_center_modified_light_space.z;
+
             let mut max_extent = Vec3A::splat(radius);
             let mut min_extent = -max_extent;
     
             max_extent += subfrustum_center_modified_light_space;
             min_extent += subfrustum_center_modified_light_space;
-    
+            
+            let near_clip = subfrustum_center_modified_light_space.z - 80.0;
+            let far_clip = max_extent.z;
+
             let projection_matrix = Mat4::orthographic_rh(
                 min_extent.x, max_extent.x,
                 min_extent.y, max_extent.y,
-                -max_coords_light_space.z - 200.0,
-                -subfrustum_center_modified_light_space.z + radius,
+                far_clip,  // reverse z
+                near_clip,
             );
     
             if show_cascade_view_frustum && selected_cascade == cascade_index {
@@ -400,8 +408,13 @@ impl ShadowRenderer {
             }
             
             let light_projection_matrix = projection_matrix * light_matrix;
-    
-            let light_frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
+            
+            let light_frustum_planes = math::frustum_planes_from_matrix(&Mat4::orthographic_rh(
+                    min_extent.x, max_extent.x,
+                    min_extent.y, max_extent.y,
+                    near_clip, // HACK: non-reverse z, the last plane is buggy for some reason, this way only the near 
+                    far_clip,  // plane is wrong, but we don't use that
+                ))
                 .map(math::normalize_plane);
     
             let light_to_world_matrix = light_matrix.inverse();
@@ -418,6 +431,7 @@ impl ShadowRenderer {
             let mut culling_plane_count = 0;
     
             for (i, plane) in light_frustum_planes.into_iter().chain(camera_frustum_planes).enumerate() {
+                // if i == 4 { continue; } // near light plane
                 culling_planes[i] = plane;
                 culling_plane_count += 1;
             }

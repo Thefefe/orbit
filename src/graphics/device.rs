@@ -1116,7 +1116,7 @@ impl SamplerKind {
                     .min_lod(0.0)
                     .max_lod(vk::LOD_CLAMP_NONE)
                     .compare_enable(true)
-                    .compare_op(vk::CompareOp::LESS_OR_EQUAL);
+                    .compare_op(vk::CompareOp::GREATER_OR_EQUAL);
 
                 unsafe { device.create_sampler(&create_info, None).unwrap() }
             },
@@ -1127,8 +1127,8 @@ impl SamplerKind {
                     .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                     .anisotropy_enable(true)
                     .max_anisotropy(16.0)
-                    .min_filter(vk::Filter::LINEAR)
-                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::NEAREST)
+                    .mag_filter(vk::Filter::NEAREST)
                     .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
                     .min_lod(0.0)
                     .max_lod(vk::LOD_CLAMP_NONE);

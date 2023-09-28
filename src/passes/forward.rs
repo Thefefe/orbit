@@ -120,7 +120,7 @@ impl ForwardRenderer {
         });
 
         let screen_extent = context.swapchain.extent();
-        let depth_pyramid = DepthPyramid::new(context, [screen_extent.width, screen_extent.height]);
+        let depth_pyramid = DepthPyramid::new(context, "camera_depth_pyramid".into(), [screen_extent.width, screen_extent.height]);
 
         Self {
             brdf_integration_map,

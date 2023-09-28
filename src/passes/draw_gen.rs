@@ -205,11 +205,11 @@ pub struct DepthPyramid {
 }
 
 impl DepthPyramid {
-    pub fn new(context: &graphics::Context, [width, height]: [u32; 2]) -> Self {
+    pub fn new(context: &graphics::Context, name: Cow<'static, str>, [width, height]: [u32; 2]) -> Self {
         let [width, height] = [width.next_power_of_two() / 2, height.next_power_of_two() / 2];
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
 
-        let pyramid = context.create_image("depth_pyramid", &graphics::ImageDesc {
+        let pyramid = context.create_image(name, &graphics::ImageDesc {
             ty: graphics::ImageType::Single2D,
             format: vk::Format::R32_SFLOAT,
             dimensions: [width, height, 1],

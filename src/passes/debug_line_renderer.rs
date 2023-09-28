@@ -4,7 +4,7 @@ use ash::vk;
 use glam::{Vec3A, Vec4, vec3, Vec3, Mat4};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, App, Settings};
+use crate::{graphics, App, Settings, math};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -156,7 +156,7 @@ impl DebugLineRenderer {
 
     pub fn draw_plane(&mut self, mut plane: Vec4, half_size: f32, color: Vec4) {
         let color = color.to_array().map(|f| (f * 255.0) as u8);
-        plane /= Vec3A::from(plane).length(); // normalize plane
+        plane = math::normalize_plane(plane);
         let normal = -Vec3A::from(plane);
         let distance = plane.w;
         let (plane_x, plane_y) = normal.any_orthonormal_pair();

@@ -51,7 +51,7 @@ float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers
 }
 
 #define PENUMBRA_SAMPLE_COUNT 8
-#define SHADOW_SAMPLE_COUNT 32
+#define SHADOW_SAMPLE_COUNT 24
 #define SHADOW_FILTER_MULTIPLIER 0.01
 
 void penumbra(uint shadow_map, float vogel_theta, vec3 light_space_pos, out uint blockers_count, out float avg_blockers_depth) {
@@ -70,8 +70,8 @@ void penumbra(uint shadow_map, float vogel_theta, vec3 light_space_pos, out uint
             sample_uv
         ).x;
 
-        if(sample_depth < light_space_pos.z) {
-            avg_blockers_depth += sample_depth;
+        if(sample_depth > light_space_pos.z) {
+            avg_blockers_depth += 1.0 - sample_depth;
             blockers_count += 1;
         }
     }
@@ -94,12 +94,12 @@ float pcf_vogel(uint shadow_map, vec4 clip_pos) {
     
     if (blockers_count == 0 && blockers_count == PENUMBRA_SAMPLE_COUNT) return blockers_count / PENUMBRA_SAMPLE_COUNT;
 
-    float penumbra_size = avg_blockers_depth_to_penumbra(clip_pos.z, avg_blockers_depth);
-
+    float penumbra_scale = avg_blockers_depth_to_penumbra(1.0 - clip_pos.z, avg_blockers_depth);
+    
     float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
     float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
     
-    float filter_radius = mix(min_filter_radius, max_filter_radius, penumbra_size);
+    float filter_radius = mix(min_filter_radius, max_filter_radius, penumbra_scale);
 
     for (int i = 0; i < SHADOW_SAMPLE_COUNT; i += 1) {
         vec2 offset = vogel_disk_sample(i, SHADOW_SAMPLE_COUNT, random_theta) * filter_radius * texel_size;
@@ -313,8 +313,8 @@ void main() {
     float shadow = 1.0;
     if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
         uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
-        // shadow = pcf_vogel(shadow_map, cascade_map_coord);
-        shadow = pcf_branch(shadow_map, cascade_map_coord);
+        shadow = pcf_vogel(shadow_map, cascade_map_coord);
+        // shadow = pcf_branch(shadow_map, cascade_map_coord);
     }
 
     switch (render_mode) {
@@ -392,7 +392,7 @@ void main() {
 
             out_color.rgb = ambient + Lo + emissive;
             break;
-        case 1: 
+        case 1: {
             float shadow = max(shadow, 0.1);
             vec3 cascade_color = vec3(0.25);
 
@@ -400,10 +400,12 @@ void main() {
                 cascade_color = CASCADE_COLORS[cascade_index];
             
             out_color = vec4(cascade_color * base_color.rgb * shadow, 1.0);
-            break;
+        } break;
         case 2:
             out_color = vec4(normal * 0.5 + 0.5, 1.0);
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+
+            out_color = vec4(vec3(shadow), 1.0);
             break;
         case 3: 
             out_color = vec4(vec3(metallic), 1.0);

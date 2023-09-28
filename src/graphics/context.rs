@@ -593,6 +593,10 @@ impl Context {
                     let resource = &frame.compiled_graph.resources[resoure_index].resource.as_ref();
 
                     if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
+                        if src_access.read_write_kind() == graphics::ReadWriteKind::Read &&
+                           dst_access.read_write_kind() == graphics::ReadWriteKind::Read {
+                            continue;
+                        }
                         memory_barrier.src_stage_mask |= src_access.stage_mask();
                         if src_access.read_write_kind() == graphics::ReadWriteKind::Write {
                             memory_barrier.src_access_mask |= src_access.access_mask();
@@ -604,8 +608,6 @@ impl Context {
                         }
                     } else if let graphics::AnyResourceRef::Image(image) = &resource {
                         image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
-                    } else {
-                        unimplemented!()
                     }
                 }
 

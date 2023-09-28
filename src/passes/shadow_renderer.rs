@@ -16,7 +16,7 @@ use crate::{
     MAX_SHADOW_CASCADE_COUNT,
 };
 
-use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid}, debug_line_renderer::DebugLineRenderer};
+use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, update_multiple_depth_pyramids}, debug_line_renderer::DebugLineRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -469,14 +469,23 @@ impl ShadowRenderer {
                 scene,
             );
 
-            self.shadow_map_depth_pyramids[cascade_index].update(context, shadow_map);
+            // self.shadow_map_depth_pyramids[cascade_index].update(context, shadow_map);
             
             directional_light_data.projection_matrices[cascade_index] = light_projection_matrix;
             directional_light_data.shadow_maps[cascade_index] = context
                 .get_resource_descriptor_index(shadow_map)
                 .unwrap();
             shadow_maps[cascade_index] = shadow_map;
-        };
+        }
+
+        let shadow_map_depth_pyramids: [_; MAX_SHADOW_CASCADE_COUNT] =
+            std::array::from_fn(|i| self.shadow_map_depth_pyramids[i].get_current(context));
+
+        update_multiple_depth_pyramids(context, shadow_map_depth_pyramids, shadow_maps);
+
+        for depth_pyramid in self.shadow_map_depth_pyramids.iter_mut() {
+            depth_pyramid.usable = true;
+        }
     
         let buffer = context
             .transient_storage_data(format!("{name}_light_data"), bytemuck::bytes_of(&directional_light_data));

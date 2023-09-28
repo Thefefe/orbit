@@ -423,8 +423,7 @@ impl RenderGraph {
                     let src_access = resource_data.last_access(dependency.resource_version);
                     let dst_access = dependency.access;
 
-                    // TODO: remove duplicate dependencies, handle separate image
-                    // layouts for same image (rare, but can happen) 
+                    // TODO: remove duplicate dependencies
                     compiled.dependencies.push(BatchDependency {
                         resource_index: dependency.resource_handle,
                         src_access,

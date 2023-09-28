@@ -302,6 +302,62 @@ impl DepthPyramid {
     }
 }
 
+#[inline]
+pub fn update_multiple_depth_pyramids<const C: usize>(
+    context: &mut graphics::Context,
+    depth_pyramids: [graphics::GraphImageHandle; C],
+    depth_buffers: [graphics::GraphImageHandle; C],
+) {
+    let reduce_pipeline = context.create_compute_pipeline(
+        "depth_reduce_pipeline",
+        graphics::ShaderSource::spv("shaders/depth_reduce.comp.spv")
+    );
+
+    context.add_pass("depth_pyramid_reduce_multiple")
+        .with_dependencies(depth_pyramids.into_iter().map(|i| (i, graphics::AccessKind::ComputeShaderWrite)))
+        .with_dependencies(depth_buffers.into_iter().map(|i| (i, graphics::AccessKind::ComputeShaderRead)))
+        .render(move |cmd, graph| {
+            let depth_pyramids = depth_pyramids.map(|i| graph.get_image(i));
+            let depth_buffers = depth_buffers.map(|i| graph.get_image(i));
+            
+            let max_mip_level = depth_pyramids.iter().map(|i| i.mip_view_count()).max().unwrap();
+
+            cmd.bind_compute_pipeline(reduce_pipeline);
+
+            for mip_level in 0..max_mip_level {
+                if mip_level != 0 {
+                    cmd.barrier(&[], &[], &[
+                        vk::MemoryBarrier2 {
+                            src_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                            src_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                            dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                            dst_access_mask: vk::AccessFlags2::SHADER_READ,
+                            ..Default::default()
+                        }
+                    ]);
+                }
+
+                for i in 0..C {
+                    if depth_pyramids[i].mip_view_count() <= mip_level { continue; }
+
+                    let src_view = if mip_level == 0 {
+                        depth_buffers[i].full_view
+                    } else {
+                        depth_pyramids[i].mip_view(mip_level - 1).unwrap()
+                    };
+                    let dst_view = depth_pyramids[i].mip_view(mip_level).unwrap();
+
+                    cmd.build_constants()
+                        .uint(dst_view.width())
+                        .uint(dst_view.height())
+                        .sampled_image(&src_view) 
+                        .storage_image(&dst_view);
+                    cmd.dispatch([dst_view.width() / 16 + 1, dst_view.height() / 16 + 1, 1]);
+                }
+            }
+        });
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
 pub struct FrustumPlaneMask(u32);

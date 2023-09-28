@@ -360,13 +360,13 @@ fn forward_pass(
     first_pass: bool,
 ) {
     // HACK: the rendergraph doesn't handle reads in different batches well without writes in-between
-    let shadows = first_pass.then_some(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)).into_iter()).into_iter().flatten();
+    // let shadows = first_pass.then_some(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)).into_iter()).into_iter().flatten();
 
     context.add_pass(pass_name)
         .with_dependencies(target_attachments.dependencies())
         .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
-        // .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)))
-        .with_dependencies(shadows)
+        .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)))
+        // .with_dependencies(shadows)
         .render(move |cmd, graph| {
             let color_target = graph.get_image(target_attachments.color_target);
             let color_resolve = target_attachments.color_resolve.map(|i| graph.get_image(i));

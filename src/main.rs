@@ -39,11 +39,10 @@ use scene::{SceneData, Transform};
 use passes::{
     debug_line_renderer::DebugLineRenderer,
     env_map_loader::EnvironmentMap,
-    forward::ForwardRenderer, shadow_renderer::ShadowSettings,
+    forward::ForwardRenderer, shadow_renderer::{ShadowSettings, ShadowRenderer},
 };
 
 use crate::passes::{
-    shadow_renderer::render_directional_light,
     post_process::render_post_process,
     forward::TargetAttachments
 };
@@ -242,6 +241,7 @@ struct App {
     main_depth_resolve_image: Option<graphics::Image>,
 
     forward_renderer: ForwardRenderer,
+    shadow_renderer: ShadowRenderer,
     debug_line_renderer: DebugLineRenderer,
     settings: Settings,
 
@@ -415,6 +415,7 @@ impl App {
             main_depth_resolve_image: None,
 
             forward_renderer: ForwardRenderer::new(context),
+            shadow_renderer: ShadowRenderer::new(context, settings.shadow_settings),
             debug_line_renderer: DebugLineRenderer::new(context),
             settings,
 
@@ -589,6 +590,7 @@ impl App {
             egui::Window::new("settings").open(&mut self.open_settings).show(egui_ctx, |ui| {
                 self.settings.edit(&context.device, ui);
             });
+            self.shadow_renderer.update_settings(&self.settings.shadow_settings);
         }
 
         if self.open_culling_debugger {
@@ -719,9 +721,8 @@ impl App {
         let depth_target = context.import(&self.main_depth_image);
         let depth_resolve = self.main_depth_resolve_image.as_ref().map(|i| context.import(i));
 
-        let directional_light = render_directional_light(
+        let directional_light = self.shadow_renderer.render_directional_light(
             context,
-            &self.settings.shadow_settings,
             "sun".into(),
             self.sun_light.transform.orientation,
             self.light_color,

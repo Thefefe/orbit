@@ -57,6 +57,10 @@ impl GraphResourceData {
         self.versions.len() - 1
     }
 
+    fn curent_layout(&self) -> vk::ImageLayout {
+        self.versions.last().unwrap().last_access.image_layout()
+    }
+
     fn last_access(&self, version: usize) -> graphics::AccessKind {
         assert!(version < self.versions.len());
         self.versions[version].last_access
@@ -188,7 +192,12 @@ impl RenderGraph {
 
         self.passes[pass_handle].dependencies.push(dependency);
 
-        if access.read_write_kind() == graphics::ReadWriteKind::Write {
+        let resource = &self.resources[resource_handle];
+        let needs_layout_transition =
+            resource.kind() == graphics::ResourceKind::Image &&
+            resource.curent_layout() != access.image_layout();
+
+        if access.read_write_kind() == graphics::ReadWriteKind::Write || needs_layout_transition {
             self.resources[resource_handle].versions.push(GraphResourceVersion {
                 last_access: access,
                 source_pass: Some(pass_handle),

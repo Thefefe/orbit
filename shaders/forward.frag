@@ -51,7 +51,7 @@ float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers
 }
 
 #define PENUMBRA_SAMPLE_COUNT 8
-#define SHADOW_SAMPLE_COUNT 24
+#define SHADOW_SAMPLE_COUNT 32
 #define SHADOW_FILTER_MULTIPLIER 0.01
 
 void penumbra(uint shadow_map, float vogel_theta, vec3 light_space_pos, out uint blockers_count, out float avg_blockers_depth) {
@@ -313,8 +313,8 @@ void main() {
     float shadow = 1.0;
     if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
         uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
-        shadow = pcf_vogel(shadow_map, cascade_map_coord);
-        // shadow = pcf_branch(shadow_map, cascade_map_coord);
+        // shadow = pcf_vogel(shadow_map, cascade_map_coord);
+        shadow = pcf_branch(shadow_map, cascade_map_coord);
     }
 
     switch (render_mode) {

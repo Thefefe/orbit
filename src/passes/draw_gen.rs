@@ -251,7 +251,7 @@ impl DepthPyramid {
     }
 
     pub fn update(&mut self, context: &mut graphics::Context, depth_buffer: graphics::GraphImageHandle) {
-        self.usable = true;        
+        self.usable = true;
         
         let pyramid = context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
             initial_access: graphics::AccessKind::ComputeShaderReadGeneral,

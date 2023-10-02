@@ -32,7 +32,7 @@ struct GpuDirectionalLight {
     penumbra_filter_max_size: f32,
     min_filter_radius: f32,
     max_filter_radius: f32,
-    _padding1: u32
+    normal_bias_scale: f32, // TODO: move to somewhere global
 }
 
 #[derive(Clone, Copy)]
@@ -46,8 +46,8 @@ pub struct ShadowSettings {
     pub shadow_resolution: u32,
 
     pub depth_bias_constant_factor: f32,
-    pub depth_bias_clamp: f32,
     pub depth_bias_slope_factor: f32,
+    pub depth_bias_normal_scale: f32,
 
     // directional
     pub cascade_split_lambda: f32,
@@ -64,9 +64,9 @@ impl Default for ShadowSettings {
         Self {
             shadow_resolution: 2048,
 
-            depth_bias_constant_factor: -6.0,
-            depth_bias_clamp: 0.0,
-            depth_bias_slope_factor: -6.0,
+            depth_bias_constant_factor: 4.0,
+            depth_bias_slope_factor: 4.0,
+            depth_bias_normal_scale: 4.0,
             
             cascade_split_lambda: 0.85,
             max_shadow_distance: 32.0,
@@ -96,16 +96,17 @@ impl ShadowSettings {
 
         ui.horizontal(|ui| {
             ui.label("depth_bias_constant_factor");
-            ui.add(egui::DragValue::new(&mut self.depth_bias_constant_factor).speed(0.01));
+            ui.add(egui::DragValue::new(&mut self.depth_bias_constant_factor).speed(0.01).clamp_range(0.0..=16.0));
         });
 
         ui.horizontal(|ui| {
-            ui.label("depth_bias_clamp");
-            ui.add(egui::DragValue::new(&mut self.depth_bias_clamp).speed(0.01));
-        });
-        ui.horizontal(|ui| {
             ui.label("depth_bias_slope_factor");
-            ui.add(egui::DragValue::new(&mut self.depth_bias_slope_factor).speed(0.01));
+            ui.add(egui::DragValue::new(&mut self.depth_bias_slope_factor).speed(0.01).clamp_range(0.0..=16.0));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("depth_bias_normal_scale");
+            ui.add(egui::DragValue::new(&mut self.depth_bias_normal_scale).speed(0.01).clamp_range(0.0..=16.0));
         });
 
         ui.horizontal(|ui| {
@@ -245,10 +246,12 @@ impl ShadowRenderer {
                 
                 cmd.bind_raster_pipeline(pipeline);
                 cmd.bind_index_buffer(&index_buffer, 0);
+
+                // negative becouse of reverse-z projection
                 cmd.set_depth_bias(
-                    settings.depth_bias_constant_factor,
-                    settings.depth_bias_clamp,
-                    settings.depth_bias_slope_factor
+                    -settings.depth_bias_constant_factor,
+                    0.0,
+                    -settings.depth_bias_slope_factor
                 );
     
                 cmd.build_constants()
@@ -310,7 +313,7 @@ impl ShadowRenderer {
             penumbra_filter_max_size: settings.penumbra_filter_max_size,
             max_filter_radius: settings.max_filter_radius,
             min_filter_radius: settings.min_filter_radius,
-            _padding1: 0,
+            normal_bias_scale: self.settings.depth_bias_normal_scale,
         };
     
         let mut shadow_maps = [graphics::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];
@@ -386,7 +389,7 @@ impl ShadowRenderer {
             max_extent += subfrustum_center_modified_light_space;
             min_extent += subfrustum_center_modified_light_space;
             
-            let near_clip = subfrustum_center_modified_light_space.z - 80.0;
+            let near_clip = min_extent.z - 80.0;
             let far_clip = max_extent.z;
 
             let projection_matrix = Mat4::orthographic_rh(

@@ -87,7 +87,6 @@ bool project_sphere(vec4 sphere, float znear, float P00, float P11, out vec4 aab
 	aabb = aabb.xwzy * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f); // clip space -> uv space
 
 	return true;
-	
 }
 
 void main() {
@@ -144,11 +143,12 @@ void main() {
 				float width = (aabb.z - aabb.x) * pyramid_size.x;
 				float height = (aabb.w - aabb.y) * pyramid_size.y;
 
-				//find the mipmap level that will match the screen size of the sphere
-				float level = floor(log2(max(width, height)));
-
-				//sample the depth pyramid at that specific level
-				float depth = textureLod(sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)), (aabb.xy + aabb.zw) * 0.5, level).x;
+				// sample the depth pyramid at that specific level
+				float depth = textureLod(
+					sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
+					(aabb.xy + aabb.zw) * 0.5,
+					log2(max(width, height))
+				).x;
 
 				float depthSphere = cull_info.z_near / (view_space_sphere.z - view_space_sphere.w);
 
@@ -172,6 +172,7 @@ void main() {
 			draw_command.vertex_offset    = mesh_info.vertex_offset;
 			draw_command.first_instance   = submesh.entity_index;
 			draw_command.material_index   = submesh.material_index;
+			draw_command._debug_index     = gID;
 
 			uint draw_index = atomicAdd(GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count, 1);
 			GetBuffer(DrawCommandsBuffer, draw_commands_buffer).commands[draw_index] = draw_command;

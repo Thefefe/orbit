@@ -81,6 +81,8 @@ pub struct GpuDrawCommand {
     pub vertex_offset: i32,
     pub first_instance: u32,
 
+    pub _debug_index: u32, // only for debugging
+
     // other per-draw data
     pub material_index: u32,
 }

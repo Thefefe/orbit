@@ -20,7 +20,7 @@ struct DirectionalLightData {
     float penumbra_filter_max_size;
     float min_filter_radius;
     float max_filter_radius;
-    uint _padding1;
+    float normal_bias_scale;
 };
 
 struct PerFrameData {
@@ -48,6 +48,8 @@ struct DrawCommand {
     uint first_index;
     int  vertex_offset;
     uint first_instance;
+    
+    uint _debug_index; // for debuging only
     
     // other per-draw data
     uint material_index;

@@ -359,9 +359,6 @@ fn forward_pass(
 
     first_pass: bool,
 ) {
-    // HACK: the rendergraph doesn't handle reads in different batches well without writes in-between
-    // let shadows = first_pass.then_some(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)).into_iter()).into_iter().flatten();
-
     context.add_pass(pass_name)
         .with_dependencies(target_attachments.dependencies())
         .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)

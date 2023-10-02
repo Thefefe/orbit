@@ -525,7 +525,7 @@ pub fn load_gltf(
 
             let bounding_box = primitive.bounding_box();
             mesh_data.aabb = Aabb::from_arrays(bounding_box.min, bounding_box.max);
-            let bounding_sphere_center = (mesh_data.aabb.min + mesh_data.aabb.max) / 2.0;
+            let bounding_sphere_center = (mesh_data.aabb.min + mesh_data.aabb.max) * 0.5;
 
             let mut bounding_sphere_radius_sqr: f32 = 0.0;
             for vertex in mesh_data.vertices.iter() {

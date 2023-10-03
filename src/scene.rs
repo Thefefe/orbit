@@ -69,6 +69,7 @@ pub struct GpuSubmeshData {
     entity_index: u32,
     mesh_index: u32,
     material_index: u32,
+    alpha_mode: u32,
 }
 
 #[repr(C)]
@@ -191,6 +192,7 @@ impl SceneData {
                         entity_index: entity_index as u32,
                         mesh_index: submesh.mesh_handle.slot(),
                         material_index: submesh.material_index.slot(),
+                        alpha_mode: assets.material_indices[submesh.material_index].alpha_mode.raw_index(),
                     })
                 }
             }

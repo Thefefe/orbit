@@ -434,6 +434,8 @@ pub fn load_gltf(
         let handle = asset_store.add_material(
             context,
             MaterialData {
+                alpha_mode: material.alpha_mode().into(),
+
                 base_color,
                 emissive_factor,
                 metallic_factor,
@@ -447,7 +449,6 @@ pub fn load_gltf(
                 metallic_roughness_texture,
                 occlusion_texture: occulusion_texture,
                 emissive_texture,
-                
             },
         );
         material_lookup_table.push(handle);

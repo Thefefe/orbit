@@ -90,8 +90,38 @@ pub struct ModelData {
     pub submeshes: Vec<Submesh>,
 }
 
+#[repr(usize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlphaMode {
+    Opaque      = 0,
+    Masked      = 1,
+    Transparent = 2,
+}
+
+impl AlphaMode {
+    pub fn raw_index(self) -> u32 {
+        match self {
+            AlphaMode::Opaque      => 0,
+            AlphaMode::Masked      => 1,
+            AlphaMode::Transparent => 2,
+        }
+    }
+}
+
+impl From<gltf::material::AlphaMode> for AlphaMode {
+    fn from(value: gltf::material::AlphaMode) -> Self {
+        match value {
+            gltf::material::AlphaMode::Opaque => Self::Opaque,
+            gltf::material::AlphaMode::Mask   => Self::Masked,
+            gltf::material::AlphaMode::Blend  => Self::Transparent,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct MaterialData {
+    pub alpha_mode: AlphaMode,
+
     pub base_color: Vec4,
     pub metallic_factor: f32,
     pub roughness_factor: f32,

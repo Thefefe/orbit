@@ -97,9 +97,11 @@ void main() {
 		Submesh submesh = GetBuffer(SubmeshBuffer, submesh_buffer).submeshes[gID];
 		MeshInfo mesh_info = GetBuffer(MeshInfoBuffer, mesh_info_buffer).mesh_infos[submesh.mesh_index];
 		EntityData entity_data = GetBuffer(EntityBuffer, entity_buffer).entities[submesh.entity_index];
-		
+
 		CullInfo cull_info = GetBuffer(CullInfoBuffer, cull_info_buffer).cull_info;
 		
+		if (((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag) == 0) return;
+
 		bool visible = true;
 
 		vec4 model_space_bounding_sphere = vec4(
@@ -160,8 +162,8 @@ void main() {
 		bool should_draw = visible;
 
 		// second occlusion pass: only proccess if submesh wasn't visible last frame
-		if (cull_info.occlusion_pass == 2)
-			should_draw = visible && GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] != 1;
+		// if (cull_info.occlusion_pass == 2)
+		// 	should_draw = visible && GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] != 1;
 
 		// draw command fill
 		if (should_draw) {

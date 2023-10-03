@@ -16,7 +16,7 @@ use crate::{
     MAX_SHADOW_CASCADE_COUNT,
 };
 
-use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, update_multiple_depth_pyramids}, debug_line_renderer::DebugLineRenderer};
+use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, update_multiple_depth_pyramids, AlphaModeFlags}, debug_line_renderer::DebugLineRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -458,6 +458,7 @@ impl ShadowRenderer {
                     view_matrix: light_matrix,
                     view_space_cull_planes: culling_planes,
                     occlusion_culling: OcclusionCullInfo::None,
+                    alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                 },
                 None,
             );

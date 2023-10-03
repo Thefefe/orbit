@@ -465,8 +465,12 @@ void main() {
             vec4(offset_coord, 1.0);
 
         // shadow = pcf_vogel(shadow_map, cascade_map_coord);
-        // shadow = pcf_poisson(shadow_map, cascade_map_coord);
-        shadow = pcf_branch(shadow_map, cascade_shadow_map_coords);
+        shadow = pcf_poisson(shadow_map, cascade_map_coord);
+        // shadow = pcf_branch(shadow_map, cascade_shadow_map_coords);
+        // shadow = texture(
+        //     sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
+        //     cascade_shadow_map_coords.xyz
+        // );
     }
 
     switch (render_mode) {
@@ -556,8 +560,6 @@ void main() {
         case 2:
             out_color = vec4(normal * 0.5 + 0.5, 1.0);
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-
-            out_color = vec4(vec3(shadow), 1.0);
             break;
         case 3: 
             out_color = vec4(vec3(metallic), 1.0);

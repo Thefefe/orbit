@@ -76,6 +76,7 @@ struct Submesh {
     uint entity_index;
     uint mesh_index;
     uint material_index;
+    uint alpha_mode;
 };
 
 struct Aabb {
@@ -95,6 +96,7 @@ struct CullInfo {
     mat4 view_matrix;
     vec4 cull_planes[12];
     uint cull_plane_count;
+    uint alpha_mode_flag;
 
     uint  occlusion_pass;
     uint  visibility_buffer;
@@ -102,7 +104,6 @@ struct CullInfo {
     float p00;
     float p11;
     float z_near;
-    uint  _padding;
 };
 
 struct LightData {

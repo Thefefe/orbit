@@ -4,7 +4,7 @@ use ash::vk;
 use glam::{Mat4, Vec4};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
+use crate::{graphics, assets::{AssetGraphData, AlphaMode}, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum OcclusionCullInfo {
@@ -85,6 +85,7 @@ pub struct CullInfo<'a> {
     pub view_matrix: Mat4,
     pub view_space_cull_planes: &'a [Vec4],
     pub occlusion_culling: OcclusionCullInfo,
+    pub alpha_mode_filter: AlphaModeFlags,
 }
 
 const MAX_CULL_PLANES: usize = 12;
@@ -96,13 +97,14 @@ pub struct GpuCullInfo {
     cull_planes: [Vec4; MAX_CULL_PLANES],
     cull_plane_count: u32,
 
+    alpha_mode_flags: u32,
+
     occlusion_pass: u32,
     visibility_buffer: u32,
     depth_pyramid: u32,
     p00: f32,
     p11: f32,
     z_near: f32,
-    _padding: u32,
 }
 
 pub fn create_draw_commands(
@@ -144,6 +146,8 @@ pub fn create_draw_commands(
     let mut gpu_cull_info_data = GpuCullInfo {
         view_matrix: cull_info.view_matrix,
         cull_plane_count: cull_info.view_space_cull_planes.len() as u32,
+
+        alpha_mode_flags: cull_info.alpha_mode_filter.0,
             
         occlusion_pass: cull_info.occlusion_culling.pass_index(),
         visibility_buffer: visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
@@ -360,17 +364,13 @@ pub fn update_multiple_depth_pyramids<const C: usize>(
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub struct FrustumPlaneMask(u32);
-ash::vk_bitflags_wrapped!(FrustumPlaneMask, u32);
+pub struct AlphaModeFlags(u32);
+ash::vk_bitflags_wrapped!(AlphaModeFlags, u32);
 
-impl FrustumPlaneMask {
-    pub const RIGHT:   Self = Self(0b1);
-    pub const LEFT:  Self = Self(0b01);
-    pub const BOTTOM: Self = Self(0b001);
-    pub const TOP:    Self = Self(0b0001);
-    pub const NEAR:   Self = Self(0b00001);
-    pub const FAR:    Self = Self(0b000001);
+impl AlphaModeFlags {
+    pub const OPAQUE: Self      = Self(1 << (AlphaMode::Opaque as usize));
+    pub const MASKED: Self      = Self(1 << (AlphaMode::Masked as usize));
+    pub const TRANSPARENT: Self = Self(1 << (AlphaMode::Transparent as usize));
 
-    pub const SIDES:  Self = Self(0b111100);
-    pub const ALL:    Self = Self(0b111111);
+    pub const ALL: Self = Self(0b111);
 }

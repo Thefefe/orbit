@@ -6,6 +6,35 @@ use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{Sc
 
 use super::{shadow_renderer::DirectionalLightGraphData, env_map_loader::GraphEnvironmentMap, draw_gen::DepthPyramid};
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    Shaded    = 0,
+    Cascade   = 1,
+    Normal    = 2,
+    Metalic   = 3,
+    Roughness = 4,
+    Emissive  = 5,
+    Ao        = 6,
+    Overdraw  = 7,
+}
+
+impl From<u32> for RenderMode {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => Self::Shaded,
+            1 => Self::Cascade,
+            2 => Self::Normal,
+            3 => Self::Metalic,
+            4 => Self::Roughness,
+            5 => Self::Emissive,
+            6 => Self::Ao,
+            7 => Self::Overdraw,
+            _ => Self::Shaded,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TargetAttachments {
     pub color_target: graphics::GraphImageHandle,
@@ -150,7 +179,7 @@ impl ForwardRenderer {
         
         camera: &Camera,
         frozen_camera: &Camera,
-        render_mode: u32,
+        render_mode: RenderMode,
     ) {
         puffin::profile_function!();
 
@@ -170,7 +199,7 @@ impl ForwardRenderer {
             view_projection: camera_view_projection_matrix,
             view: camera_view_matrix,
             view_pos: camera.transform.position,
-            render_mode,
+            render_mode: render_mode as u32,
         }));
 
         let environment_map = environment_map.map(|e| e.import_to_graph(context));
@@ -217,6 +246,7 @@ impl ForwardRenderer {
         forward_pass(
             context,
             "forward_depth_prepass",
+            render_mode,
             settings,
 
             assets,
@@ -247,13 +277,13 @@ impl ForwardRenderer {
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
-                occlusion_culling: OcclusionCullInfo::SecondPass {
+                occlusion_culling: occlusion_culling.then_some(OcclusionCullInfo::SecondPass {
                     visibility_buffer,
                     depth_pyramid,
                     p00: projection_matrix.col(0)[0],
                     p11: projection_matrix.col(1)[1],
                     z_near: frozen_camera.projection.near(),
-                },
+                }).unwrap_or_default(),
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
             },
             Some(draw_commands),
@@ -262,6 +292,7 @@ impl ForwardRenderer {
         forward_pass(
             context,
             "forward_color_pass",
+            render_mode,
             settings,
 
             assets,
@@ -288,6 +319,7 @@ impl ForwardRenderer {
 fn forward_pass(
     context: &mut graphics::Context,
     pass_name: &'static str,
+    render_mode: RenderMode,
 
     settings: &Settings,
         
@@ -347,6 +379,34 @@ fn forward_pass(
             })
     );
 
+    let overdraw_pipeline = context.create_raster_pipeline(
+        "forward_overdraw_pipeline",
+        &graphics::RasterPipelineDesc::builder()
+            .vertex_shader(graphics::ShaderSource::spv("shaders/forward.vert.spv"))
+            .fragment_shader(graphics::ShaderSource::spv("shaders/forward.frag.spv"))
+            .color_attachments(&[graphics::PipelineColorAttachment {
+                format: App::COLOR_FORMAT,
+                color_mask: vk::ColorComponentFlags::RGBA,
+                color_blend: Some(graphics::ColorBlendState {
+                    src_color_blend_factor: vk::BlendFactor::ONE,
+                    dst_color_blend_factor: vk::BlendFactor::ONE,
+                    color_blend_op: vk::BlendOp::ADD,
+                    src_alpha_blend_factor: vk::BlendFactor::ONE,
+                    dst_alpha_blend_factor: vk::BlendFactor::ONE,
+                    alpha_blend_op: vk::BlendOp::ADD,
+                }),
+            }])
+            .depth_state(Some(graphics::DepthState {
+                format: App::DEPTH_FORMAT,
+                test: graphics::PipelineState::Static(false),
+                write: true,
+                compare: vk::CompareOp::GREATER,
+            }))
+            .multisample_state(graphics::MultisampleState {
+                sample_count: settings.msaa,
+                alpha_to_coverage: false
+            })
+    );
     
     let skybox_pipeline = context.create_raster_pipeline(
         "skybox_pipeline",
@@ -414,7 +474,7 @@ fn forward_pass(
             let mut color_attachment = vk::RenderingAttachmentInfo::builder()
                 .image_view(color_target.view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(if environment_map.is_none() {
+                .load_op(if environment_map.is_none() || render_mode == RenderMode::Overdraw {
                     vk::AttachmentLoadOp::CLEAR
                 } else {
                     vk::AttachmentLoadOp::LOAD
@@ -464,7 +524,9 @@ fn forward_pass(
 
         cmd.begin_rendering(&rendering_info);
         
-        if let Some(environment_map) = color_pass.then_some(environment_map).flatten() {
+        let draw_skybox = color_pass && render_mode != RenderMode::Overdraw;
+
+        if let Some(environment_map) = draw_skybox.then_some(environment_map).flatten() {
             cmd.bind_raster_pipeline(skybox_pipeline);
 
             cmd.build_constants()
@@ -477,7 +539,11 @@ fn forward_pass(
         cmd.bind_index_buffer(&index_buffer, 0);
         
         if color_pass { // color pass
-            cmd.bind_raster_pipeline(forward_pipeline);
+            if render_mode == RenderMode::Overdraw {
+                cmd.bind_raster_pipeline(overdraw_pipeline)
+            } else {
+                cmd.bind_raster_pipeline(forward_pipeline);
+            }
         } else { // depth pre-pass
             cmd.bind_raster_pipeline(depth_prepass_pipeline);
         }

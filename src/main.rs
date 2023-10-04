@@ -39,7 +39,7 @@ use scene::{SceneData, Transform};
 use passes::{
     debug_line_renderer::DebugLineRenderer,
     env_map_loader::EnvironmentMap,
-    forward::ForwardRenderer, shadow_renderer::{ShadowSettings, ShadowRenderer},
+    forward::{ForwardRenderer, RenderMode}, shadow_renderer::{ShadowSettings, ShadowRenderer},
 };
 
 use crate::passes::{
@@ -253,7 +253,7 @@ struct App {
     sun_light: Camera,
     light_dir_controller: CameraController,
 
-    render_mode: u32,
+    render_mode: RenderMode,
     camera_exposure: f32,
     light_color: Vec3,
     light_intensitiy: f32,
@@ -435,7 +435,7 @@ impl App {
             },
             light_dir_controller: CameraController::new(1.0, 0.0003),
 
-            render_mode: 0,
+            render_mode: RenderMode::Shaded,
             camera_exposure: 1.0,
             light_color: Vec3::splat(1.0),
             light_intensitiy: 10.0,
@@ -643,7 +643,7 @@ impl App {
         }
 
         if let Some(new_render_mode) = new_render_mode {
-            self.render_mode = new_render_mode;
+            self.render_mode = RenderMode::from(new_render_mode);
         }
 
         if input.close_requested() | input.key_pressed(KeyCode::Escape) {
@@ -779,6 +779,7 @@ impl App {
             if let Some(resolved) = color_resolve_target { resolved } else { color_target },
             self.camera_exposure,
             (self.show_depth_pyramid).then_some((depth_pyramid, self.depth_pyramid_level, self.pyramid_display_far_depth)),
+            self.render_mode,
         );
 
         egui::Window::new("camera_and_lighting")

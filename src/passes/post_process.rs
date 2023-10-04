@@ -2,18 +2,21 @@ use ash::vk;
 
 use crate::graphics;
 
+use super::forward::RenderMode;
+
 pub fn render_post_process(
     context: &mut graphics::Context,
     src_image: graphics::GraphImageHandle,
     exposure: f32,
     depth_pyramid_debug: Option<(graphics::GraphImageHandle, u32, f32)>,
+    render_mode: RenderMode,
 ) {
     let swapchain_image = context.get_swapchain_image();
     let pipeline = context.create_raster_pipeline(
         "blit_pipeline",
         &graphics::RasterPipelineDesc::builder()
         .vertex_shader(graphics::ShaderSource::spv("shaders/blit.vert.spv"))
-        .fragment_shader(graphics::ShaderSource::spv("shaders/blit.frag.spv"))
+        .fragment_shader(graphics::ShaderSource::spv("shaders/post_process.frag.spv"))
         .rasterizer(graphics::RasterizerDesc {
             cull_mode: vk::CullModeFlags::NONE,
             ..Default::default()
@@ -49,6 +52,7 @@ pub fn render_post_process(
             cmd.bind_raster_pipeline(pipeline);
 
             let mut constants = cmd.build_constants()
+                .uint(render_mode as u32)
                 .sampled_image(&src_image)
                 .float(exposure);
 

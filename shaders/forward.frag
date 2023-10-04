@@ -440,6 +440,16 @@ void main() {
             ao = texture(GetSampledTexture2D(material.occlusion_texture_index), vout.uv).r * material.occlusion_factor;
         }
     }
+    
+    // overdraw visualization
+    if (render_mode == 7) {
+        if (base_color.a < alpha_cutoff) {
+            out_color = vec4(0.0);
+        } else {
+            out_color = vec4(1.0);
+        }
+        return;
+    }
 
     uint cascade_index = 4;
     vec4 cascade_map_coord = vec4(0.0);
@@ -575,10 +585,6 @@ void main() {
             break;
         case 6: 
             out_color = vec4(vec3(ao), 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-            break;
-        case 7: 
-            out_color = vec4(vec3(float(vout.material_index) / 255.0), 1.0);
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
     }

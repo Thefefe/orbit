@@ -238,35 +238,89 @@ impl ForwardRenderer {
                 occlusion_culling: occlusion_culling
                     .then_some(OcclusionCullInfo::FirstPass { visibility_buffer })
                     .unwrap_or_default(),
-                alpha_mode_filter: AlphaModeFlags::OPAQUE,
+                alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
             },
             None
         );
 
-        forward_pass(
-            context,
-            "forward_depth_prepass",
-            render_mode,
-            settings,
-
-            assets,
-            scene,
-
-            skybox_view_projection_matrix,
-            
-            frame_data,
-            
-            target_attachments,
-            draw_commands,
-            
-            environment_map,
-            directional_light,
-            
-            brdf_integration_map,
-            jitter_texture,
-            
-            false,
+        let depth_prepass_pipeline = context.create_raster_pipeline(
+            "forward_depth_prepass_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/shadow.frag.spv"))
+                .depth_state(Some(graphics::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: graphics::PipelineState::Static(true),
+                    write: true,
+                    compare: vk::CompareOp::GREATER,
+                }))
+                .multisample_state(graphics::MultisampleState {
+                    sample_count: settings.msaa,
+                    alpha_to_coverage: false
+                })
         );
+
+        context.add_pass("forward_depth_prepass")
+            .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
+            .with_dependencies(target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
+            .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
+            .render(move |cmd, graph| {
+                let depth_target = graph.get_image(target_attachments.depth_target);
+                let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
+                
+                let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
+                let index_buffer = graph.get_buffer(assets.index_buffer);
+                let entity_buffer = graph.get_buffer(scene.entity_buffer);
+                let draw_commands_buffer = graph.get_buffer(draw_commands);
+                let materials_buffer = graph.get_buffer(assets.materials_buffer);
+    
+                let mut depth_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(depth_target.view)
+                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .clear_value(vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 0.0,
+                            stencil: 0,
+                        },
+                    })
+                    .store_op(vk::AttachmentStoreOp::STORE);
+
+                if let Some(depth_resolve) = depth_resolve {
+                    depth_attachment = depth_attachment
+                        .resolve_image_view(depth_resolve.view)
+                        .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                        .resolve_mode(vk::ResolveModeFlags::MIN);
+                }
+    
+                let rendering_info = vk::RenderingInfo::builder()
+                    .render_area(depth_target.full_rect())
+                    .layer_count(1)
+                    .depth_attachment(&depth_attachment);
+    
+                cmd.begin_rendering(&rendering_info);
+                
+                cmd.bind_raster_pipeline(depth_prepass_pipeline);
+                cmd.bind_index_buffer(&index_buffer, 0);
+    
+                cmd.build_constants()
+                    .mat4(&camera_view_projection_matrix)
+                    .buffer(vertex_buffer)
+                    .buffer(entity_buffer)
+                    .buffer(draw_commands_buffer)
+                    .buffer(materials_buffer);
+    
+                cmd.draw_indexed_indirect_count(
+                    draw_commands_buffer,
+                    4,
+                    draw_commands_buffer,
+                    0,
+                    MAX_DRAW_COUNT as u32,
+                    std::mem::size_of::<GpuDrawCommand>() as u32,
+                );
+    
+                cmd.end_rendering();
+            });
 
         if !camera_frozen {
             self.depth_pyramid.update(context, target_attachments.depth_resolve
@@ -310,8 +364,6 @@ impl ForwardRenderer {
             
             brdf_integration_map,
             jitter_texture,
-            
-            true,
         );
     }
 }
@@ -338,25 +390,7 @@ fn forward_pass(
 
     brdf_integration_map: graphics::GraphImageHandle,
     jitter_texture: graphics::GraphImageHandle,
-
-    color_pass: bool,
 ) {
-    let depth_prepass_pipeline = context.create_raster_pipeline(
-        "forward_depth_prepass_pipeline",
-        &graphics::RasterPipelineDesc::builder()
-            .vertex_shader(graphics::ShaderSource::spv("shaders/forward.vert.spv"))
-            .depth_state(Some(graphics::DepthState {
-                format: App::DEPTH_FORMAT,
-                test: graphics::PipelineState::Static(true),
-                write: true,
-                compare: vk::CompareOp::GREATER,
-            }))
-            .multisample_state(graphics::MultisampleState {
-                sample_count: settings.msaa,
-                alpha_to_coverage: true
-            })
-    );
-
     let forward_pipeline = context.create_raster_pipeline(
         "forward_pipeline",
         &graphics::RasterPipelineDesc::builder()
@@ -371,7 +405,7 @@ fn forward_pass(
                 format: App::DEPTH_FORMAT,
                 test: graphics::PipelineState::Static(true),
                 write: true,
-                compare: vk::CompareOp::GREATER,
+                compare: vk::CompareOp::GREATER_OR_EQUAL,
             }))
             .multisample_state(graphics::MultisampleState {
                 sample_count: settings.msaa,
@@ -399,8 +433,8 @@ fn forward_pass(
             .depth_state(Some(graphics::DepthState {
                 format: App::DEPTH_FORMAT,
                 test: graphics::PipelineState::Static(false),
-                write: true,
-                compare: vk::CompareOp::GREATER,
+                write: false,
+                compare: vk::CompareOp::GREATER_OR_EQUAL,
             }))
             .multisample_state(graphics::MultisampleState {
                 sample_count: settings.msaa,
@@ -411,7 +445,7 @@ fn forward_pass(
     let skybox_pipeline = context.create_raster_pipeline(
         "skybox_pipeline",
         &graphics::RasterPipelineDesc::builder()
-            .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+            .vertex_shader(graphics::ShaderSource::spv("shaders/skybox.vert.spv"))
             .fragment_shader(graphics::ShaderSource::spv("shaders/skybox.frag.spv"))
             .rasterizer(graphics::RasterizerDesc {
                 front_face: vk::FrontFace::CLOCKWISE,
@@ -424,13 +458,13 @@ fn forward_pass(
             }])
             .depth_state(Some(graphics::DepthState {
                 format: App::DEPTH_FORMAT,
-                test: graphics::PipelineState::Static(false),
+                test: graphics::PipelineState::Static(true),
                 write: false,
-                compare: vk::CompareOp::GREATER,
+                compare: vk::CompareOp::GREATER_OR_EQUAL,
             }))
             .multisample_state(graphics::MultisampleState {
                 sample_count: settings.msaa,
-                alpha_to_coverage: true
+                alpha_to_coverage: false
             })
     );
 
@@ -439,14 +473,10 @@ fn forward_pass(
     pass_builder = pass_builder
         .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
         .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
-        .with_dependencies(target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)));
-
-    if color_pass {
-        pass_builder = pass_builder
-            .with_dependency(target_attachments.color_target, graphics::AccessKind::ColorAttachmentWrite)
-            .with_dependencies(target_attachments.color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
-            .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)));
-    }
+        .with_dependencies(target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
+        .with_dependency(target_attachments.color_target, graphics::AccessKind::ColorAttachmentWrite)
+        .with_dependencies(target_attachments.color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
+        .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)));
 
     pass_builder.render(move |cmd, graph| {
         let color_target = graph.get_image(target_attachments.color_target);
@@ -470,34 +500,28 @@ fn forward_pass(
         let draw_commands_buffer = graph.get_buffer(draw_commands);
         let directional_light_buffer = graph.get_buffer(directional_light.buffer);
 
-        let color_attachment = if color_pass {
-            let mut color_attachment = vk::RenderingAttachmentInfo::builder()
-                .image_view(color_target.view)
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(if environment_map.is_none() || render_mode == RenderMode::Overdraw {
-                    vk::AttachmentLoadOp::CLEAR
-                } else {
-                    vk::AttachmentLoadOp::LOAD
-                })
-                .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } })
-                .store_op(vk::AttachmentStoreOp::STORE);
+        let mut color_attachment = vk::RenderingAttachmentInfo::builder()
+            .image_view(color_target.view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(if environment_map.is_none() || render_mode == RenderMode::Overdraw {
+                vk::AttachmentLoadOp::CLEAR
+            } else {
+                vk::AttachmentLoadOp::LOAD
+            })
+            .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } })
+            .store_op(vk::AttachmentStoreOp::STORE);
 
-            if let Some(color_resolve) = color_resolve {
-                color_attachment = color_attachment
-                .resolve_image_view(color_resolve.view)
-                .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .resolve_mode(vk::ResolveModeFlags::AVERAGE);
-            }
-
-            Some(color_attachment)
-        } else {
-            None
-        };
+        if let Some(color_resolve) = color_resolve {
+            color_attachment = color_attachment
+            .resolve_image_view(color_resolve.view)
+            .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+        }
 
         let mut depth_attachment = vk::RenderingAttachmentInfo::builder()
             .image_view(depth_target.view)
             .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .load_op(vk::AttachmentLoadOp::LOAD)
             .clear_value(vk::ClearValue {
                 depth_stencil: vk::ClearDepthStencilValue {
                     depth: 0.0,
@@ -513,20 +537,16 @@ fn forward_pass(
                 .resolve_mode(vk::ResolveModeFlags::MIN);
         }
 
-        let mut rendering_info = vk::RenderingInfo::builder()
+        let rendering_info = vk::RenderingInfo::builder()
             .render_area(color_target.full_rect())
             .layer_count(1)
+            .color_attachments(std::slice::from_ref(&color_attachment))
             .depth_attachment(&depth_attachment);
-
-        if let Some(color_attachment) = &color_attachment {
-            rendering_info = rendering_info.color_attachments(std::slice::from_ref(color_attachment));
-        }
 
         cmd.begin_rendering(&rendering_info);
         
-        let draw_skybox = color_pass && render_mode != RenderMode::Overdraw;
-
-        if let Some(environment_map) = draw_skybox.then_some(environment_map).flatten() {
+        let draw_skybox = render_mode != RenderMode::Overdraw;
+        if let Some(environment_map) = (draw_skybox).then_some(environment_map).flatten() {
             cmd.bind_raster_pipeline(skybox_pipeline);
 
             cmd.build_constants()
@@ -538,14 +558,10 @@ fn forward_pass(
 
         cmd.bind_index_buffer(&index_buffer, 0);
         
-        if color_pass { // color pass
-            if render_mode == RenderMode::Overdraw {
-                cmd.bind_raster_pipeline(overdraw_pipeline)
-            } else {
-                cmd.bind_raster_pipeline(forward_pipeline);
-            }
-        } else { // depth pre-pass
-            cmd.bind_raster_pipeline(depth_prepass_pipeline);
+        if render_mode == RenderMode::Overdraw {
+            cmd.bind_raster_pipeline(overdraw_pipeline)
+        } else {
+            cmd.bind_raster_pipeline(forward_pipeline);
         }
 
         let mut push_constants = cmd.build_constants()

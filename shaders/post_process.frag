@@ -46,7 +46,7 @@ float luminance(vec3 radiance) {
     return dot(radiance, vec3(0.2125, 0.7154, 0.0721));
 }
 
-#define HIGHEST_OVERDRAW_COUNT 24.0
+#define HIGHEST_OVERDRAW_COUNT 12.0
 
 //https://github.com/kbinani/colormap-shaders/blob/master/shaders/glsl/MATLAB_jet.frag
 float colormap_red(float x) {

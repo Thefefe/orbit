@@ -475,8 +475,8 @@ void main() {
             vec4(offset_coord, 1.0);
 
         // shadow = pcf_vogel(shadow_map, cascade_map_coord);
-        shadow = pcf_poisson(shadow_map, cascade_map_coord);
-        // shadow = pcf_branch(shadow_map, cascade_shadow_map_coords);
+        // shadow = pcf_poisson(shadow_map, cascade_map_coord);
+        shadow = pcf_branch(shadow_map, cascade_shadow_map_coords);
         // shadow = texture(
         //     sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
         //     cascade_shadow_map_coords.xyz

@@ -21,6 +21,8 @@ struct DirectionalLightData {
     float min_filter_radius;
     float max_filter_radius;
     float normal_bias_scale;
+    float oriented_bias;
+    uint _padding[3];
 };
 
 struct PerFrameData {

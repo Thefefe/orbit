@@ -32,7 +32,11 @@ struct GpuDirectionalLight {
     penumbra_filter_max_size: f32,
     min_filter_radius: f32,
     max_filter_radius: f32,
-    normal_bias_scale: f32, // TODO: move to somewhere global
+
+    // TODO: move to somewhere global
+    normal_bias_scale: f32,
+    oriented_bias: f32,
+    _padding: [u32; 3],
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +52,7 @@ pub struct ShadowSettings {
     pub depth_bias_constant_factor: f32,
     pub depth_bias_slope_factor: f32,
     pub depth_bias_normal_scale: f32,
+    pub depth_bias_oriented: f32,
 
     // directional
     pub cascade_split_lambda: f32,
@@ -64,9 +69,10 @@ impl Default for ShadowSettings {
         Self {
             shadow_resolution: 2048,
 
-            depth_bias_constant_factor: 4.0,
-            depth_bias_slope_factor: 4.0,
-            depth_bias_normal_scale: 4.0,
+            depth_bias_constant_factor: 0.0,
+            depth_bias_slope_factor: 2.0,
+            depth_bias_normal_scale: 0.0,
+            depth_bias_oriented: 0.02,
             
             cascade_split_lambda: 0.85,
             max_shadow_distance: 32.0,
@@ -106,7 +112,12 @@ impl ShadowSettings {
 
         ui.horizontal(|ui| {
             ui.label("depth_bias_normal_scale");
-            ui.add(egui::DragValue::new(&mut self.depth_bias_normal_scale).speed(0.01).clamp_range(0.0..=16.0));
+            ui.add(egui::DragValue::new(&mut self.depth_bias_normal_scale).speed(0.01).clamp_range(-16.0..=16.0));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("depth_bias_oriented");
+            ui.add(egui::DragValue::new(&mut self.depth_bias_oriented).speed(0.01).clamp_range(-16.0..=16.0));
         });
 
         ui.horizontal(|ui| {
@@ -314,6 +325,8 @@ impl ShadowRenderer {
             max_filter_radius: settings.max_filter_radius,
             min_filter_radius: settings.min_filter_radius,
             normal_bias_scale: self.settings.depth_bias_normal_scale,
+            oriented_bias: -self.settings.depth_bias_oriented,
+            _padding: [0; 3],
         };
     
         let mut shadow_maps = [graphics::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];

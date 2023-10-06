@@ -108,7 +108,7 @@ float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers
     return clamp(80.0f * penumbra, 0.0, 1.0);
 }
 
-#define PENUMBRA_SAMPLE_COUNT 16
+#define PENUMBRA_SAMPLE_COUNT 8
 #define SHADOW_SAMPLE_COUNT 32
 
 vec2 vogel_disk_sample(int sampleIndex, int samplesCount, float phi) {
@@ -324,6 +324,13 @@ vec3 shadow_normal_offset(float n_dot_l, vec3 normal, uint shadow_map, float sca
     return texel_size * scale * normal_offset_scale * normal;
 }
 
+// http://www.jp.square-enix.com/tech/library/pdf/2023_FFXVIShadowTechPaper.pdf
+float get_oriented_bias(vec3 face_normal, vec3 light_direction, float oriented_bias, bool is_sss) {
+    bool is_facing_light = dot(face_normal, light_direction) > 0.0;
+    bool move_toward_light = is_sss || is_facing_light ;
+    return move_toward_light ? - oriented_bias : oriented_bias;
+}
+
 vec3 calculate_light(
     vec3 view_dir,
 
@@ -469,14 +476,22 @@ void main() {
 
         float n_dot_l = dot(normal, GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction);
         float normal_bias_scale = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.normal_bias_scale;
-        vec3 offset_coord = vec3(vout.world_pos) + shadow_normal_offset(n_dot_l, normal, shadow_map, normal_bias_scale);
+        
+        vec3 shadow_pos_world_space = vout.world_pos.xyz;
+
+        shadow_pos_world_space += shadow_normal_offset(n_dot_l, normal, shadow_map, normal_bias_scale);
+        
+        vec3 light_direction = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
+        float oriented_bias = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.oriented_bias;
+        shadow_pos_world_space += get_oriented_bias(normal, light_direction, oriented_bias, false) * light_direction;
+        
         vec4 cascade_shadow_map_coords =
             GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.projection_matrices[cascade_index] *
-            vec4(offset_coord, 1.0);
+            vec4(shadow_pos_world_space, 1.0);
 
-        // shadow = pcf_vogel(shadow_map, cascade_map_coord);
-        // shadow = pcf_poisson(shadow_map, cascade_map_coord);
-        shadow = pcf_branch(shadow_map, cascade_shadow_map_coords);
+        // shadow = pcf_vogel(shadow_map, cascade_shadow_map_coords);
+        shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords);
+        // shadow = pcf_branch(shadow_map, cascade_shadow_map_coords);
         // shadow = texture(
         //     sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
         //     cascade_shadow_map_coords.xyz

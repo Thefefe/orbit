@@ -432,7 +432,7 @@ fn forward_pass(
             }])
             .depth_state(Some(graphics::DepthState {
                 format: App::DEPTH_FORMAT,
-                test: graphics::PipelineState::Static(false),
+                test: graphics::PipelineState::Static(true),
                 write: false,
                 compare: vk::CompareOp::GREATER_OR_EQUAL,
             }))

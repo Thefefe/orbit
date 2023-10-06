@@ -320,16 +320,27 @@ impl App {
         //     scene.add_light(scene::LightData { position, ..light_data });
         // }
 
+
+        // use rand::Rng;
+        // let mut rng = rand::thread_rng();
+
         // let prefab = scene.entities.pop().unwrap();
-        // let offset = 1.4;
-        // for x in 0..8 {
-        //     for y in 0..8 {
-        //         for z in 0..8 {
-        //             let mut entity = prefab.clone();
-        //             entity.transform.position = Vec3::from_array([x, y, z].map(|n| n as f32 * offset));
-        //             scene.add_entity(entity);
-        //         }
-        //     }
+        // let pos_range = 0.0..=48.0;
+        // let rot_range = 0.0..=2.0 * PI;
+        
+        // for _ in 0..2048 * 8 {
+        //     let mut entity = prefab.clone();
+            
+        //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));
+        //     entity.transform.orientation = Quat::from_euler(
+        //         glam::EulerRot::YXZ,
+        //         rng.gen_range(rot_range.clone()),
+        //         rng.gen_range(rot_range.clone()),
+        //         rng.gen_range(rot_range.clone()),
+        //     );
+
+
+        //     scene.add_entity(entity);
         // }
         
         scene.update_instances(context);

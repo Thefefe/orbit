@@ -120,12 +120,13 @@ vec2 vogel_disk_sample(int sampleIndex, int samplesCount, float phi) {
     return vec2(r * cos(theta), r * sin(theta));
 }
 
-void penumbra_vogel(uint shadow_map, float vogel_theta, vec3 light_space_pos, out uint blockers_count, out float avg_blockers_depth) {
+void penumbra_vogel(uint shadow_map, float vogel_theta, vec3 light_space_pos, out uint blockers_count, out float avg_blockers_depth, float world_size) {
     avg_blockers_depth = 0.0f;
     blockers_count = 0;
 
-    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    float penumbra_filter_max_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.penumbra_filter_max_size;
+    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    vec2 texel_size = vec2(1.0 / world_size);
+    float penumbra_filter_max_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
 
     for(int i = 0; i < PENUMBRA_SAMPLE_COUNT; i ++) {
         vec2 sample_uv = vogel_disk_sample(i, PENUMBRA_SAMPLE_COUNT, vogel_theta);
@@ -145,18 +146,19 @@ void penumbra_vogel(uint shadow_map, float vogel_theta, vec3 light_space_pos, ou
     avg_blockers_depth /= float(blockers_count);
 }
 
-float pcf_vogel(uint shadow_map, vec4 clip_pos) {
+float pcf_vogel(uint shadow_map, vec4 clip_pos, float world_size) {
     clip_pos.xyz /= clip_pos.w;
     clip_pos.y *= -1.0;
     clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
 
     float sum = 0.0;
-    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    vec2 texel_size = vec2(1.0 / world_size);
     float random_theta = interleaved_gradient_noise(gl_FragCoord.xy) * 2 * PI;
 
     uint blockers_count;
     float avg_blockers_depth;
-    penumbra_vogel(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth);
+    penumbra_vogel(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth, world_size);
     
     if (blockers_count == 0 && blockers_count == PENUMBRA_SAMPLE_COUNT) return blockers_count / PENUMBRA_SAMPLE_COUNT;
 
@@ -185,12 +187,13 @@ float pcf_vogel(uint shadow_map, vec4 clip_pos) {
     return sum;
 }
 
-void penumbra_poisson(uint shadow_map, float random_theta, vec3 light_space_pos, out uint blockers_count, out float avg_blockers_depth) {
+void penumbra_poisson(uint shadow_map, float random_theta, vec3 light_space_pos, out uint blockers_count, out float avg_blockers_depth, float world_size) {
     avg_blockers_depth = 0.0f;
     blockers_count = 0;
 
-    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    float penumbra_filter_max_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.penumbra_filter_max_size;
+    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    vec2 texel_size = vec2(1.0 / world_size);
+    float penumbra_filter_max_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
 
     float s = sin(random_theta);
     float c = cos(random_theta);
@@ -214,13 +217,14 @@ void penumbra_poisson(uint shadow_map, float random_theta, vec3 light_space_pos,
     avg_blockers_depth /= float(blockers_count);
 }
 
-float pcf_poisson(uint shadow_map, vec4 clip_pos) {
+float pcf_poisson(uint shadow_map, vec4 clip_pos, float world_size) {
     clip_pos.xyz /= clip_pos.w;
     clip_pos.y *= -1.0;
     clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
 
     float sum = 0.0;
-    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    vec2 texel_size = vec2(1.0 / world_size);
     float random_theta = interleaved_gradient_noise(gl_FragCoord.xy) * 2 * PI;
     float s = sin(random_theta);
     float c = cos(random_theta);
@@ -228,7 +232,7 @@ float pcf_poisson(uint shadow_map, vec4 clip_pos) {
 
     uint blockers_count;
     float avg_blockers_depth;
-    penumbra_poisson(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth);
+    penumbra_poisson(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth, world_size);
     
     if (blockers_count == 0 && blockers_count == PENUMBRA_SAMPLE_COUNT) return blockers_count / PENUMBRA_SAMPLE_COUNT;
 
@@ -257,7 +261,7 @@ float pcf_poisson(uint shadow_map, vec4 clip_pos) {
     return sum;
 }
 
-float pcf_branch(uint shadow_map, vec4 clip_pos) {
+float pcf_branch(uint shadow_map, vec4 clip_pos, float world_size) {
     clip_pos.xyz /= clip_pos.w;
     clip_pos.y *= -1.0;
     clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
@@ -268,7 +272,8 @@ float pcf_branch(uint shadow_map, vec4 clip_pos) {
 
     float sum = 0.0;
     
-    vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
+    vec2 texel_size = vec2(1.0 / world_size);
 
     float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
     float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
@@ -494,9 +499,11 @@ void main() {
             GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.projection_matrices[cascade_index] *
             vec4(shadow_pos_world_space, 1.0);
 
-        // shadow = pcf_vogel(shadow_map, cascade_shadow_map_coords);
-        shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords);
-        // shadow = pcf_branch(shadow_map, cascade_shadow_map_coords);
+        float world_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascade_world_sizes[cascade_index];
+
+        // shadow = pcf_vogel(shadow_map, cascade_shadow_map_coords, world_size);
+        shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, world_size);
+        // shadow = pcf_branch(shadow_map, cascade_shadow_map_coords, world_size);
         // shadow = texture(
         //     sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
         //     cascade_shadow_map_coords.xyz

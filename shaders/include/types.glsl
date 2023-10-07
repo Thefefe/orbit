@@ -11,18 +11,17 @@ struct GlobalData {
 struct DirectionalLightData {
     mat4 projection_matrices[MAX_SHADOW_CASCADE_COUNT];
     uint shadow_maps[MAX_SHADOW_CASCADE_COUNT];
+    float cascade_world_sizes[MAX_SHADOW_CASCADE_COUNT];
     vec4 cascade_distances;
     vec3 color;
     float intensitiy;
     vec3 direction;
     float split_blend_ratio;
 
-    float penumbra_filter_max_size;
     float min_filter_radius;
     float max_filter_radius;
     float normal_bias_scale;
     float oriented_bias;
-    uint _padding[3];
 };
 
 struct PerFrameData {

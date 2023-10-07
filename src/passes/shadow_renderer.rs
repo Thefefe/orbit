@@ -23,20 +23,19 @@ use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthP
 struct GpuDirectionalLight {
     projection_matrices: [Mat4; MAX_SHADOW_CASCADE_COUNT],
     shadow_maps: [u32; MAX_SHADOW_CASCADE_COUNT],
+    cascade_world_sizes: [f32; MAX_SHADOW_CASCADE_COUNT],
     cascade_distances: Vec4,
     color: Vec3,
     intensity: f32,
     direction: Vec3,
     blend_seam: f32,
     
-    penumbra_filter_max_size: f32,
     min_filter_radius: f32,
     max_filter_radius: f32,
 
     // TODO: move to somewhere global
     normal_bias_scale: f32,
     oriented_bias: f32,
-    _padding: [u32; 3],
 }
 
 #[derive(Clone, Copy)]
@@ -59,7 +58,6 @@ pub struct ShadowSettings {
     pub max_shadow_distance: f32,
     pub split_blend_ratio: f32,
 
-    pub penumbra_filter_max_size: f32,
     pub min_filter_radius: f32,
     pub max_filter_radius: f32,
 }
@@ -74,13 +72,12 @@ impl Default for ShadowSettings {
             depth_bias_normal_scale: 0.0,
             depth_bias_oriented: 0.02,
             
-            cascade_split_lambda: 0.85,
+            cascade_split_lambda: 0.70,
             max_shadow_distance: 32.0,
             split_blend_ratio: 0.5,
 
-            penumbra_filter_max_size: 8.0,
-            min_filter_radius: 2.0,
-            max_filter_radius: 8.0,
+            min_filter_radius: 0.6,
+            max_filter_radius: 4.0,
         }
     }
 }
@@ -128,11 +125,6 @@ impl ShadowSettings {
         ui.horizontal(|ui| {
             ui.label("max_filter_radius");
             ui.add(egui::DragValue::new(&mut self.max_filter_radius).speed(0.1).clamp_range(0.0..=32.0));
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("penumbra_filter_max_size");
-            ui.add(egui::DragValue::new(&mut self.penumbra_filter_max_size).speed(0.1).clamp_range(0.0..=32.0));
         });
 
         ui.horizontal(|ui| {
@@ -315,18 +307,17 @@ impl ShadowRenderer {
         let mut directional_light_data = GpuDirectionalLight {
             projection_matrices: bytemuck::Zeroable::zeroed(),
             shadow_maps: bytemuck::Zeroable::zeroed(),
+            cascade_world_sizes: bytemuck::Zeroable::zeroed(),
             cascade_distances: Vec4::ZERO,
             color: light_color,
             intensity,
             direction: light_direction,
             blend_seam: settings.split_blend_ratio,
     
-            penumbra_filter_max_size: settings.penumbra_filter_max_size,
-            max_filter_radius: settings.max_filter_radius,
-            min_filter_radius: settings.min_filter_radius,
+            max_filter_radius: settings.max_filter_radius * 0.01,
+            min_filter_radius: settings.min_filter_radius * 0.01,
             normal_bias_scale: self.settings.depth_bias_normal_scale,
             oriented_bias: -self.settings.depth_bias_oriented,
-            _padding: [0; 3],
         };
     
         let mut shadow_maps = [graphics::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];
@@ -371,6 +362,7 @@ impl ShadowRenderer {
                 radius_sqr = f32::max(radius_sqr, corner.distance_squared(subfrustum_center_light_space.into()));
             }
             let radius = radius_sqr.sqrt();
+            directional_light_data.cascade_world_sizes[cascade_index] = radius * 2.0;
     
             // offsets the whole projection to minimize the area not visible by the camera
             // this one isn't perfect but close enough

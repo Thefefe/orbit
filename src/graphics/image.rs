@@ -112,8 +112,8 @@ impl ImageView {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SubresourceView {
-    view: vk::ImageView,
-    descriptor_index: Option<graphics::DescriptorIndex>,
+    pub view: vk::ImageView,
+    pub descriptor_index: Option<graphics::DescriptorIndex>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -181,7 +181,7 @@ impl ImageType {
         }
     }
 
-    fn layer_count(self) -> u32 {
+    pub fn layer_count(self) -> u32 {
         match self {
             ImageType::Single2D         => 1,
             ImageType::Single1D         => 1,

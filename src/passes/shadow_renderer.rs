@@ -485,8 +485,6 @@ impl ShadowRenderer {
                 assets,
                 scene,
             );
-
-            // self.shadow_map_depth_pyramids[cascade_index].update(context, shadow_map);
             
             directional_light_data.projection_matrices[cascade_index] = light_projection_matrix;
             directional_light_data.shadow_maps[cascade_index] = context

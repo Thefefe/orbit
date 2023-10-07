@@ -72,6 +72,9 @@ struct MaterialData {
     uint metallic_roughness_texture_index;
     uint occlusion_texture_index;
     uint emissive_texture_index;
+
+    uint alpha_mode;
+    uint _padding[3];
 };
 
 struct Submesh {

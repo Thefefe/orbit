@@ -154,6 +154,9 @@ pub struct GpuMaterialData {
     metallic_roughness_texture_index: u32,
     occulusion_texture_index: u32,
     emissive_texture_index: u32,
+
+    alpha_mode: u32,
+    _padding: [u32; 3],
 }
 
 pub type MeshHandle = arena::Index;
@@ -320,6 +323,9 @@ impl GpuAssetStore {
             metallic_roughness_texture_index,
             occulusion_texture_index,
             emissive_texture_index,
+
+            alpha_mode: material_data.alpha_mode as u32,
+            _padding: [0; 3],
         };
 
         context.immediate_write_buffer(

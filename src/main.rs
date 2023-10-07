@@ -325,10 +325,10 @@ impl App {
         // let mut rng = rand::thread_rng();
 
         // let prefab = scene.entities.pop().unwrap();
-        // let pos_range = 0.0..=48.0;
+        // let pos_range = 0.0..=24.0;
         // let rot_range = 0.0..=2.0 * PI;
         
-        // for _ in 0..2048 * 8 {
+        // for _ in 0..2048 * 2 {
         //     let mut entity = prefab.clone();
             
         //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));

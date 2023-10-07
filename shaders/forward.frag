@@ -390,6 +390,7 @@ void main() {
 
     out_color = vec4(1.0);
 
+    uint alpha_mode;
     vec4  base_color;
     vec3  normal;
     float metallic;
@@ -399,6 +400,7 @@ void main() {
     float alpha_cutoff;
     {
         MaterialData material = GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index];
+        alpha_mode = material.alpha_mode;
         base_color = material.base_color;
         normal     = vout.normal;
         metallic   = material.metallic_factor;
@@ -410,11 +412,14 @@ void main() {
         if (material.base_texture_index != TEXTURE_NONE) {
             base_color *= texture(GetSampledTexture2D(material.base_texture_index), vout.uv);
 
-            vec2 lods = textureQueryLod(GetSampledTexture2D(material.base_texture_index), vout.uv);
-            float alpha_mip_level = max(lods.x, lods.y);
-            
-            out_color.a = (base_color.a - alpha_cutoff) / max(fwidth(base_color.a), EPSILON) + 0.5;
-            out_color.a *= 1 + alpha_mip_level * MIP_SCALE;
+            // masked
+            if (alpha_mode == 1) {
+                vec2 lods = textureQueryLod(GetSampledTexture2D(material.base_texture_index), vout.uv);
+                float alpha_mip_level = max(lods.x, lods.y);
+                
+                out_color.a = (base_color.a - alpha_cutoff) / max(fwidth(base_color.a), EPSILON) + 0.5;
+                out_color.a *= 1 + alpha_mip_level * MIP_SCALE;
+            }
         }
 
         if (material.normal_texture_index != TEXTURE_NONE) {
@@ -583,7 +588,18 @@ void main() {
             out_color = vec4(cascade_color * base_color.rgb * shadow, 1.0);
         } break;
         case 2:
-            out_color = vec4(normal * 0.5 + 0.5, 1.0);
+            // out_color = vec4(normal * 0.5 + 0.5, 1.0);
+            
+            if (alpha_mode == 0){
+                out_color = vec4(1.0, 0.0, 0.0, 1.0);
+            }
+            if (alpha_mode == 1){
+                out_color = vec4(0.0, 1.0, 0.0, 1.0);
+            }
+            if (alpha_mode == 2){
+                out_color = vec4(0.0, 0.0, 1.0, 1.0);
+            }
+
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 3: 

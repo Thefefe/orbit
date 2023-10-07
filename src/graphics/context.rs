@@ -288,7 +288,7 @@ impl Context {
             if !owned_by_graph && resource.is_owned() { // swapchain image
                 continue;
             }
-            self.transient_resource_cache.insert(resource.desc(), resource);
+            self.transient_resource_cache.insert(resource);
         }
 
         let acquired_image_handle = self.graph.add_resource(graph::GraphResourceData {
@@ -460,21 +460,25 @@ impl Context {
         name: impl Into<Cow<'static, str>>,
         data: &[u8], 
     ) -> GraphHandle<graphics::BufferRaw> {
-        let name = name.into();
+        let name: Cow<'static, str> = name.into();
         let buffer_desc = graphics::BufferDesc {
             size: data.len(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER,
             memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
         };
         let desc = graphics::AnyResourceDesc::Buffer(buffer_desc);
-        let cache = self.transient_resource_cache
-            .get_by_descriptor(&desc)
-            .unwrap_or_else(|| graphics::AnyResource::create_owned(
+        let (mut cache, cache_needs_rename) = self.transient_resource_cache
+            .get(&name, &desc)
+            .unwrap_or_else(|| (graphics::AnyResource::create_owned(
                 &self.device,
                 name.clone(),
                 &desc,
                 None
-            ));
+            ), false));
+
+        if cache_needs_rename {
+            cache.rename(&self.device, name.clone());
+        }
 
         let graphics::AnyResourceRef::Buffer(buffer) = cache.as_ref() else { unreachable!() };
         unsafe {
@@ -503,28 +507,22 @@ impl Context {
         name: impl Into<Cow<'static, str>>,
         desc: R::Desc,
     ) -> GraphHandle<R> {
-        let name = name.into();
+        let name: Cow<'static, str> = name.into();
         let desc = desc.into();
-        let mut cache = self.transient_resource_cache.get_by_descriptor(&desc);
+        let cache = if let Some((mut cache, needs_rename)) = self.transient_resource_cache.get(&name, &desc) {
+            if needs_rename {
+                cache.rename(&self.device, name.clone());
+            }
+
+            Some(cache)
+        } else {
+            None
+        };
         let descriptor_index = match &cache {
             Some(cache) => cache.as_ref().descriptor_index(),
             None if desc.needs_descriptor_index() => Some(self.device.alloc_descriptor_index()),
             _ => None
         };
-
-        if let Some(cache) = cache.as_mut() {
-            match cache {
-                graphics::AnyResource::BufferOwned(buffer) => {
-                    buffer.name = name.clone();
-                    self.device.set_debug_name(buffer.handle, name.as_ref());
-                },
-                graphics::AnyResource::ImageOwned(image)  => {
-                    image.name = name.clone();
-                    self.device.set_debug_name(image.handle, name.as_ref());
-                },
-                _ => unimplemented!()
-            }
-        }
 
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,

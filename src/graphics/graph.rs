@@ -214,6 +214,7 @@ impl RenderGraph {
 #[derive(Debug)]
 struct TransientResourceNode {
     resource: graphics::AnyResource,
+    prev_node: Option<arena::Index>,
     next_node: Option<arena::Index>,
 }
 
@@ -221,6 +222,7 @@ struct TransientResourceNode {
 pub struct TransientResourceCache {
     resources_nodes: arena::Arena<TransientResourceNode>,
     descriptor_lookup: HashMap<graphics::AnyResourceDesc, arena::Index>,
+    name_lookup: HashMap<Cow<'static, str>, arena::Index>,
 }
 
 impl TransientResourceCache {
@@ -228,6 +230,7 @@ impl TransientResourceCache {
         Self {
             resources_nodes: arena::Arena::new(),
             descriptor_lookup: HashMap::new(),
+            name_lookup: HashMap::new(),
         }
     }
 
@@ -249,32 +252,62 @@ impl TransientResourceCache {
         self.resources_nodes.drain().map(|node| node.resource)
     }
 
-    pub fn get_by_descriptor(&mut self, desc: &graphics::AnyResourceDesc) -> Option<graphics::AnyResource> {
-        let index = self.descriptor_lookup.get_mut(desc)?;
-        let resource_node = self.resources_nodes.remove(*index).unwrap();
+    pub fn get(&mut self, name: &str, desc: &graphics::AnyResourceDesc) -> Option<(graphics::AnyResource, bool)> {
+        if let Some(index) = self.name_lookup.remove(name) {
+            let found_node = self.resources_nodes.remove(index).unwrap();
+            
+            if let Some(prev_node_index) = found_node.prev_node {
+                self.resources_nodes[prev_node_index].next_node = found_node.next_node;
+            } else {
+                if let Some(next_node_index) = found_node.next_node {
+                    *self.descriptor_lookup.get_mut(desc).unwrap() = next_node_index;
+                } else {
+                    self.descriptor_lookup.remove(desc);
+                }
+            }
+            
+            if let Some(next_node_index) = found_node.next_node {
+                self.resources_nodes[next_node_index].prev_node = found_node.prev_node;
+            }
+
+            return Some((found_node.resource, false));
+        };
         
-        if let Some(next_index) = resource_node.next_node {
-            *index = next_index;
+        let descriptor_lookup_index = self.descriptor_lookup.get_mut(desc)?;
+        let found_node = self.resources_nodes.remove(*descriptor_lookup_index).unwrap();
+
+        if let Some(prev_node_index) = found_node.prev_node {
+            self.resources_nodes[prev_node_index].next_node = found_node.next_node;
+        }
+        
+        if let Some(next_node_index) = found_node.next_node {
+            *descriptor_lookup_index = next_node_index;
+            self.resources_nodes[next_node_index].prev_node = found_node.prev_node;
         } else {
             self.descriptor_lookup.remove(desc);
         }
 
-        Some(resource_node.resource)
+        Some((found_node.resource, true))
     }
 
-    pub fn insert(&mut self, desc: graphics::AnyResourceDesc, resource: graphics::AnyResource) {
+    pub fn insert(&mut self, resource: graphics::AnyResource) {
+        let name = resource.clone_name();
+        let desc = resource.desc();
+
+        let resource_index = self.resources_nodes.insert(TransientResourceNode {
+            resource,
+            prev_node: None,
+            next_node: None,
+        });
+
+        self.name_lookup.insert(name, resource_index);
+
         if let Some(index) = self.descriptor_lookup.get_mut(&desc) {
-            let new_index = self.resources_nodes.insert(TransientResourceNode {
-                resource,
-                next_node: Some(*index),
-            });
-            *index = new_index;
+            self.resources_nodes[resource_index].next_node = Some(*index);
+            self.resources_nodes[*index].prev_node = Some(resource_index);
+            *index = resource_index;
         } else {
-            let index = self.resources_nodes.insert(TransientResourceNode {
-                resource,
-                next_node: None,
-            });
-            self.descriptor_lookup.insert(desc, index);
+            self.descriptor_lookup.insert(desc, resource_index);
         }
     }
 }

@@ -72,6 +72,57 @@ impl AnyResource {
         }
     }
 
+    pub fn rename(&mut self, device: &graphics::Device, new_name: Cow<'static, str>) {
+        assert!(self.is_owned(), "only owned resources can be renamed");
+        log::info!("renaming {:?} to {:?}", self.name(), new_name.as_ref());
+
+        match self {
+            graphics::AnyResource::BufferOwned(buffer) => {
+                buffer.name = new_name;
+                device.set_debug_name(buffer.handle, buffer.name.as_ref());
+            },
+            graphics::AnyResource::ImageOwned(image)  => {
+                image.name = new_name;
+
+                let name = image.name.as_ref();
+                device.set_debug_name(image.handle, name);
+
+                let desc = image.desc;
+                let layer_count = desc.ty.layer_count();
+                let mut i = 0;
+                
+                if desc.mip_levels > 1 {
+                    for mip_level in 0..desc.subresource_desc.mip_count.min(desc.mip_levels) {
+                        device.set_debug_name(image.subresource_views[i].view, &format!("{name}_level_{mip_level}"));
+                        i += 1;
+                    }
+                }
+
+                if layer_count > 1 {
+                    for mip_level in 0..desc.subresource_desc.layer_mip_count.min(desc.mip_levels) {
+                        for layer in 0..desc.subresource_desc.layer_count.min(layer_count) {
+                            device.set_debug_name(
+                                image.subresource_views[i].view,
+                                &format!("{name}_level_{mip_level}_layer_{layer}")
+                            );
+                            i += 1;
+                        }
+                    }
+                }
+
+            },
+            _ => unreachable!()
+        }
+    }
+
+    #[inline(always)]
+    pub fn clone_name(&self) -> Cow<'static, str> {
+        match self.as_ref() {
+            AnyResourceRef::Buffer(buffer) => buffer.name.clone(),
+            AnyResourceRef::Image(image)   => image.name.clone(),
+        }
+    }
+
     #[inline(always)]
     pub fn name(&self) -> &str {
         match self.as_ref() {

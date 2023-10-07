@@ -238,7 +238,12 @@ impl ForwardRenderer {
                 occlusion_culling: occlusion_culling
                     .then_some(OcclusionCullInfo::FirstPass { visibility_buffer })
                     .unwrap_or_default(),
-                alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+                alpha_mode_filter: AlphaModeFlags::OPAQUE
+                    // Would be better to also draw masked meshes in the depth pre-pass but
+                    // alpha-to-coverage in the colorpass doesn't like that.
+                    // For now I just skip them but this makes some dense masked meshes like
+                    // dense foliage *VERY* expensive.
+                    // | AlphaModeFlags::MASKED,
             },
             None
         );

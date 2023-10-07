@@ -120,7 +120,7 @@ pub fn create_draw_commands(
     let pass_name = format!("{draw_commands_name}_generation");
     
     let draw_commands = reuse_buffer.unwrap_or_else(|| context.create_transient(
-        draw_commands_name,
+        draw_commands_name.clone(),
         graphics::BufferDesc {
             size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
@@ -172,7 +172,8 @@ pub fn create_draw_commands(
         gpu_cull_info_data.z_near = z_near;
     }
 
-    let cull_data = context.transient_storage_data("cull_data", bytemuck::bytes_of(&gpu_cull_info_data));
+    let cull_data = context.transient_storage_data(
+        format!("{draw_commands_name}_cull_data"), bytemuck::bytes_of(&gpu_cull_info_data));
 
     context.add_pass(pass_name)
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)

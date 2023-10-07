@@ -253,24 +253,26 @@ impl TransientResourceCache {
     }
 
     pub fn get(&mut self, name: &str, desc: &graphics::AnyResourceDesc) -> Option<(graphics::AnyResource, bool)> {
-        if let Some(index) = self.name_lookup.remove(name) {
-            let found_node = self.resources_nodes.remove(index).unwrap();
-            
-            if let Some(prev_node_index) = found_node.prev_node {
-                self.resources_nodes[prev_node_index].next_node = found_node.next_node;
-            } else {
-                if let Some(next_node_index) = found_node.next_node {
-                    *self.descriptor_lookup.get_mut(desc).unwrap() = next_node_index;
+        if let Some(index) = self.name_lookup.get(name).copied() {
+            if &self.resources_nodes[index].resource.desc() == desc {
+                let found_node = self.resources_nodes.remove(index).unwrap();
+                
+                if let Some(prev_node_index) = found_node.prev_node {
+                    self.resources_nodes[prev_node_index].next_node = found_node.next_node;
                 } else {
-                    self.descriptor_lookup.remove(desc);
+                    if let Some(next_node_index) = found_node.next_node {
+                        *self.descriptor_lookup.get_mut(desc).unwrap() = next_node_index;
+                    } else {
+                        self.descriptor_lookup.remove(desc);
+                    }
                 }
+                
+                if let Some(next_node_index) = found_node.next_node {
+                    self.resources_nodes[next_node_index].prev_node = found_node.prev_node;
+                }
+    
+                return Some((found_node.resource, false));
             }
-            
-            if let Some(next_node_index) = found_node.next_node {
-                self.resources_nodes[next_node_index].prev_node = found_node.prev_node;
-            }
-
-            return Some((found_node.resource, false));
         };
         
         let descriptor_lookup_index = self.descriptor_lookup.get_mut(desc)?;

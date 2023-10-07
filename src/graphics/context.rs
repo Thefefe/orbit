@@ -540,6 +540,24 @@ impl Context {
         GraphHandle { resource_index, _phantom: PhantomData }
     }
 
+    #[inline(always)]
+    pub fn create_transient_buffer(
+        &mut self,
+        name: impl Into<Cow<'static, str>>,
+        desc: graphics::BufferDesc,
+    ) -> GraphBufferHandle {
+        self.create_transient(name, desc)
+    }
+
+    #[inline(always)]
+    pub fn create_transient_image(
+        &mut self,
+        name: impl Into<Cow<'static, str>>,
+        desc: graphics::ImageDesc,
+    ) -> GraphImageHandle {
+        self.create_transient(name, desc)
+    }
+
     pub fn add_pass(&mut self, name: impl Into<Cow<'static, str>>) -> PassBuilder {
         PassBuilder { 
             context: self,

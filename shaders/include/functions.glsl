@@ -83,3 +83,11 @@ vec3 fresnel_schlick_roughness(float cos_theta, vec3 base_reflectivity, float ro
     return base_reflectivity + (max(vec3(1.0 - roughness), base_reflectivity) - base_reflectivity)
      * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
 }
+
+float calc_mip_level(vec2 texture_coord) {
+    vec2 dx = dFdx(texture_coord);
+    vec2 dy = dFdy(texture_coord);
+    float delta_max_sqr = max(dot(dx, dx), dot(dy, dy));
+    
+    return max(0.0, 0.5 * log2(delta_max_sqr));
+}

@@ -74,6 +74,8 @@ impl AnyResource {
 
     pub fn rename(&mut self, device: &graphics::Device, new_name: Cow<'static, str>) {
         assert!(self.is_owned(), "only owned resources can be renamed");
+        if self.name() == &new_name { return; }
+        
         log::info!("renaming {:?} to {:?}", self.name(), new_name.as_ref());
 
         match self {

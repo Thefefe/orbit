@@ -157,6 +157,10 @@ impl MultisampleCount {
         Self::X8,
     ];
 
+    pub fn is_some(self) -> bool {
+        self != Self::None
+    }
+
     pub fn to_vk(self) -> vk::SampleCountFlags {
         match self {
             MultisampleCount::None => vk::SampleCountFlags::TYPE_1,

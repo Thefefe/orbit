@@ -238,12 +238,7 @@ impl ForwardRenderer {
                 occlusion_culling: occlusion_culling
                     .then_some(OcclusionCullInfo::FirstPass { visibility_buffer })
                     .unwrap_or_default(),
-                alpha_mode_filter: AlphaModeFlags::OPAQUE
-                    // Would be better to also draw masked meshes in the depth pre-pass but
-                    // alpha-to-coverage in the colorpass doesn't like that.
-                    // For now I just skip them but this makes some dense masked meshes like
-                    // dense foliage *VERY* expensive.
-                    // | AlphaModeFlags::MASKED,
+                alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
             },
             None
         );
@@ -251,8 +246,12 @@ impl ForwardRenderer {
         let depth_prepass_pipeline = context.create_raster_pipeline(
             "forward_depth_prepass_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/shadow.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/forward_depth_prepass.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/forward_depth_prepass.frag.spv"))
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: vk::Format::R8G8B8A8_UNORM,
+                    ..Default::default()
+                }])
                 .depth_state(Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
                     test: graphics::PipelineState::Static(true),
@@ -261,15 +260,46 @@ impl ForwardRenderer {
                 }))
                 .multisample_state(graphics::MultisampleState {
                     sample_count: settings.msaa,
-                    alpha_to_coverage: false
+                    alpha_to_coverage: true,
                 })
         );
 
+        // RGB: world normals for SSAO
+        // A: alpha-to-coverage for matching depth in color pass for masked geometry
+        let normal_buffer = context.create_transient_image("forward_normal_buffer", graphics::ImageDesc {
+            ty: graphics::ImageType::Single2D,
+            format: vk::Format::R8G8B8A8_UNORM,
+            dimensions: [screen_extent.width, screen_extent.height, 1],
+            mip_levels: 1,
+            samples: settings.msaa,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            aspect: vk::ImageAspectFlags::COLOR,
+            ..Default::default()
+        });
+
+        let normal_resolve_buffer = settings.msaa.is_some().then(|| context.create_transient_image(
+            "forward_normal_buffer_resolve",
+            graphics::ImageDesc {
+                ty: graphics::ImageType::Single2D,
+                format: vk::Format::R8G8B8A8_UNORM,
+                dimensions: [screen_extent.width, screen_extent.height, 1],
+                mip_levels: 1,
+                samples: graphics::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                aspect: vk::ImageAspectFlags::COLOR,
+                ..Default::default()
+            }
+        ));
+
         context.add_pass("forward_depth_prepass")
+            .with_dependency(normal_buffer, graphics::AccessKind::ColorAttachmentWrite)
+            .with_dependencies(normal_resolve_buffer.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
             .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
             .with_dependencies(target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
             .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
             .render(move |cmd, graph| {
+                let normal_buffer = graph.get_image(normal_buffer);
+                let normal_resolve_buffer = normal_resolve_buffer.map(|h| graph.get_image(h));
                 let depth_target = graph.get_image(target_attachments.depth_target);
                 let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
                 
@@ -278,7 +308,25 @@ impl ForwardRenderer {
                 let entity_buffer = graph.get_buffer(scene.entity_buffer);
                 let draw_commands_buffer = graph.get_buffer(draw_commands);
                 let materials_buffer = graph.get_buffer(assets.materials_buffer);
-    
+
+                let mut color_attachment = vk::RenderingAttachmentInfo::builder()
+                    .image_view(normal_buffer.view)
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .clear_value(vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 0.0],
+                        },
+                    })
+                    .store_op(vk::AttachmentStoreOp::STORE);
+
+                if let Some(normal_resolve_buffer) = normal_resolve_buffer {
+                    color_attachment = color_attachment
+                        .resolve_image_view(normal_resolve_buffer.view)
+                        .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+                }
+
                 let mut depth_attachment = vk::RenderingAttachmentInfo::builder()
                     .image_view(depth_target.view)
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
@@ -301,6 +349,7 @@ impl ForwardRenderer {
                 let rendering_info = vk::RenderingInfo::builder()
                     .render_area(depth_target.full_rect())
                     .layer_count(1)
+                    .color_attachments(std::slice::from_ref(&color_attachment))
                     .depth_attachment(&depth_attachment);
     
                 cmd.begin_rendering(&rendering_info);
@@ -326,13 +375,16 @@ impl ForwardRenderer {
     
                 cmd.end_rendering();
             });
+        
+        // select non-multisampled
+        let _normal_buffer = normal_resolve_buffer.unwrap_or(normal_buffer);
 
         if !camera_frozen {
             self.depth_pyramid.update(context, target_attachments.depth_resolve
                 .unwrap_or(target_attachments.depth_target));
         }
 
-        let draw_commands = create_draw_commands(context, "forward_draw_command".into(), assets, scene,
+        let draw_commands = create_draw_commands(context, "forward_draw_commands".into(), assets, scene,
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
@@ -465,7 +517,7 @@ fn forward_pass(
                 format: App::DEPTH_FORMAT,
                 test: graphics::PipelineState::Static(true),
                 write: false,
-                compare: vk::CompareOp::GREATER_OR_EQUAL,
+                compare: vk::CompareOp::EQUAL,
             }))
             .multisample_state(graphics::MultisampleState {
                 sample_count: settings.msaa,
@@ -511,9 +563,9 @@ fn forward_pass(
             .load_op(if environment_map.is_none() || render_mode == RenderMode::Overdraw {
                 vk::AttachmentLoadOp::CLEAR
             } else {
-                vk::AttachmentLoadOp::LOAD
+                vk::AttachmentLoadOp::CLEAR
             })
-            .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] } })
+            .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [1.0, 0.0, 1.0, 0.0] } })
             .store_op(vk::AttachmentStoreOp::STORE);
 
         if let Some(color_resolve) = color_resolve {

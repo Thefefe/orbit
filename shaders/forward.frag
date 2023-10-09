@@ -416,14 +416,19 @@ void main() {
 
         if (material.base_texture_index != TEXTURE_NONE) {
             base_color *= texture(GetSampledTexture2D(material.base_texture_index), vout.uv);
+        }
 
-            // masked
-            if (alpha_mode == 1) {
-                vec2 lods = textureQueryLod(GetSampledTexture2D(material.base_texture_index), vout.uv);
-                float alpha_mip_level = max(lods.x, lods.y);
-                
-                out_color.a = (base_color.a - alpha_cutoff) / max(fwidth(base_color.a), EPSILON) + 0.5;
-                out_color.a *= 1 + alpha_mip_level * MIP_SCALE;
+        // masked
+        if (alpha_mode == 1) {
+            // avoid artifacts at edge cases
+            if (alpha_cutoff >= 1.0 || (material.base_texture_index == TEXTURE_NONE && base_color.a <= alpha_cutoff)) {
+                discard;
+            }
+            
+            if (material.base_texture_index != TEXTURE_NONE) {
+                vec2 texture_size = textureSize(GetSampledTexture2D(material.base_texture_index), 0);
+                base_color.a *= 1 + max(0, calc_mip_level(vout.uv * texture_size)) * MIP_SCALE;
+                out_color.a = (base_color.a - alpha_cutoff) / max(fwidth(base_color.a), 0.0001) + 0.5;
             }
         }
 

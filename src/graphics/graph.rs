@@ -254,7 +254,8 @@ impl TransientResourceCache {
 
     pub fn get(&mut self, name: &str, desc: &graphics::AnyResourceDesc) -> Option<(graphics::AnyResource, bool)> {
         if let Some(index) = self.name_lookup.get(name).copied() {
-            if &self.resources_nodes[index].resource.desc() == desc {
+            if self.resources_nodes.get(index).map_or(false, |n| &n.resource.desc() == desc) {
+                self.name_lookup.remove(name);
                 let found_node = self.resources_nodes.remove(index).unwrap();
                 
                 if let Some(prev_node_index) = found_node.prev_node {

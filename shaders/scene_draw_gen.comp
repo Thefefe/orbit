@@ -5,6 +5,7 @@
 
 #extension GL_KHR_shader_subgroup_vote : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_ballot : require
 
 layout(push_constant, std430) uniform PushConstants {
     uint submesh_buffer;
@@ -192,14 +193,12 @@ void main() {
 
 		// update visibility buffer, only on second occlusion pass
 		if (cull_info.occlusion_pass == 2) {
-			// this should also work on AMD, but i can't test it
-			for (uint i = 0; i < gl_SubgroupSize / 32; i++) {
-				// only the invocatons responsible for the current bit are active
-				if (32 * i <= gl_SubgroupInvocationID && gl_SubgroupInvocationID < 32 * (i + 1)) {
-					uint visiblity_bitset = subgroupOr(uint(visible) << (gID % 32));
-					if (subgroupElect()) {
-						GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID / 32] = visiblity_bitset;
-					}
+			uvec4 visiblity_bitset = subgroupBallot(visible);
+			
+			if (subgroupElect()) {
+				for (uint i = 0; i < gl_SubgroupSize / 32; i++) {
+					GetBuffer(VisibilityBuffer, cull_info.visibility_buffer)
+						.submeshes[gID / gl_SubgroupSize + i] = visiblity_bitset.x;
 				}
 			}
 		}

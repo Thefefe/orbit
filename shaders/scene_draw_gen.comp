@@ -3,6 +3,9 @@
 #include "include/common.glsl"
 #include "include/types.glsl"
 
+#extension GL_KHR_shader_subgroup_vote : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
 layout(push_constant, std430) uniform PushConstants {
     uint submesh_buffer;
 	uint mesh_info_buffer;
@@ -100,9 +103,16 @@ void main() {
 
 		CullInfo cull_info = GetBuffer(CullInfoBuffer, cull_info_buffer).cull_info;
 		
-		if (((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag) == 0) return;
-
+		bool should_include = bool((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag);
+		
 		bool visible = true;
+
+		// first occlusion pass: only proccess if submesh was visible last frame
+		if (cull_info.occlusion_pass == 1) {
+			// each bit corresponds to a submesh
+			uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID / 32];
+			visible = (visibility_bitset & (1 << (gID % 32))) > 0;
+		}
 
 		vec4 model_space_bounding_sphere = vec4(
 			mesh_info.bounding_sphere[0],
@@ -115,9 +125,9 @@ void main() {
 			model_space_bounding_sphere
 		);
 
-		// first occlusion pass: only proccess if submesh was visible last frame
-		if (cull_info.occlusion_pass == 1)
-			visible = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] == 1;
+		// // first occlusion pass: only proccess if submesh was visible last frame
+		// if (cull_info.occlusion_pass == 1)
+		// 	visible = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] == 1;
 
 		// frustum culling
 		if (visible) {
@@ -159,7 +169,7 @@ void main() {
 			}
 		}
 
-		bool should_draw = visible;
+		bool should_draw = visible && should_include;
 
 		// second occlusion pass: only proccess if submesh wasn't visible last frame
 		// if (cull_info.occlusion_pass == 2)
@@ -181,7 +191,17 @@ void main() {
 		}
 
 		// update visibility buffer, only on second occlusion pass
-		if (cull_info.occlusion_pass == 2)
-			GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] = visible ? 1 : 0;
+		if (cull_info.occlusion_pass == 2) {
+			// this should also work on AMD, but i can't test it
+			for (uint i = 0; i < gl_SubgroupSize / 32; i++) {
+				// only the invocatons responsible for the current bit are active
+				if (32 * i <= gl_SubgroupInvocationID && gl_SubgroupInvocationID < 32 * (i + 1)) {
+					uint visiblity_bitset = subgroupOr(uint(visible) << (gID % 32));
+					if (subgroupElect()) {
+						GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID / 32] = visiblity_bitset;
+					}
+				}
+			}
+		}
 	}
 }

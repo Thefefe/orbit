@@ -129,7 +129,7 @@ struct DebugLineVertex {
 };
 
 RegisterBuffer(VisibilityBuffer, {
-    uint submeshes[];
+    uint32_t submeshes[];
 });
 
 RegisterBuffer(CullInfoBuffer, {

@@ -546,6 +546,7 @@ impl Device {
             .buffer_device_address(true)
             .buffer_device_address_capture_replay(true)
             .shader_int8(true)
+            .storage_buffer8_bit_access(true)
             .uniform_and_storage_buffer8_bit_access(true)
             .draw_indirect_count(true)
             .host_query_reset(true)

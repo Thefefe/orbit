@@ -506,8 +506,8 @@ void main() {
 
         float world_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascade_world_sizes[cascade_index];
 
-        // shadow = pcf_vogel(shadow_map, cascade_shadow_map_coords, world_size);
-        shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, world_size);
+        shadow = pcf_vogel(shadow_map, cascade_shadow_map_coords, world_size);
+        // shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, world_size);
         // shadow = pcf_branch(shadow_map, cascade_shadow_map_coords, world_size);
         // shadow = texture(
         //     sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),

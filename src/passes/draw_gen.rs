@@ -123,7 +123,9 @@ pub fn create_draw_commands(
         draw_commands_name.clone(),
         graphics::BufferDesc {
             size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER |
+                   vk::BufferUsageFlags::INDIRECT_BUFFER |
+                   vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
         }
     ));
@@ -175,6 +177,14 @@ pub fn create_draw_commands(
     let cull_data = context.transient_storage_data(
         format!("{draw_commands_name}_cull_data"), bytemuck::bytes_of(&gpu_cull_info_data));
 
+    // TODO: come up with a better way to do this, maybe in the compute shader
+    context.add_pass("zeroing_draw_commands_buffer")
+        .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let draw_commands = graph.get_buffer(draw_commands);
+            cmd.fill_buffer(draw_commands, 0, 4, 0);
+        }); 
+
     context.add_pass(pass_name)
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
         // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
@@ -188,7 +198,7 @@ pub fn create_draw_commands(
             let entity_buffer = graph.get_buffer(scene.entity_buffer);
             let draw_commands = graph.get_buffer(draw_commands);
             let cull_data = graph.get_buffer(cull_data);
-            
+
             cmd.bind_compute_pipeline(pipeline);
 
             cmd.build_constants()

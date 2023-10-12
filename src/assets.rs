@@ -80,6 +80,20 @@ pub struct MeshInfo {
     pub bounding_sphere: Vec4,
 }
 
+impl MeshInfo {
+    pub fn vertex_offset(&self) -> i32 {
+        self.vertex_range.start as i32
+    }
+
+    pub fn index_offset(&self) -> u32 {
+        self.index_range.start as u32
+    }
+
+    pub fn index_count(&self) -> u32 {
+        self.index_range.size() as u32
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Submesh {
     pub mesh_handle: MeshHandle,

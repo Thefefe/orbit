@@ -177,7 +177,7 @@ void main() {
 		// 	should_draw = visible && GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] != 1;
 
 		// draw command fill
-		if (should_draw && cull_info.occlusion_pass != 0) {
+		if (should_draw) {
 			DrawCommand draw_command;
 			draw_command.index_count 	  = mesh_info.index_count;
 			draw_command.instance_count   = 1;

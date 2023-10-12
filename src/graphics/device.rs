@@ -521,6 +521,7 @@ impl Device {
             .queue_priorities(&[1.0]);
 
         let vulkan10_features = vk::PhysicalDeviceFeatures::builder()
+            .fill_mode_non_solid(true)
             .sample_rate_shading(true)
             .multi_draw_indirect(true)
             .sampler_anisotropy(true)

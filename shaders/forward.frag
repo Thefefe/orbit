@@ -109,7 +109,7 @@ float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers
 }
 
 #define PENUMBRA_SAMPLE_COUNT 8
-#define SHADOW_SAMPLE_COUNT 32
+#define SHADOW_SAMPLE_COUNT 64
 
 vec2 vogel_disk_sample(int sampleIndex, int samplesCount, float phi) {
     float GoldenAngle = 2.4;
@@ -506,8 +506,8 @@ void main() {
 
         float world_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascade_world_sizes[cascade_index];
 
-        shadow = pcf_vogel(shadow_map, cascade_shadow_map_coords, world_size);
-        // shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, world_size);
+        // shadow = pcf_vogel(shadow_map, cascade_shadow_map_coords, world_size);
+        shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, world_size);
         // shadow = pcf_branch(shadow_map, cascade_shadow_map_coords, world_size);
         // shadow = texture(
         //     sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
@@ -600,18 +600,7 @@ void main() {
             out_color = vec4(cascade_color * base_color.rgb * shadow, 1.0);
         } break;
         case 2:
-            // out_color = vec4(normal * 0.5 + 0.5, 1.0);
-            
-            if (alpha_mode == 0){
-                out_color = vec4(1.0, 0.0, 0.0, 1.0);
-            }
-            if (alpha_mode == 1){
-                out_color = vec4(0.0, 1.0, 0.0, 1.0);
-            }
-            if (alpha_mode == 2){
-                out_color = vec4(0.0, 0.0, 1.0, 1.0);
-            }
-
+            out_color = vec4(normal * 0.5 + 0.5, 1.0);
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 3: 

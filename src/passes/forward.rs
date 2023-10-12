@@ -2,7 +2,7 @@ use ash::vk;
 use glam::{Mat4, Vec3};
 use rand::prelude::Distribution;
 
-use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT, App, Settings, passes::draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, AlphaModeFlags}, math};
+use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuMeshDrawCommand}, MAX_DRAW_COUNT, App, Settings, passes::draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, AlphaModeFlags}, math};
 
 use super::{shadow_renderer::DirectionalLightGraphData, env_map_loader::GraphEnvironmentMap, draw_gen::DepthPyramid};
 
@@ -370,7 +370,7 @@ impl ForwardRenderer {
                     draw_commands_buffer,
                     0,
                     MAX_DRAW_COUNT as u32,
-                    std::mem::size_of::<GpuDrawCommand>() as u32,
+                    std::mem::size_of::<GpuMeshDrawCommand>() as u32,
                 );
     
                 cmd.end_rendering();
@@ -653,7 +653,7 @@ fn forward_pass(
             draw_commands_buffer,
             0,
             MAX_DRAW_COUNT as u32,
-            std::mem::size_of::<GpuDrawCommand>() as u32,
+            std::mem::size_of::<GpuMeshDrawCommand>() as u32,
         );
 
         cmd.end_rendering();

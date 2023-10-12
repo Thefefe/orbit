@@ -16,5 +16,5 @@ void main() {
     DebugLineVertex vertex = GetBuffer(DebugLineVertexBuffer, vertex_buffer).vertices[gl_VertexIndex + vertex_offset];
     vec4 position = view_projection * vec4(vertex.position, 1.0);
     gl_Position = position;
-    out_color = vec4(vertex.color) / 255.0;
+    out_color = vec4(vertex.color) / 255.0 * multiplier;
 }

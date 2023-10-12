@@ -128,6 +128,15 @@ struct DebugLineVertex {
     u8vec4 color;
 };
 
+struct DebugMeshInstance {
+    mat4 matrix;
+    vec4 color;
+};
+
+RegisterBuffer(DebugMeshInstanceBuffer, {
+    DebugMeshInstance instances[];
+});
+
 RegisterBuffer(VisibilityBuffer, {
     uint32_t submeshes[];
 });

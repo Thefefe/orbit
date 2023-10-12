@@ -4,7 +4,7 @@ use ash::vk;
 use glam::{Mat4, Vec4};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, assets::{AssetGraphData, AlphaMode}, scene::{SceneGraphData, GpuDrawCommand}, MAX_DRAW_COUNT};
+use crate::{graphics, assets::{AssetGraphData, AlphaMode}, scene::{SceneGraphData, GpuMeshDrawCommand}, MAX_DRAW_COUNT};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum OcclusionCullInfo {
@@ -122,7 +122,7 @@ pub fn create_draw_commands(
     let draw_commands = reuse_buffer.unwrap_or_else(|| context.create_transient(
         draw_commands_name.clone(),
         graphics::BufferDesc {
-            size: MAX_DRAW_COUNT * std::mem::size_of::<GpuDrawCommand>(),
+            size: MAX_DRAW_COUNT * std::mem::size_of::<GpuMeshDrawCommand>(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER |
                    vk::BufferUsageFlags::INDIRECT_BUFFER |
                    vk::BufferUsageFlags::TRANSFER_DST,

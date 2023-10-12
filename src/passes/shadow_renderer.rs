@@ -9,14 +9,14 @@ use crate::{
     graphics,
     math,
     assets::AssetGraphData,
-    scene::{SceneGraphData, GpuDrawCommand},
+    scene::{SceneGraphData, GpuMeshDrawCommand},
     Camera,
     Projection,
     MAX_DRAW_COUNT,
     MAX_SHADOW_CASCADE_COUNT,
 };
 
-use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, update_multiple_depth_pyramids, AlphaModeFlags}, debug_line_renderer::DebugLineRenderer};
+use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, update_multiple_depth_pyramids, AlphaModeFlags}, debug_renderer::DebugRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -270,7 +270,7 @@ impl ShadowRenderer {
                     draw_commands_buffer,
                     0,
                     MAX_DRAW_COUNT as u32,
-                    std::mem::size_of::<GpuDrawCommand>() as u32,
+                    std::mem::size_of::<GpuMeshDrawCommand>() as u32,
                 );
     
                 cmd.end_rendering();
@@ -297,7 +297,7 @@ impl ShadowRenderer {
         show_cascade_view_frustum: bool,
         show_cascade_light_frustum: bool,
         show_cascade_light_frustum_planes: bool,
-        debug_line_renderer: &mut DebugLineRenderer,
+        debug_line_renderer: &mut DebugRenderer,
     ) -> DirectionalLightGraphData {
         let settings = self.settings;
 

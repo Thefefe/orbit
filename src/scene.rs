@@ -74,7 +74,7 @@ pub struct GpuSubmeshData {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct GpuDrawCommand {
+pub struct GpuMeshDrawCommand {
     // DrawIndiexedIndirectCommand
     pub index_count: u32,
     pub instance_count: u32,

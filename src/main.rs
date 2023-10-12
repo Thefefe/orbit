@@ -37,7 +37,7 @@ use input::Input;
 use scene::{SceneData, Transform};
 
 use passes::{
-    debug_line_renderer::DebugLineRenderer,
+    debug_renderer::DebugRenderer,
     env_map_loader::EnvironmentMap,
     forward::{ForwardRenderer, RenderMode}, shadow_renderer::{ShadowSettings, ShadowRenderer},
 };
@@ -242,7 +242,7 @@ struct App {
 
     forward_renderer: ForwardRenderer,
     shadow_renderer: ShadowRenderer,
-    debug_line_renderer: DebugLineRenderer,
+    debug_renderer: DebugRenderer,
     settings: Settings,
 
     environment_map: Option<EnvironmentMap>,
@@ -275,6 +275,8 @@ struct App {
     show_depth_pyramid: bool,
     pyramid_display_far_depth: f32,
     depth_pyramid_level: u32,
+
+    selected_entity_index: Option<usize>,
 
     open_scene_editor_open: bool,
     open_graph_debugger: bool,
@@ -427,7 +429,7 @@ impl App {
 
             forward_renderer: ForwardRenderer::new(context),
             shadow_renderer: ShadowRenderer::new(context, settings.shadow_settings),
-            debug_line_renderer: DebugLineRenderer::new(context),
+            debug_renderer: DebugRenderer::new(context),
             settings,
 
             environment_map,
@@ -469,6 +471,8 @@ impl App {
             pyramid_display_far_depth: 0.01,
             depth_pyramid_level: 0,
 
+            selected_entity_index: None,
+                
             open_scene_editor_open: false,
             open_graph_debugger: false,
             open_profiler: false,
@@ -567,25 +571,52 @@ impl App {
         if self.open_scene_editor_open {
             egui::Window::new("scene")
                 .open(&mut self.open_scene_editor_open)
-                .vscroll(true)
+                .default_width(280.0)
+                .default_height(400.0)
+                .vscroll(false)
+                .resizable(true)
                 .show(egui_ctx, |ui| {
-                    for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
-                        let header = entity.name.as_ref().map_or(format!("entity_{entity_index}"), |name| {
-                            format!("entity_{entity_index} ({name})")
+                    egui::TopBottomPanel::top("scene_enttites")
+                        .resizable(true)
+                        .frame(egui::Frame::none().inner_margin(egui::Margin {
+                            left: 0.0,
+                            right: 0.0,
+                            top: 2.0,
+                            bottom: 12.0,
+                        }))
+                        .default_height(180.0)
+                        .show_inside(ui, |ui| {
+                            ui.heading("Entities");
+                            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                                for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
+                                    let header = entity.name.as_ref().map_or(format!("entity_{entity_index}"), |name| {
+                                        format!("entity_{entity_index} ({name})")
+                                    });
+                                    let is_entity_selected = Some(entity_index) == self.selected_entity_index;
+                                    if ui.selectable_label(is_entity_selected, &header).clicked() {
+                                        self.selected_entity_index = Some(entity_index);
+                                    }
+                                }
+                            });
                         });
-                        ui.collapsing(header, |ui| {
+                    
+                    ui.heading("Properties");
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        if let Some(entity_index) = self.selected_entity_index {
+                            let entity = &mut self.scene.entities[entity_index];
+                            
+                            ui.heading("Transform");
                             drag_vec3(ui, "position", &mut entity.transform.position, 0.001);
-
-                            let (euler_x, euler_y, euler_z) =
-                                entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
+                            let (euler_x, euler_y, euler_z) = entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
                             let mut euler = vec3(euler_x, euler_y, euler_z);
                             drag_vec3(ui, "orientation", &mut euler, 0.05);
-                            entity.transform.orientation =
-                                Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
-
+                            entity.transform.orientation = Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
                             drag_vec3(ui, "scale", &mut entity.transform.scale, 0.001);
-                        });
-                    }
+                        } else {
+                            ui.label("no entity selected");
+                        }
+                    });
+
                 });
         }
 
@@ -682,7 +713,7 @@ impl App {
             let far_clip = self.settings.shadow_settings.max_shadow_distance;
             let frustum_corner = math::perspective_corners(fov, self.frozen_camera.aspect_ratio, near_clip, far_clip)
                 .map(|corner| self.frozen_camera.transform.compute_matrix() * corner);
-            self.debug_line_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
+            self.debug_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
         self.main_color_image.recreate(&graphics::ImageDesc {
@@ -745,7 +776,7 @@ impl App {
             self.show_cascade_view_frustum,
             self.show_cascade_light_frustum,
             self.show_cascade_light_frustum_planes,
-            &mut self.debug_line_renderer,
+            &mut self.debug_renderer,
         );
 
         self.forward_renderer.render(
@@ -771,25 +802,6 @@ impl App {
             
             &self.camera,
             &self.frozen_camera,
-            self.render_mode,
-        );
-
-        self.debug_line_renderer.render(
-            context,
-            &self.settings,
-            color_target,
-            color_resolve_target,
-            depth_target,
-            camera_view_projection_matrix,
-        );
-
-        let depth_pyramid = self.forward_renderer.depth_pyramid.get_current(context);
-
-        render_post_process(
-            context,
-            if let Some(resolved) = color_resolve_target { resolved } else { color_target },
-            self.camera_exposure,
-            (self.show_depth_pyramid).then_some((depth_pyramid, self.depth_pyramid_level, self.pyramid_display_far_depth)),
             self.render_mode,
         );
 
@@ -851,7 +863,7 @@ impl App {
                                 vec3a(0.0, 1.0, 1.0),
                             ]
                             .map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
-                            self.debug_line_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                            self.debug_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                         }
 
                         if self.show_bounding_spheres || self.show_screen_aabb {
@@ -869,7 +881,7 @@ impl App {
     
                             if let Some(aabb) = math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11) {
                                 if self.show_bounding_spheres {
-                                    self.debug_line_renderer.draw_sphere(position_world.into(), radius, vec4(0.0, 1.0, 0.0, 1.0));
+                                    self.debug_renderer.draw_sphere(position_world.into(), radius, vec4(0.0, 1.0, 0.0, 1.0));
                                 }
                                 
                                 if self.show_screen_aabb {
@@ -884,11 +896,11 @@ impl App {
                                         let v = screen_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
                                         v / v.w
                                     });
-                                    self.debug_line_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                                    self.debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                                 }
 
                             } else if self.show_bounding_spheres {
-                                self.debug_line_renderer.draw_sphere(position_world.into(), radius, vec4(1.0, 0.0, 0.0, 1.0));
+                                self.debug_renderer.draw_sphere(position_world.into(), radius, vec4(1.0, 0.0, 0.0, 1.0));
                             }
                         }
                     }
@@ -900,9 +912,37 @@ impl App {
             let planes = math::frustum_planes_from_matrix(&self.frozen_camera.compute_matrix());
 
             for plane in planes {
-                self.debug_line_renderer.draw_plane(plane, 2.0, vec4(1.0, 1.0, 1.0, 1.0));
+                self.debug_renderer.draw_plane(plane, 2.0, vec4(1.0, 1.0, 1.0, 1.0));
             }
         }
+
+        if let Some(entity_index) = self.selected_entity_index {
+            let entity = &self.scene.entities[entity_index];
+
+            if let Some(model) = entity.model {
+                self.debug_renderer.draw_model_wireframe(entity.transform.compute_matrix(), model, vec4(1.0, 0.0, 1.0, 1.0));
+            }
+        }
+
+        self.debug_renderer.render(
+            context,
+            &self.settings,
+            &self.gpu_assets,
+            color_target,
+            color_resolve_target,
+            depth_target,
+            camera_view_projection_matrix,
+        );
+
+        let depth_pyramid = self.forward_renderer.depth_pyramid.get_current(context);
+
+        render_post_process(
+            context,
+            if let Some(resolved) = color_resolve_target { resolved } else { color_target },
+            self.camera_exposure,
+            (self.show_depth_pyramid).then_some((depth_pyramid, self.depth_pyramid_level, self.pyramid_display_far_depth)),
+            self.render_mode,
+        );
     }
 }
 

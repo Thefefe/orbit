@@ -16,9 +16,9 @@ pub struct CommandPool {
 }
 
 impl CommandPool {
-    pub fn new(device: &graphics::Device, name: &str) -> Self {
-        let command_pool_create_info =
-            vk::CommandPoolCreateInfo::builder().queue_family_index(device.queue_family_index);
+    pub fn new(device: &graphics::Device, name: &str, queue_type: graphics::QueueType) -> Self {
+        let command_pool_create_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(device.get_queue(queue_type).family.index);
 
         let handle = unsafe { device.raw.create_command_pool(&command_pool_create_info, None).unwrap() };
 
@@ -104,7 +104,7 @@ impl CommandBuffer {
         self.command_buffer_info.command_buffer
     }
 
-    fn submit_info(&self) -> vk::SubmitInfo2 {
+    pub fn submit_info(&self) -> vk::SubmitInfo2 {
         vk::SubmitInfo2::builder()
             .command_buffer_infos(std::slice::from_ref(&self.command_buffer_info))
             .wait_semaphore_infos(&self.wait_infos)
@@ -138,15 +138,6 @@ impl CommandBuffer {
         CommandRecorder {
             device,
             command_buffer: self,
-        }
-    }
-}
-
-impl graphics::Device {
-    pub fn submit(&self, command_buffers: &[CommandBuffer], fence: vk::Fence) {
-        let submit_infos: Vec<_> = command_buffers.iter().map(|buf| buf.submit_info()).collect();
-        unsafe {
-            self.raw.queue_submit2(self.queue, &submit_infos, fence).unwrap();
         }
     }
 }

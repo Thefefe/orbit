@@ -3,7 +3,7 @@ use std::{sync::{Mutex, Arc}, borrow::Cow, time::Instant, marker::PhantomData, c
 use ash::vk;
 use winit::window::Window;
 
-use crate::graphics;
+use crate::graphics::{self, QueueType};
 
 use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, ResourceKind, BatchDependency};
 
@@ -61,6 +61,7 @@ pub struct Context {
     pub elapsed_frames: usize,
     start: Instant,
 
+    submit_infos: Vec<vk::SubmitInfo2>,
     record_submit_stuff: Mutex<RecordSubmitStuff>,
 
     frame_context: Option<FrameContext>,
@@ -100,7 +101,11 @@ impl Context {
             let image_available_semaphore = device.create_semaphore("image_available_semaphore");
             let render_finished_semaphore = device.create_semaphore("render_finished_semaphore");
 
-            let command_pool = graphics::CommandPool::new(&device, &format!("frame{frame_index}"));
+            let command_pool = graphics::CommandPool::new(
+                &device,
+                &format!("frame{frame_index}"),
+                QueueType::Graphics
+            );
 
             let global_buffer = graphics::BufferRaw::create_impl(&device, "global_buffer".into(), &graphics::BufferDesc {
                 size: std::mem::size_of::<GpuGlobalData>(),
@@ -133,7 +138,7 @@ impl Context {
         });
 
         let record_submit_stuff = {
-            let command_pool = graphics::CommandPool::new(&device, "global");
+            let command_pool = graphics::CommandPool::new(&device, "global", QueueType::Graphics);
             let fence = device.create_fence("record_submit_fence", false);
 
             Mutex::new(RecordSubmitStuff { command_pool, fence })  
@@ -157,6 +162,7 @@ impl Context {
             elapsed_frames: 0,
             start: Instant::now(),
 
+            submit_infos: Vec::new(),
             record_submit_stuff,
 
             frame_context: None,
@@ -174,7 +180,8 @@ impl Context {
         unsafe {
             self.device.raw.reset_fences(&[record_submit_stuff.fence]).unwrap();
         }
-        self.device.submit(&record_submit_stuff.command_pool.buffers(), record_submit_stuff.fence);
+        let submit_info = record_submit_stuff.command_pool.buffers()[0].submit_info();
+        self.device.queue_submit(QueueType::Graphics, &[submit_info], record_submit_stuff.fence);
         unsafe {
             self.device.raw.wait_for_fences(&[record_submit_stuff.fence], false, u64::MAX).unwrap();
         }
@@ -685,7 +692,10 @@ impl Context {
 
         {
             puffin::profile_scope!("command_submit");
-            self.device.submit(frame.command_pool.buffers(), frame.in_flight_fence);
+            self.submit_infos.clear();
+            self.submit_infos.extend(frame.command_pool.buffers().into_iter().map(|cb| cb.submit_info()));
+            self.device.queue_submit(QueueType::Graphics, &self.submit_infos, frame.in_flight_fence);
+            self.submit_infos.clear();
         }
         {
             puffin::profile_scope!("queue_present");

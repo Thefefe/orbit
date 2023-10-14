@@ -68,54 +68,37 @@ impl InstanceMetadata {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueType {
+    Graphics,
+    AsyncCompute,
+    AsyncTransfer,
+}
+
+impl QueueType {
+    pub fn from_flags(flags: vk::QueueFlags) -> Option<Self> {
+        if flags.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER) {
+            return Some(Self::Graphics);
+        }
+
+        if flags.contains(vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER) {
+            return Some(Self::AsyncCompute);
+        }
+
+        if flags.contains(vk::QueueFlags::TRANSFER) {
+            return Some(Self::AsyncTransfer);
+        }
+
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct QueueFamily {
     pub index: u32,
-    pub flags: vk::QueueFlags,
+    pub ty: QueueType,
     pub count: u32,
-    pub surface_support: bool,
-}
-
-impl QueueFamily {
-    #[inline]
-    pub fn graphics(&self) -> bool {
-        self.flags.contains(vk::QueueFlags::GRAPHICS)
-    }
-
-    #[inline]
-    pub fn compute(&self) -> bool {
-        self.flags.contains(vk::QueueFlags::COMPUTE)
-    }
-
-    #[inline]
-    pub fn transfer(&self) -> bool {
-        self.flags.contains(vk::QueueFlags::TRANSFER)
-    }
-
-    #[inline]
-    pub fn present(&self) -> bool {
-        self.surface_support
-    }
-
-    #[inline]
-    pub fn graphics_present(&self) -> bool {
-        self.graphics() && self.present()
-    }
-
-    #[inline]
-    pub fn dedicated_compute(&self) -> bool {
-        self.compute() && !self.graphics()
-    }
-
-    #[inline]
-    pub fn dedicated_transfer(&self) -> bool {
-        self.transfer() && !self.graphics() && !self.compute()
-    }
-
-    #[inline]
-    pub fn universal(&self) -> bool {
-        self.graphics() && self.compute() && self.transfer() && self.present()
-    }
+    pub supports_present: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -243,16 +226,16 @@ fn enumerate_gpus<'a>(
                 .enumerate()
                 .map(|(index, queue_family)| {
                     let index = index as u32;
-                    let flags = queue_family.queue_flags;
                     let count = queue_family.queue_count;
-                    let surface_support =
-                        surface_fns.get_physical_device_surface_support(handle, index, surface).unwrap();
+                    let supports_present = surface_fns
+                        .get_physical_device_surface_support(handle, index, surface)
+                        .unwrap();
 
                     QueueFamily {
                         index,
-                        flags,
+                        ty: QueueType::from_flags(queue_family.queue_flags).unwrap(),
                         count,
-                        surface_support,
+                        supports_present,
                     }
                 })
                 .collect();
@@ -264,7 +247,7 @@ fn enumerate_gpus<'a>(
                 .map(|extension| CStr::from_ptr(extension.extension_name.as_ptr()).to_owned())
                 .collect();
 
-            let surface_info = if queue_families.iter().any(|queue| queue.present()) {
+            let surface_info = if queue_families.iter().any(|queue| queue.supports_present) {
                 SurfaceInfo::query(surface_fns, handle, surface)
             } else {
                 SurfaceInfo::default() // SAFETY: we don't use it if not supported
@@ -334,6 +317,11 @@ struct AllocatorStuff {
     allocations: arena::Arena<Allocation>,
 }
 
+pub struct Queue {
+    pub handle: vk::Queue,
+    pub family: QueueFamily,
+}
+
 pub struct Device {
     pub entry: ash::Entry,
 
@@ -351,8 +339,9 @@ pub struct Device {
     pub raw: ash::Device,
     pub device_metadata: DeviceMetadata,
 
-    pub queue_family_index: u32,
-    pub queue: vk::Queue,
+    pub graphics_queue: Queue,
+    pub async_compute_queue: Option<Queue>,
+    pub async_transfer_queue: Option<Queue>,
 
     allocator_stuff: Mutex<AllocatorStuff>,
 
@@ -477,7 +466,9 @@ impl Device {
         let gpu = enumerate_gpus(&instance, &surface_fns, surface)
             .rev()
             .filter(|gpu| {
-                let universal_queue = gpu.queues().any(|queue| queue.universal());
+                let universal_queue = gpu
+                    .queues()
+                    .any(|queue| queue.ty == QueueType::Graphics && queue.supports_present);
                 let required_extensions = gpu.has_all_extensions(required_device_extensions);
 
                 universal_queue && required_extensions
@@ -513,12 +504,43 @@ impl Device {
             enabled_device_extensions.iter().map(|ext| ext.as_c_str().as_ptr()).collect::<Vec<_>>();
 
         log::info!("selected gpu: {}", gpu.name());
+        
+        let mut queue_create_infos = Vec::new();
+        
+        let graphics_queue_family = gpu.queues()
+            .find(|queue| queue.ty == QueueType::Graphics && queue.supports_present)
+            .copied()
+            .unwrap();
+        let async_compute_queue_family = gpu.queues()
+            .find(|queue| queue.ty == QueueType::AsyncCompute)
+            .copied();
+        let async_transfer_queue_family = gpu.queues()
+            .find(|queue| queue.ty == QueueType::AsyncTransfer)
+            .copied();
 
-        let universal_queue_family = gpu.queues().find(|queue| queue.universal()).copied().unwrap();
+        let queue_priorities = [1.0];
 
-        let queue_create_info = vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(universal_queue_family.index)
-            .queue_priorities(&[1.0]);
+        queue_create_infos.push(vk::DeviceQueueCreateInfo::builder()
+            .queue_family_index(graphics_queue_family.index)
+            .queue_priorities(&queue_priorities)
+            .build()
+        );
+
+        if let Some(async_comptute_queue_family) = async_compute_queue_family {
+            queue_create_infos.push(vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(async_comptute_queue_family.index)
+                .queue_priorities(&queue_priorities)
+                .build()
+            );
+        }
+
+        if let Some(async_transfer_queue_family) = async_transfer_queue_family {
+            queue_create_infos.push(vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(async_transfer_queue_family.index)
+                .queue_priorities(&queue_priorities)
+                .build()
+            );
+        }
 
         let vulkan10_features = vk::PhysicalDeviceFeatures::builder()
             .fill_mode_non_solid(true)
@@ -567,7 +589,7 @@ impl Device {
             .push_next(&mut vulkan13_features);
 
         let device_create_info = vk::DeviceCreateInfo::builder()
-            .queue_create_infos(std::slice::from_ref(&queue_create_info))
+            .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&enabled_device_extension_ptrs)
             .push_next(&mut device_features);
 
@@ -577,7 +599,6 @@ impl Device {
         let device_metadata = DeviceMetadata {
             enabled_extensions: enabled_device_extensions,
         };
-
         
         // helper closure for simple debug name setting only for this function
         // let device_handle = device.handle();
@@ -596,8 +617,16 @@ impl Device {
             }
         };
 
-        let queue_family_index = universal_queue_family.index;
-        let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
+        let get_queue = |family: QueueFamily| unsafe {
+            Queue {
+                handle: device.get_device_queue(family.index, 0),
+                family,
+            }
+        };
+
+        let graphics_queue = get_queue(graphics_queue_family);
+        let async_compute_queue = async_compute_queue_family.map(get_queue);
+        let async_transfer_queue = async_transfer_queue_family.map(get_queue);
 
         let swapchain_fns = khr::Swapchain::new(&instance, &device);
 
@@ -736,8 +765,9 @@ impl Device {
             raw: device,
             device_metadata,
 
-            queue_family_index,
-            queue,
+            graphics_queue,
+            async_compute_queue,
+            async_transfer_queue,
 
             allocator_stuff,
 
@@ -753,6 +783,31 @@ impl Device {
             global_descriptor_index_allocator: IndexAllocator::new(0),
             immutable_samplers,
         })
+    }
+
+    #[inline]
+    pub fn try_get_queue(&self, ty: QueueType) -> Option<&Queue>{
+        match ty {
+            QueueType::Graphics      => Some(&self.graphics_queue),
+            QueueType::AsyncCompute  => self.async_compute_queue.as_ref(),
+            QueueType::AsyncTransfer => self.async_transfer_queue.as_ref(),
+        }
+    }
+
+    #[inline]
+    pub fn get_queue(&self, ty: QueueType) -> &Queue {
+        match ty {
+            QueueType::Graphics      => &self.graphics_queue,
+            QueueType::AsyncCompute  => self.async_compute_queue.as_ref().unwrap_or(&self.graphics_queue),
+            QueueType::AsyncTransfer => self.async_transfer_queue.as_ref().unwrap_or(&self.graphics_queue),
+        }
+    }
+
+    #[inline]
+    pub fn queue_submit(&self, ty: QueueType, submits: &[vk::SubmitInfo2], fence: vk::Fence) {
+        unsafe {
+            self.raw.queue_submit2(self.get_queue(ty).handle, submits, fence).unwrap()
+        }
     }
 
     pub fn create_fence(&self, name: &str, signaled: bool) -> vk::Fence {

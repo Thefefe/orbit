@@ -1,6 +1,7 @@
 use crate::graphics;
 
 use ash::vk;
+use graphics::QueueType;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,7 +304,9 @@ impl Swapchain {
             .image_indices(std::slice::from_ref(&image.image_index));
 
         unsafe {
-            device.swapchain_fns.queue_present(device.queue, &present_info).unwrap();
+            device.swapchain_fns
+                .queue_present(device.get_queue(QueueType::Graphics).handle, &present_info)
+                .unwrap();
         }
     }
 

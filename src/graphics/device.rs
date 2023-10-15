@@ -356,6 +356,9 @@ pub struct Device {
     immutable_samplers: [vk::Sampler; SAMPLER_COUNT],
 }
 
+unsafe impl Sync for Device {}
+unsafe impl Send for Device {}
+
 impl Device {
     pub fn new(window: &Window) -> Result<Self, DeviceCreateError> {
         let entry = unsafe { ash::Entry::load()? };

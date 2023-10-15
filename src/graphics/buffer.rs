@@ -21,6 +21,9 @@ pub struct BufferRaw {
     pub mapped_ptr: Option<NonNull<u8>>,
 }
 
+unsafe impl Sync for BufferRaw {}
+unsafe impl Send for BufferRaw {}
+
 impl std::ops::Deref for BufferRaw {
     type Target = graphics::BufferView;
 

@@ -1,6 +1,8 @@
-use std::{sync::{Mutex, Arc}, borrow::Cow, time::Instant, marker::PhantomData, collections::HashMap};
+use std::{sync::Arc, borrow::Cow, time::Instant, marker::PhantomData, collections::HashMap};
 
 use ash::vk;
+use parking_lot::Mutex;
+use rayon::prelude::*;
 use winit::window::Window;
 
 use crate::graphics::{self, QueueType};
@@ -24,7 +26,8 @@ pub struct Frame {
     in_flight_fence: vk::Fence,
     image_available_semaphore: graphics::Semaphore,
     render_finished_semaphore: graphics::Semaphore,
-    command_pool: graphics::CommandPool,
+    // command_pool: graphics::CommandPool,
+    command_pools: Vec<Mutex<graphics::CommandPool>>,
     global_buffer: graphics::BufferRaw,
 
     // in_use_transient_resources: TransientResourceCache,
@@ -96,16 +99,16 @@ impl Context {
             graphics::Swapchain::new(&device, config)
         };
 
-        let frames = std::array::from_fn(|frame_index| {
+        let frames = std::array::from_fn(|_frame_index| {
             let in_flight_fence = device.create_fence("in_flight_fence", true);
             let image_available_semaphore = device.create_semaphore("image_available_semaphore");
             let render_finished_semaphore = device.create_semaphore("render_finished_semaphore");
 
-            let command_pool = graphics::CommandPool::new(
-                &device,
-                &format!("frame{frame_index}"),
-                QueueType::Graphics
-            );
+            // let command_pool = graphics::CommandPool::new(
+            //     &device,
+            //     &format!("command_pool_frame{frame_index}"),
+            //     QueueType::Graphics
+            // );
 
             let global_buffer = graphics::BufferRaw::create_impl(&device, "global_buffer".into(), &graphics::BufferDesc {
                 size: std::mem::size_of::<GpuGlobalData>(),
@@ -127,7 +130,10 @@ impl Context {
                 in_flight_fence,
                 image_available_semaphore,
                 render_finished_semaphore,
-                command_pool,
+                // command_pool,
+                command_pools: (0..rayon::current_num_threads())
+                    .map(|i| Mutex::new(graphics::CommandPool::new(&device, &format!("command_pool_thread_{i}"), QueueType::Graphics)))
+                    .collect(),
                 global_buffer,
 
                 // in_use_transient_resources: TransientResourceCache::new(),
@@ -171,7 +177,7 @@ impl Context {
 
     pub fn record_and_submit(&self, f: impl FnOnce(&graphics::CommandRecorder)) {
         puffin::profile_function!();
-        let mut record_submit_stuff = self.record_submit_stuff.lock().unwrap();
+        let mut record_submit_stuff = self.record_submit_stuff.lock();
         record_submit_stuff.command_pool.reset(&self.device);
         let buffer = record_submit_stuff.command_pool.begin_new(&self.device);
         let recorder = buffer.record(&self.device, vk::CommandBufferUsageFlags::empty());
@@ -202,7 +208,7 @@ impl Drop for Context {
             self.device.raw.device_wait_idle().unwrap();
         }
 
-        let record_submit_stuff = self.record_submit_stuff.lock().unwrap(); 
+        let record_submit_stuff = self.record_submit_stuff.lock(); 
         unsafe {
             self.device.raw.destroy_fence(record_submit_stuff.fence, None);
         }
@@ -217,7 +223,10 @@ impl Drop for Context {
                 self.device.raw.destroy_query_pool(frame.timestamp_query_pool, None);
             }
 
-            frame.command_pool.destroy(&self.device);
+            // frame.command_pool.destroy(&self.device);
+            for command_pool in frame.command_pools.iter() {
+                command_pool.lock().destroy(&self.device);
+            }
 
             graphics::BufferRaw::destroy_impl(&self.device, &frame.global_buffer);
 
@@ -279,7 +288,10 @@ impl Context {
             }
         }
 
-        frame.command_pool.reset(&self.device);
+        // frame.command_pool.reset(&self.device);
+        for command_pool in frame.command_pools.iter_mut() {
+            command_pool.get_mut().reset(&self.device);
+        }
 
         self.swapchain.resize(self.window.inner_size().into());
 
@@ -383,7 +395,7 @@ impl<'a> PassBuilder<'a> {
         self
     }
 
-    pub fn render(self, f: impl Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + 'static) -> graphics::GraphPassIndex {
+    pub fn render(self, f: impl Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + Send + Sync + 'static) -> graphics::GraphPassIndex {
         let pass = self.context.graph.add_pass(self.name, Box::new(f));
         for (resource, access) in self.dependencies.iter().copied() {
             self.context.graph.add_dependency(pass, resource, access);
@@ -599,101 +611,60 @@ impl Context {
         );
 
         frame.graph_debug_info.batch_infos.resize(frame.compiled_graph.batches.len(), GraphBatchDebugInfo::default());
+        frame.graph_debug_info.timestamp_count = frame.compiled_graph.batches.len() as u32 * 2;
 
-        {
+        // let commands = frame.compiled_graph
+        //     .iter_batches()
+        //     .zip(frame.graph_debug_info.batch_infos.iter_mut())
+        //     .enumerate()
+        //     .map(|(batch_index, (batch_ref, batch_debug_info))| record_batch(
+        //         &self.device,
+        //         &frame.compiled_graph,
+        //         &mut frame.command_pool,
+        //         frame.timestamp_query_pool,
+        //         batch_index,
+        //         batch_ref,
+        //         batch_debug_info
+        //     ));
+
+        let batch_cmd_indices: Vec<(usize, usize)> = {
             puffin::profile_scope!("command_recording");
-
-            let mut timestamp_cursor: u32 = 0;
-
-            let mut image_barriers = Vec::new();
-            let mut memory_barrier;
-            for (batch_index, batch) in frame.compiled_graph.iter_batches().enumerate() {
-                puffin::profile_scope!("batch_record", format!("{batch_index}"));
-
-                memory_barrier = vk::MemoryBarrier2::default();
-                image_barriers.clear();
-                for BatchDependency { resource_index: resoure_index, src_access, dst_access } in batch.begin_dependencies.iter().copied() {
-                    let resource = &frame.compiled_graph.resources[resoure_index].resource.as_ref();
-
-                    if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
-                        if src_access.read_write_kind() == graphics::ReadWriteKind::Read &&
-                           dst_access.read_write_kind() == graphics::ReadWriteKind::Read {
-                            continue;
-                        }
-                        memory_barrier.src_stage_mask |= src_access.stage_mask();
-                        if src_access.read_write_kind() == graphics::ReadWriteKind::Write {
-                            memory_barrier.src_access_mask |= src_access.access_mask();
-                        }
-
-                        memory_barrier.dst_stage_mask |= dst_access.stage_mask();
-                        if !memory_barrier.src_access_mask.is_empty() {
-                            memory_barrier.dst_access_mask |= dst_access.access_mask();
-                        }
-                    } else if let graphics::AnyResourceRef::Image(image) = &resource {
-                        image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
+            frame.compiled_graph.batches
+                .par_iter()
+                .zip(frame.graph_debug_info.batch_infos.par_iter_mut())
+                .enumerate()
+                .map_init(
+                    || frame.command_pools[rayon::current_thread_index().unwrap()].lock(),
+                    |command_pool, (batch_index, (batch_data, batch_debug_info))| {
+                        let batch_ref = frame.compiled_graph.get_batch_ref(&batch_data);
+    
+                        let command_index = record_batch(
+                            &self.device,
+                            &frame.compiled_graph,
+                            command_pool,
+                            frame.timestamp_query_pool,
+                            batch_index,
+                            batch_ref,
+                            batch_debug_info
+                        );
+    
+                        (rayon::current_thread_index().unwrap(), command_index)
                     }
-                }
-
-                let cmd_buffer = frame.command_pool.begin_new(&self.device);
-
-                for (semaphore, stage) in batch.wait_semaphores {
-                    cmd_buffer.wait_semaphore(semaphore.handle, *stage);
-                }
-
-                for (semaphore, stage) in batch.signal_semaphores {
-                    cmd_buffer.signal_semaphore(semaphore.handle, *stage);
-                }
-                
-                let recorder = cmd_buffer.record(&self.device, vk::CommandBufferUsageFlags::empty());
-
-                if batch_index == 0 {
-                    recorder.reset_query_pool(frame.timestamp_query_pool, 0..MAX_TIMESTAMP_COUNT);
-                }
-
-                if graphics::is_memory_barrier_not_useless(&memory_barrier) {
-                    recorder.barrier(&[], &image_barriers, &[memory_barrier]);
-                } else {
-                    recorder.barrier(&[], &image_barriers, &[]);
-                }
-                
-                frame.graph_debug_info.batch_infos[batch_index].timestamp_start_index = timestamp_cursor;
-                frame.graph_debug_info.batch_infos[batch_index].timestamp_end_index = timestamp_cursor + 1;
-                timestamp_cursor += 2;
-
-                recorder.write_query(
-                    vk::PipelineStageFlags2::TOP_OF_PIPE,
-                    frame.timestamp_query_pool,
-                    frame.graph_debug_info.batch_infos[batch_index].timestamp_start_index,
-                );
-
-                for pass in batch.passes {
-                    recorder.begin_debug_label(&pass.name, None);
-                    (pass.func)(&recorder, &frame.compiled_graph);
-                    recorder.end_debug_label();
-                }
-
-                recorder.write_query(
-                    vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-                    frame.timestamp_query_pool,
-                    frame.graph_debug_info.batch_infos[batch_index].timestamp_end_index,
-                );
-
-                image_barriers.clear();
-                for BatchDependency { resource_index: resoure_index, src_access, dst_access } in batch.finish_dependencies.iter().copied() {
-                    if let graphics::AnyResourceRef::Image(image) = frame.compiled_graph.resources[resoure_index].resource.as_ref() {
-                        image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
-                    }
-                }
-                recorder.barrier(&[], &image_barriers, &[]);
-            }
-
-            frame.graph_debug_info.timestamp_count = timestamp_cursor;
-        }
+                )
+                .collect()
+        };
 
         {
             puffin::profile_scope!("command_submit");
             self.submit_infos.clear();
-            self.submit_infos.extend(frame.command_pool.buffers().into_iter().map(|cb| cb.submit_info()));
+            self.submit_infos.extend(batch_cmd_indices
+                .iter()
+                .copied()
+                .map(|(pool_index, command_buffer_index)| frame.command_pools[pool_index]
+                    .get_mut()
+                    .buffers()[command_buffer_index]
+                    .submit_info()
+                ));
             self.device.queue_submit(QueueType::Graphics, &self.submit_infos, frame.in_flight_fence);
             self.submit_infos.clear();
         }
@@ -717,6 +688,96 @@ impl Context {
         self.frame_index = (self.frame_index + 1) % FRAME_COUNT;
         self.elapsed_frames += 1;
     }
+}
+
+fn record_batch(
+    device: &graphics::Device,
+    compiled_graph: &graph::CompiledRenderGraph,
+    command_pool: &mut graphics::CommandPool,
+    timestamp_query_pool: vk::QueryPool,
+    batch_index: usize,
+    batch_ref: graph::BatchRef,
+    batch_debug_info: &mut GraphBatchDebugInfo,
+) -> usize {
+    puffin::profile_scope!("batch_record", format!("{batch_index}"));
+
+    let mut memory_barrier = vk::MemoryBarrier2::default();
+    let mut image_barriers = Vec::new();
+
+    for BatchDependency { resource_index: resoure_index, src_access, dst_access } in batch_ref.begin_dependencies.iter().copied() {
+        let resource = compiled_graph.resources[resoure_index].resource.as_ref();
+
+        if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
+            if src_access.read_write_kind() == graphics::ReadWriteKind::Read &&
+                dst_access.read_write_kind() == graphics::ReadWriteKind::Read {
+                continue;
+            }
+            memory_barrier.src_stage_mask |= src_access.stage_mask();
+            if src_access.read_write_kind() == graphics::ReadWriteKind::Write {
+                memory_barrier.src_access_mask |= src_access.access_mask();
+            }
+
+            memory_barrier.dst_stage_mask |= dst_access.stage_mask();
+            if !memory_barrier.src_access_mask.is_empty() {
+                memory_barrier.dst_access_mask |= dst_access.access_mask();
+            }
+        } else if let graphics::AnyResourceRef::Image(image) = &resource {
+            image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
+        }
+    }
+
+    let cmd_buffer = command_pool.begin_new(device);
+
+    for (semaphore, stage) in batch_ref.wait_semaphores {
+        cmd_buffer.wait_semaphore(semaphore.handle, *stage);
+    }
+
+    for (semaphore, stage) in batch_ref.signal_semaphores {
+        cmd_buffer.signal_semaphore(semaphore.handle, *stage);
+    }
+    
+    let recorder = cmd_buffer.record(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+    if batch_index == 0 {
+        recorder.reset_query_pool(timestamp_query_pool, 0..MAX_TIMESTAMP_COUNT);
+    }
+
+    if graphics::is_memory_barrier_not_useless(&memory_barrier) {
+        recorder.barrier(&[], &image_barriers, &[memory_barrier]);
+    } else {
+        recorder.barrier(&[], &image_barriers, &[]);
+    }
+    
+    batch_debug_info.timestamp_start_index = batch_index as u32 * 2;
+    batch_debug_info.timestamp_end_index = batch_index as u32 * 2 + 1;
+
+    recorder.write_query(
+        vk::PipelineStageFlags2::TOP_OF_PIPE,
+        timestamp_query_pool,
+        batch_debug_info.timestamp_start_index,
+    );
+
+    for pass in batch_ref.passes {
+        recorder.begin_debug_label(&pass.name, None);
+        (pass.func)(&recorder, compiled_graph);
+        recorder.end_debug_label();
+    }
+
+    recorder.write_query(
+        vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+        timestamp_query_pool,
+        batch_debug_info.timestamp_end_index,
+    );
+
+    image_barriers.clear();
+    for BatchDependency { resource_index: resoure_index, src_access, dst_access } in batch_ref.finish_dependencies.iter().copied() {
+        if let graphics::AnyResourceRef::Image(image) = compiled_graph.resources[resoure_index].resource.as_ref() {
+            image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
+        }
+    }
+    recorder.barrier(&[], &image_barriers, &[]);
+
+    recorder.command_buffer_index()
 }
 
 impl Context {

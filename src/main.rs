@@ -950,6 +950,7 @@ fn main() {
     let args: Args = onlyargs::parse().expect("failed to parse arguments");
     utils::init_logger(args.file_log);
     puffin::set_scopes_on(true);
+    rayon::ThreadPoolBuilder::new().build_global().expect("failed to create threadpool");
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()

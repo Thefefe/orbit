@@ -10,7 +10,7 @@ pub type GraphResourceIndex = usize;
 pub type GraphPassIndex = arena::Index;
 pub type GraphDependencyIndex = usize;
 
-type PassFn = Box<dyn Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph)>;
+type PassFn = Box<dyn Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + Send + Sync>;
 
 #[derive(Debug)]
 pub enum ResourceSource {
@@ -389,6 +389,16 @@ impl CompiledRenderGraph {
             finish_dependencies: &self.dependencies[batch_data.finish_dependency_range.clone()],
             signal_semaphores: &self.semaphores[batch_data.signal_semaphore_range.clone()],
         })
+    }
+
+    pub fn get_batch_ref(&self, batch_data: &BatchData) -> BatchRef {
+        BatchRef {
+            wait_semaphores: &self.semaphores[batch_data.wait_semaphore_range.clone()], 
+            begin_dependencies: &self.dependencies[batch_data.begin_dependency_range.clone()],
+            passes: &self.passes[batch_data.pass_range.clone()],
+            finish_dependencies: &self.dependencies[batch_data.finish_dependency_range.clone()],
+            signal_semaphores: &self.semaphores[batch_data.signal_semaphore_range.clone()],
+        }
     }
 }
 

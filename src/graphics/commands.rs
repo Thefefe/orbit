@@ -1,18 +1,14 @@
 use ash::vk;
 use std::ffi::CString;
-use std::marker::PhantomData;
 use std::ops::Range;
 
 use crate::graphics;
-use crate::utils::Unsync;
 
 pub struct CommandPool {
     handle: vk::CommandPool,
     name: String,
     command_buffers: Vec<CommandBuffer>,
     used_buffers: usize,
-
-    _phantom_unsync: PhantomData<Unsync>, // only one thread at a time should use a pool
 }
 
 impl CommandPool {
@@ -29,8 +25,6 @@ impl CommandPool {
             name: name.to_owned(),
             command_buffers: Vec::new(),
             used_buffers: 0,
-
-            _phantom_unsync: PhantomData,
         }
     }
 
@@ -70,6 +64,7 @@ impl CommandPool {
             device.set_debug_name(command_buffer, &format!("{}_command_buffer_#{index}", self.name));
 
             self.command_buffers.push(CommandBuffer {
+                index_within_pool: index,
                 command_buffer_info: vk::CommandBufferSubmitInfo {
                     command_buffer,
                     ..Default::default()
@@ -93,10 +88,14 @@ impl CommandPool {
 
 #[derive(Debug)]
 pub struct CommandBuffer {
+    index_within_pool: usize,
     command_buffer_info: vk::CommandBufferSubmitInfo,
     pub wait_infos: Vec<vk::SemaphoreSubmitInfo>,
     pub signal_infos: Vec<vk::SemaphoreSubmitInfo>,
 }
+
+unsafe impl Sync for CommandBuffer {}
+unsafe impl Send for CommandBuffer {}
 
 impl CommandBuffer {
     #[inline(always)]
@@ -597,6 +596,12 @@ impl<'a> CommandRecorder<'a> {
                 target_access,
             ),
         ], &[]);
+    }
+}
+
+impl CommandRecorder<'_> {
+    pub fn command_buffer_index(&self) -> usize {
+        self.command_buffer.index_within_pool
     }
 }
 

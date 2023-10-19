@@ -418,7 +418,7 @@ impl Device {
 
         // MUST be the last in the instance create info pointer chain!!!
         let mut debug_messenger_create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-            .message_severity(Severity::VERBOSE | Severity::WARNING | Severity::ERROR)
+            .message_severity(Severity::VERBOSE | Severity::WARNING | Severity::ERROR | Severity::INFO)
             .message_type(MessageType::GENERAL | MessageType::VALIDATION | MessageType::PERFORMANCE)
             .pfn_user_callback(Some(vk_debug_log_callback));
 
@@ -975,45 +975,6 @@ impl Drop for Device {
     }
 }
 
-unsafe extern "system" fn vk_debug_log_callback(
-    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-    _message_type: vk::DebugUtilsMessageTypeFlagsEXT,
-    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
-    _p_user_data: *mut c_void,
-) -> vk::Bool32 {
-    if std::thread::panicking() {
-        return vk::FALSE;
-    }
-
-    use vk::DebugUtilsMessageSeverityFlagsEXT as Severity;
-    let level = match message_severity {
-        Severity::VERBOSE => log::Level::Trace,
-        Severity::WARNING => log::Level::Warn,
-        Severity::ERROR => log::Level::Error,
-        Severity::INFO => log::Level::Info,
-        _ => log::Level::Debug,
-    };
-
-    // use vk::DebugUtilsMessageTypeFlagsEXT as MessageType;
-    // let target = match message_type {
-    //     MessageType::GENERAL => "vk_general",
-    //     MessageType::PERFORMANCE => "vk_performance",
-    //     MessageType::VALIDATION => "vk_validation",
-    //     _ => "vk_unknown",
-    // };
-    
-    let message_cstr = CStr::from_ptr((*p_callback_data).p_message);
-
-    if let Ok(message) = message_cstr.to_str() {
-        log::log!(target: "vulkan", level, "{}", message);
-    } else {
-        log::error!("failed to parse debug callback message, displaying cstr...");
-        log::log!(target: "vulkan", level, "{:?}", message_cstr);
-    }
-
-    vk::FALSE
-}
-
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DescriptorTableType {
@@ -1219,4 +1180,49 @@ pub fn strip_sampler(index: DescriptorIndex) -> DescriptorIndex {
 pub fn descriptor_index_with_sampler(index: DescriptorIndex, sampler: SamplerKind) -> DescriptorIndex {
     assert!(index >> 24 == 0);
     index | ((sampler as u32) << 24)
+}
+
+unsafe extern "system" fn vk_debug_log_callback(
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    _message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
+    _p_user_data: *mut c_void,
+) -> vk::Bool32 {
+    if std::thread::panicking() {
+        return vk::FALSE;
+    }
+
+    // use vk::DebugUtilsMessageTypeFlagsEXT as MessageType;
+    // let target = match message_type {
+    //     MessageType::GENERAL => "vk_general",
+    //     MessageType::PERFORMANCE => "vk_performance",
+    //     MessageType::VALIDATION => "vk_validation",
+    //     _ => "vk_unknown",
+    // };
+
+    use vk::DebugUtilsMessageSeverityFlagsEXT as Severity;
+    let level = match message_severity {
+        Severity::WARNING => log::Level::Warn,
+        Severity::ERROR => log::Level::Error,
+        Severity::INFO => log::Level::Trace, // INFO has too much clutter
+        Severity::VERBOSE => log::Level::Trace,
+        _ => log::Level::Debug,
+    };
+    
+    let message_cstr = CStr::from_ptr((*p_callback_data).p_message);
+    let Ok(message) = message_cstr.to_str() else {
+        log::error!("failed to parse debug callback message, displaying cstr...");
+        log::log!(target: "vulkan", level, "{:?}", message_cstr);
+        return vk::FALSE;
+    };
+
+    if message.contains("UNASSIGNED-DEBUG-PRINTF") {
+        let message = message.split("|").last().unwrap().trim();
+        log::debug!(target: "vulkan", "shader: {message}");
+        return vk::FALSE;
+    }
+
+    log::log!(target: "vulkan", level, "{}", message);
+
+    vk::FALSE
 }

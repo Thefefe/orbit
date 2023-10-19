@@ -148,9 +148,16 @@ impl Projection {
         }
     }
 
-    pub fn near(&self) -> f32 {
+    pub fn z_near(&self) -> f32 {
         match self {
             Projection::Orthographic { near_clip, .. } | Projection::Perspective { near_clip, .. } => *near_clip,
+        }
+    }
+
+    pub fn z_far(&self) -> f32 {
+        match self {
+            Projection::Orthographic { far_clip, .. } => *far_clip,
+            Projection::Perspective { .. } => f32::INFINITY,
         }
     }
 }
@@ -231,6 +238,30 @@ impl Settings {
     }
 }
 
+pub struct ShadowDebugSettings {
+    pub selected_cascade: usize,
+    pub show_cascade_view_frustum: bool,
+    pub show_cascade_light_frustum: bool,
+    pub show_cascade_light_frustum_planes: bool,
+    pub show_cascade_screen_space_aabb: bool,
+}
+
+impl ShadowDebugSettings {
+    fn edit(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("selected_cascade");
+            ui.add(egui::Slider::new(
+                &mut self.selected_cascade,
+                0..=MAX_SHADOW_CASCADE_COUNT - 1,
+            ));
+        });
+        ui.checkbox(&mut self.show_cascade_view_frustum, "show cascade view frustum");
+        ui.checkbox(&mut self.show_cascade_light_frustum, "show cascade light frustum");
+        ui.checkbox(&mut self.show_cascade_light_frustum_planes, "show cascade light frustum planes");
+        ui.checkbox(&mut self.show_cascade_screen_space_aabb, "show cascade screen space aabb");
+    }
+}
+
 struct App {
     gpu_assets: GpuAssetStore,
     scene: SceneData,
@@ -257,12 +288,9 @@ struct App {
     camera_exposure: f32,
     light_color: Vec3,
     light_intensitiy: f32,
-    selected_cascade: usize,
 
     freeze_camera: bool,
-    show_cascade_view_frustum: bool,
-    show_cascade_light_frustum: bool,
-    show_cascade_light_frustum_planes: bool,
+    shadow_debug_settings: ShadowDebugSettings,
 
     enable_frustum_culling: bool,
     enable_occlusion_culling: bool,
@@ -322,12 +350,11 @@ impl App {
         //     scene.add_light(scene::LightData { position, ..light_data });
         // }
 
-
         // use rand::Rng;
         // let mut rng = rand::thread_rng();
 
         // let prefab = scene.entities.pop().unwrap();
-        // let pos_range = 0.0..=64.0;
+        // let pos_range = 0.0..=32.0;
         // let rot_range = 0.0..=2.0 * PI;
         
         // for _ in 0..2048 * 8 {
@@ -452,12 +479,15 @@ impl App {
             camera_exposure: 1.0,
             light_color: Vec3::splat(1.0),
             light_intensitiy: 10.0,
-            selected_cascade: 0,
 
             freeze_camera: false,
-            show_cascade_view_frustum: false,
-            show_cascade_light_frustum: false,
-            show_cascade_light_frustum_planes: false,
+            shadow_debug_settings: ShadowDebugSettings {
+                selected_cascade: 0,
+                show_cascade_view_frustum: false,
+                show_cascade_light_frustum: false,
+                show_cascade_light_frustum_planes: false,
+                show_cascade_screen_space_aabb: false,
+            },
 
             enable_frustum_culling: true,
             enable_occlusion_culling: true,
@@ -770,12 +800,9 @@ impl App {
             self.light_color,
             self.light_intensitiy,
             &self.frozen_camera,
-            assets,
-            scene,
-            self.selected_cascade,
-            self.show_cascade_view_frustum,
-            self.show_cascade_light_frustum,
-            self.show_cascade_light_frustum_planes,
+            &self.gpu_assets,
+            &self.scene,
+            &self.shadow_debug_settings,
             &mut self.debug_renderer,
         );
 
@@ -809,9 +836,6 @@ impl App {
             .open(&mut self.open_camera_light_editor)
             .show(egui_ctx, |ui| {
                 ui.checkbox(&mut self.freeze_camera, "freeze camera");
-                ui.checkbox(&mut self.show_cascade_view_frustum, "show cascade view frustum");
-                ui.checkbox(&mut self.show_cascade_light_frustum, "show cascade light frustum");
-                ui.checkbox(&mut self.show_cascade_light_frustum_planes, "show cascade light frustum planes");
 
                 ui.horizontal(|ui| {
                     ui.label("camera_exposure");
@@ -829,15 +853,9 @@ impl App {
                     ui.add(egui::DragValue::new(&mut self.light_intensitiy).speed(0.4));
                 });
 
-                ui.horizontal(|ui| {
-                    ui.label("selected_cascade");
-                    ui.add(egui::Slider::new(
-                        &mut self.selected_cascade,
-                        0..=MAX_SHADOW_CASCADE_COUNT - 1,
-                    ));
-                });
+                self.shadow_debug_settings.edit(ui);
 
-                ui.image(directional_light.shadow_maps[self.selected_cascade], egui::Vec2::new(250.0, 250.0),
+                ui.image(directional_light.shadow_maps[self.shadow_debug_settings.selected_cascade], egui::Vec2::new(250.0, 250.0),
                 );
             });
 

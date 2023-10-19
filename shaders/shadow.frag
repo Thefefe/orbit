@@ -13,19 +13,23 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) in VertexOutput {
     vec2 uv;
-    float alpha_cutoff;
-    flat uint texture_index;
+    flat uint material_index;
 } vout;
 
 
 void main() {
-    float alpha = 1.0;
-    
-    if (vout.texture_index != TEXTURE_NONE) {
-        alpha = texture(GetSampledTexture2D(vout.texture_index), vout.uv).a;
-    }
+    if (GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index].alpha_mode == 1) {
+        float alpha_cutoff = GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index].alpha_cutoff;
+        float alpha = GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index].base_color.a;
 
-    if (alpha < vout.alpha_cutoff) {
-        discard;
+        if (alpha <= alpha_cutoff) discard;
+
+        uint texture_index = GetBuffer(MaterialsBuffer, materials_buffer)
+            .materials[vout.material_index]
+            .base_texture_index;
+        if (texture_index != TEXTURE_NONE) {
+            alpha *= texture(GetSampledTexture2D(texture_index), vout.uv).a;
+            if (alpha <= alpha_cutoff) discard;
+        }
     }
 }

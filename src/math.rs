@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use glam::mat2;
+use glam::{mat2, Vec4Swizzles};
 #[allow(unused_imports)]
 use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
 
@@ -63,6 +63,22 @@ pub fn frustum_corners_from_matrix(matrix: &Mat4) -> [Vec4; 8] {
         let v = inv_matrix * v;
         v / v.w
     })
+}
+
+pub fn largest_scale_from_matrix(matrix: &Mat4) -> f32 {
+    let x = Vec3A::from(matrix.x_axis);
+    let y = Vec3A::from(matrix.y_axis);
+    let z = Vec3A::from(matrix.z_axis);
+    let largest_scale_sqr = x.dot(x).max(y.dot(y)).max(z.dot(z));
+    largest_scale_sqr.sqrt()
+}
+
+pub fn transform_sphere(matrix: &Mat4, sphere: Vec4) -> Vec4 {
+    let center = matrix.project_point3(sphere.xyz());
+    let (scale, _, _) = matrix.to_scale_rotation_translation();
+    let largest_scale = scale.max_element();
+    // let radius = sphere.w * largest_scale_from_matrix(matrix);
+    center.extend(largest_scale * sphere.w)
 }
 
 #[inline]

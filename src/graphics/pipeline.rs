@@ -204,7 +204,7 @@ impl MultisampleState {
     pub fn to_vk(self) -> vk::PipelineMultisampleStateCreateInfo {
         vk::PipelineMultisampleStateCreateInfo::builder()
             .rasterization_samples(self.sample_count.to_vk())
-            .sample_shading_enable(self.sample_count != graphics::MultisampleCount::None)
+            // .sample_shading_enable(self.sample_count != graphics::MultisampleCount::None)
             .alpha_to_coverage_enable(self.alpha_to_coverage)
             .build()
     }

@@ -2,21 +2,22 @@ use std::borrow::Cow;
 
 use ash::vk;
 
+use glam::Vec2Swizzles;
 #[allow(unused_imports)]
 use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
 
 use crate::{
     graphics,
     math,
-    assets::AssetGraphData,
-    scene::{SceneGraphData, GpuMeshDrawCommand},
+    assets::{AssetGraphData, GpuAssetStore},
+    scene::{SceneGraphData, GpuMeshDrawCommand, SceneData},
     Camera,
     Projection,
     MAX_DRAW_COUNT,
-    MAX_SHADOW_CASCADE_COUNT,
+    MAX_SHADOW_CASCADE_COUNT, ShadowDebugSettings,
 };
 
-use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, update_multiple_depth_pyramids, AlphaModeFlags}, debug_renderer::DebugRenderer};
+use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, AlphaModeFlags}, debug_renderer::DebugRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -72,12 +73,12 @@ impl Default for ShadowSettings {
             depth_bias_normal_scale: 0.0,
             depth_bias_oriented: 0.02,
             
-            cascade_split_lambda: 0.70,
+            cascade_split_lambda: 0.80,
             max_shadow_distance: 32.0,
             split_blend_ratio: 0.5,
 
             min_filter_radius: 0.6,
-            max_filter_radius: 4.0,
+            max_filter_radius: 2.0,
         }
     }
 }
@@ -146,7 +147,8 @@ impl ShadowSettings {
 
 pub struct ShadowRenderer {
     pub settings: ShadowSettings,
-    shadow_map_depth_pyramids: [DepthPyramid; MAX_SHADOW_CASCADE_COUNT],
+    pub shadow_map_depth_pyramids: [DepthPyramid; MAX_SHADOW_CASCADE_COUNT],
+    pub shadow_map_visiblity_buffers: [graphics::Buffer; MAX_SHADOW_CASCADE_COUNT],
 }
 
 impl ShadowRenderer {
@@ -157,10 +159,25 @@ impl ShadowRenderer {
             format!("shadow_cascade_{i}_depth_pyramid").into(),
             shadow_size
         ));
+
+        let shadow_map_visiblity_buffers = std::array::from_fn(|i| context.create_buffer(
+            format!("shadow_cascade_{i}_visibility_buffer"),
+            &graphics::BufferDesc {
+                size: MAX_DRAW_COUNT.div_ceil(8),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: gpu_allocator::MemoryLocation::GpuOnly,
+            }));
+
+        context.record_and_submit(|cmd| {
+            for visibility_buffer in shadow_map_visiblity_buffers.iter() {
+                cmd.fill_buffer(visibility_buffer, 0, vk::WHOLE_SIZE, 0);
+            }
+        });
         
         Self {
             settings,
             shadow_map_depth_pyramids,
+            shadow_map_visiblity_buffers
         }
     }
 
@@ -174,28 +191,16 @@ impl ShadowRenderer {
     pub fn render_shadow_map(
         &mut self,
         context: &mut graphics::Context,
-        name: Cow<'static, str>,
+        pass_name: Cow<'static, str>,
     
-        resolution: u32,
+        shadow_map: graphics::GraphImageHandle,
         view_projection: Mat4,
         draw_commands: graphics::GraphBufferHandle,
+        clear: bool,
     
         assets: AssetGraphData,
         scene: SceneGraphData,
     ) -> graphics::GraphImageHandle {
-        let pass_name = format!("shadow_pass_for_{name}");
-        let shadow_map = context.create_transient(name, graphics::ImageDesc {
-            ty: graphics::ImageType::Single2D,
-            format: vk::Format::D16_UNORM,
-            dimensions: [resolution, resolution, 1],
-            mip_levels: 1,
-            samples: graphics::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            aspect: vk::ImageAspectFlags::DEPTH,
-            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-            ..Default::default()
-        });
-    
         let settings = self.settings;
     
         let pipeline = context.create_raster_pipeline(
@@ -231,7 +236,7 @@ impl ShadowRenderer {
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
                     .image_view(shadow_map.view)
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .load_op(if clear { vk::AttachmentLoadOp::CLEAR } else { vk::AttachmentLoadOp::LOAD })
                     .clear_value(vk::ClearValue {
                         depth_stencil: vk::ClearDepthStencilValue {
                             depth: 0.0,
@@ -290,15 +295,15 @@ impl ShadowRenderer {
     
         camera: &Camera,
     
-        assets: AssetGraphData,
-        scene: SceneGraphData,
-    
-        selected_cascade: usize,
-        show_cascade_view_frustum: bool,
-        show_cascade_light_frustum: bool,
-        show_cascade_light_frustum_planes: bool,
-        debug_line_renderer: &mut DebugRenderer,
+        assets: &GpuAssetStore,
+        scene: &SceneData,
+        
+        debug_settings: &ShadowDebugSettings,
+        debug_renderer: &mut DebugRenderer,
     ) -> DirectionalLightGraphData {
+        let imported_assets = assets.import_to_graph(context);
+        let imported_scene = scene.import_to_graph(context);
+
         let settings = self.settings;
 
         let light_direction = -direction.mul_vec3(vec3(0.0, 0.0, -1.0));
@@ -384,15 +389,16 @@ impl ShadowRenderer {
             // modifications:
             //  - aligned to view space texel sizes
             //  - offset in the direction of the camera
-            let mut subfrustum_center_modified_light_space =
+            let subfrustum_center_modified_light_space =
                 ((Vec3A::from(subfrustum_center_light_space) + forward_offset) / texel_size_vs).floor() * texel_size_vs;
-            subfrustum_center_modified_light_space.z = -subfrustum_center_modified_light_space.z;
 
-            let mut max_extent = Vec3A::splat(radius);
-            let mut min_extent = -max_extent;
+            let max_extent = Vec3A::splat(radius);
+            let min_extent = -max_extent;
     
-            max_extent += subfrustum_center_modified_light_space;
-            min_extent += subfrustum_center_modified_light_space;
+            // max_extent += subfrustum_center_modified_light_space;
+            // min_extent += subfrustum_center_modified_light_space;
+
+            let light_matrix = Mat4::from_translation((-subfrustum_center_modified_light_space).into()) * light_matrix;
             
             let near_clip = min_extent.z - 80.0;
             let far_clip = max_extent.z;
@@ -403,19 +409,75 @@ impl ShadowRenderer {
                 far_clip,  // reverse z
                 near_clip,
             );
-    
-            if show_cascade_view_frustum && selected_cascade == cascade_index {
-                let subfrustum_corners_w = math::perspective_corners(fov, camera.aspect_ratio, near, far)
-                    .map(|v| view_to_world_matrix * v);
-                debug_line_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
-            }
-            
-            if show_cascade_light_frustum && selected_cascade == cascade_index {
-                let cascade_frustum_corners = math::frustum_corners_from_matrix(&(projection_matrix * light_matrix));
-                debug_line_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
-            }
             
             let light_projection_matrix = projection_matrix * light_matrix;
+    
+            if debug_settings.show_cascade_view_frustum &&
+               debug_settings.selected_cascade == cascade_index
+            {
+                let subfrustum_corners_w = math::perspective_corners(fov, camera.aspect_ratio, near, far)
+                    .map(|v| view_to_world_matrix * v);
+                debug_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
+            }
+            
+            if debug_settings.show_cascade_light_frustum &&
+               debug_settings.selected_cascade == cascade_index
+            {
+                let cascade_frustum_corners = math::frustum_corners_from_matrix(&(projection_matrix * light_matrix));
+                debug_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
+            }
+
+            if debug_settings.show_cascade_screen_space_aabb &&
+               debug_settings.selected_cascade == cascade_index
+            {
+                let width = radius * 2.0;
+                let height = width;
+
+                // parameters used in shader
+                let width_recip_2x  = width.recip() * 2.0;
+                let height_recip_2x = height.recip() * 2.0;
+
+                let projection_to_world_matrix = light_projection_matrix.inverse();
+
+                for entity in scene.entities.iter() {
+                    let Some(model) = entity.model else {
+                        continue;
+                    };
+
+                    let model_matrix = entity.transform.compute_matrix();
+                    for submesh in assets.models[model].submeshes.iter() {
+                        let bounding_sphere = assets.mesh_infos[submesh.mesh_handle].bounding_sphere;
+                        let bounding_sphere_light_space = math::transform_sphere(
+                            &(light_matrix * model_matrix),
+                            bounding_sphere
+                        );
+
+                        let sphere_center = vec2(  
+                            width_recip_2x * bounding_sphere_light_space.x,
+                            height_recip_2x * bounding_sphere_light_space.y,
+                        );
+                        let sphere_box_size =
+                            Vec2::splat(bounding_sphere_light_space.w) * vec2(width_recip_2x, height_recip_2x);
+                        let aabb = sphere_center.xyxy() + sphere_box_size.xyxy() * vec4(-1.0, -1.0, 1.0, 1.0);
+                        let aabb = aabb.clamp(Vec4::splat(-1.0), Vec4::splat(1.0));
+                        
+                        let closest_z = bounding_sphere_light_space.z + bounding_sphere_light_space.w;
+                        let r = 1.0 / (far_clip - near_clip);
+                        let depth = closest_z * r + (r * far_clip);
+                        
+                        let corners = [
+                            vec2(aabb.x, aabb.y),
+                            vec2(aabb.x, aabb.w),
+                            vec2(aabb.z, aabb.w),
+                            vec2(aabb.z, aabb.y),
+                        ].map(|c| {
+                            let v = projection_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
+                            v / v.w
+                        });
+                        debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                    }
+                }
+            }
             
             let light_frustum_planes = math::frustum_planes_from_matrix(&Mat4::orthographic_rh(
                     min_extent.x, max_extent.x,
@@ -446,38 +508,98 @@ impl ShadowRenderer {
     
             let culling_planes = &culling_planes[..culling_plane_count];
     
-            if show_cascade_light_frustum_planes && selected_cascade == cascade_index {
+            if debug_settings.show_cascade_light_frustum_planes &&
+               debug_settings.selected_cascade == cascade_index {
                 for (i, light_space_plane) in culling_planes.iter().copied().enumerate() {
                     let world_space_plane = math::transform_plane(&light_to_world_matrix, light_space_plane);
                     if i > 5 {
-                        debug_line_renderer.draw_plane(world_space_plane, 2.0, vec4(0.0, 0.0, 1.0, 1.0));
+                        debug_renderer.draw_plane(world_space_plane, 2.0, vec4(0.0, 0.0, 1.0, 1.0));
                     } else {
-                        debug_line_renderer.draw_plane(world_space_plane, 2.0, vec4(1.0, 1.0, 0.0, 1.0));
+                        debug_renderer.draw_plane(world_space_plane, 2.0, vec4(1.0, 1.0, 0.0, 1.0));
                     }
                 }
             }
     
-            let draw_commands_name = format!("{name}_{cascade_index}_draw_commands").into();
-            let shadow_map_draw_commands = create_draw_commands(context, draw_commands_name, assets, scene,
+            let visibility_buffer = context.import(&self.shadow_map_visiblity_buffers[cascade_index]);
+
+            let draw_commands = create_draw_commands(
+                context,
+                format!("first_pass_{name}_{cascade_index}_draw_commands").into(),
+                imported_assets, imported_scene,
                 &CullInfo {
                     view_matrix: light_matrix,
                     view_space_cull_planes: culling_planes,
-                    occlusion_culling: OcclusionCullInfo::None,
+                    occlusion_culling: OcclusionCullInfo::VisibilityRead { visibility_buffer },
                     alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+                    debug_print: false,
                 },
                 None,
             );
+
+            let shadow_map_name = format!("{name}_{cascade_index}");
+
+            let shadow_map = context.create_transient(shadow_map_name.clone(), graphics::ImageDesc {
+                ty: graphics::ImageType::Single2D,
+                format: vk::Format::D16_UNORM,
+                dimensions: [settings.shadow_resolution, settings.shadow_resolution, 1],
+                mip_levels: 1,
+                samples: graphics::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::DEPTH,
+                subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+                ..Default::default()
+            });
             
-            let shadow_map = self.render_shadow_map(
+            self.render_shadow_map(
                 context,
-                format!("{name}_{cascade_index}").into(),
-                settings.shadow_resolution,
+                format!("first_shadow_pass_for_{shadow_map_name}").into(),
+                shadow_map,
                 light_projection_matrix,
-                shadow_map_draw_commands,
-                assets,
-                scene,
+                draw_commands,
+                true,
+                imported_assets,
+                imported_scene,
             );
-            
+
+            self.shadow_map_depth_pyramids[cascade_index].update(context, shadow_map);
+            let depth_pyramid = self.shadow_map_depth_pyramids[cascade_index].get_current(context);
+
+            let draw_commands = create_draw_commands(
+                context,
+                format!("second_pass_{shadow_map_name}_draw_commands").into(),
+                imported_assets, imported_scene,
+                &CullInfo {
+                    view_matrix: light_matrix,
+                    view_space_cull_planes: culling_planes,
+                    occlusion_culling: OcclusionCullInfo::VisibilityWrite {
+                        visibility_buffer,
+                        depth_pyramid,
+                        // noskip_alphamode: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+                        noskip_alphamode: AlphaModeFlags::empty(),
+                        projection: Projection::Orthographic {
+                            half_width: radius,
+                            near_clip,
+                            far_clip,
+                        },
+                        aspect_ratio: 1.0
+                    },
+                    alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+                    debug_print: debug_settings.selected_cascade == cascade_index,
+                },
+                None,
+            );
+                
+            self.render_shadow_map(
+                context,
+                format!("second_shadow_pass_for_{shadow_map_name}").into(),
+                shadow_map,
+                light_projection_matrix,
+                draw_commands,
+                false,
+                imported_assets,
+                imported_scene,
+            );
+
             directional_light_data.projection_matrices[cascade_index] = light_projection_matrix;
             directional_light_data.shadow_maps[cascade_index] = context
                 .get_resource_descriptor_index(shadow_map)
@@ -485,10 +607,9 @@ impl ShadowRenderer {
             shadow_maps[cascade_index] = shadow_map;
         }
 
-        let shadow_map_depth_pyramids: [_; MAX_SHADOW_CASCADE_COUNT] =
-            std::array::from_fn(|i| self.shadow_map_depth_pyramids[i].get_current(context));
-
-        update_multiple_depth_pyramids(context, shadow_map_depth_pyramids, shadow_maps);
+        // let shadow_map_depth_pyramids: [_; MAX_SHADOW_CASCADE_COUNT] =
+        //     std::array::from_fn(|i| self.shadow_map_depth_pyramids[i].get_current(context));
+        // update_multiple_depth_pyramids(context, shadow_map_depth_pyramids, shadow_maps);
 
         for depth_pyramid in self.shadow_map_depth_pyramids.iter_mut() {
             depth_pyramid.usable = true;

@@ -69,7 +69,7 @@ pub fn init_logger(log_to_file: bool) {
     };
 
     env_logger::builder()
-        .parse_filters("panic,orbit,vulkan=warn")
+        .parse_filters("panic,orbit,vulkan=debug")
         .target(target)
         .init();
     log_panics::init();

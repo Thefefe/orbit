@@ -4,21 +4,21 @@ use ash::vk;
 use glam::{Mat4, Vec4};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, assets::{AssetGraphData, AlphaMode}, scene::{SceneGraphData, GpuMeshDrawCommand}, MAX_DRAW_COUNT};
+use crate::{graphics, assets::{AssetGraphData, AlphaMode}, scene::{SceneGraphData, GpuMeshDrawCommand}, MAX_DRAW_COUNT, Projection};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum OcclusionCullInfo {
     #[default]
     None,
-    FirstPass {
+    VisibilityRead {
         visibility_buffer: graphics::GraphBufferHandle,
     },
-    SecondPass {
+    VisibilityWrite {
         visibility_buffer: graphics::GraphBufferHandle,
         depth_pyramid: graphics::GraphImageHandle,
-        p00: f32,
-        p11: f32,
-        z_near: f32,
+        noskip_alphamode: AlphaModeFlags,
+        projection: Projection,
+        aspect_ratio: f32,
     },
 }
 
@@ -26,18 +26,18 @@ impl OcclusionCullInfo {
     fn visibility_buffer(self) -> Option<graphics::GraphBufferHandle> {
         match self {
             OcclusionCullInfo::None                                 => None,
-            OcclusionCullInfo::FirstPass { visibility_buffer, .. }  => Some(visibility_buffer),
-            OcclusionCullInfo::SecondPass { visibility_buffer, .. } => Some(visibility_buffer),
+            OcclusionCullInfo::VisibilityRead { visibility_buffer, .. }  => Some(visibility_buffer),
+            OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => Some(visibility_buffer),
         }
     }
 
     fn visibility_buffer_dependency(self) -> Option<(graphics::GraphBufferHandle, graphics::AccessKind)> {
         match self {
             OcclusionCullInfo::None => None,
-            OcclusionCullInfo::FirstPass { visibility_buffer } => Some(
+            OcclusionCullInfo::VisibilityRead { visibility_buffer } => Some(
                 (visibility_buffer, graphics::AccessKind::ComputeShaderRead)
             ),
-            OcclusionCullInfo::SecondPass { visibility_buffer, .. } => Some(
+            OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => Some(
                 (visibility_buffer, graphics::AccessKind::ComputeShaderWrite)
             ),
         }
@@ -46,32 +46,32 @@ impl OcclusionCullInfo {
     fn write_visibility_buffer(self) -> bool {
         match self {
             OcclusionCullInfo::None              => false,
-            OcclusionCullInfo::FirstPass { .. }  => false,
-            OcclusionCullInfo::SecondPass { .. } => true,
+            OcclusionCullInfo::VisibilityRead { .. }  => false,
+            OcclusionCullInfo::VisibilityWrite { .. } => true,
         }
     }
 
     fn depth_pyramid(self) -> Option<graphics::GraphImageHandle> {
         match self {
             OcclusionCullInfo::None                             => None,
-            OcclusionCullInfo::FirstPass { .. }                 => None,
-            OcclusionCullInfo::SecondPass { depth_pyramid, .. } => Some(depth_pyramid),
+            OcclusionCullInfo::VisibilityRead { .. }                 => None,
+            OcclusionCullInfo::VisibilityWrite { depth_pyramid, .. } => Some(depth_pyramid),
         }
     }
 
     fn depth_pyramid_dependency(self) -> Option<(graphics::GraphImageHandle, graphics::AccessKind)> {
         match self {
             OcclusionCullInfo::None                             => None,
-            OcclusionCullInfo::FirstPass { .. }                 => None,
-            OcclusionCullInfo::SecondPass { depth_pyramid, .. } => Some((depth_pyramid, graphics::AccessKind::ComputeShaderReadGeneral)),
+            OcclusionCullInfo::VisibilityRead { .. }                 => None,
+            OcclusionCullInfo::VisibilityWrite { depth_pyramid, .. } => Some((depth_pyramid, graphics::AccessKind::ComputeShaderReadGeneral)),
         }
     }
 
     fn pass_index(&self) -> u32 {
         match self {
             OcclusionCullInfo::None              => 0,
-            OcclusionCullInfo::FirstPass { .. }  => 1,
-            OcclusionCullInfo::SecondPass { .. } => 2,
+            OcclusionCullInfo::VisibilityRead { .. }  => 1,
+            OcclusionCullInfo::VisibilityWrite { .. } => 2,
         }
     }
 }
@@ -86,6 +86,7 @@ pub struct CullInfo<'a> {
     pub view_space_cull_planes: &'a [Vec4],
     pub occlusion_culling: OcclusionCullInfo,
     pub alpha_mode_filter: AlphaModeFlags,
+    pub debug_print: bool,
 }
 
 const MAX_CULL_PLANES: usize = 12;
@@ -98,13 +99,18 @@ pub struct GpuCullInfo {
     cull_plane_count: u32,
 
     alpha_mode_flags: u32,
+    noskip_alpha_mode: u32,
 
     occlusion_pass: u32,
     visibility_buffer: u32,
     depth_pyramid: u32,
-    p00: f32,
-    p11: f32,
+    
+    projection_type: u32,
+    p00_or_width_recip_x2: f32,
+    p11_or_height_recipx2: f32,
     z_near: f32,
+    z_far: f32,
+    _padding: u32,
 }
 
 pub fn create_draw_commands(
@@ -168,10 +174,32 @@ pub fn create_draw_commands(
         }
     }
 
-    if let OcclusionCullInfo::SecondPass { p00, p11, z_near, ..  } = cull_info.occlusion_culling {
-        gpu_cull_info_data.p00    = p00;
-        gpu_cull_info_data.p11    = p11;
-        gpu_cull_info_data.z_near = z_near;
+    if let OcclusionCullInfo::VisibilityWrite {
+        projection,
+        aspect_ratio,
+        noskip_alphamode,
+        ..
+    } = cull_info.occlusion_culling {
+        gpu_cull_info_data.noskip_alpha_mode = noskip_alphamode.0;
+
+        match projection {
+            Projection::Perspective { fov, near_clip } => {
+                let f = 1.0 / f32::tan(0.5 * fov);
+                gpu_cull_info_data.projection_type     = 0;
+                gpu_cull_info_data.p00_or_width_recip_x2  = f / aspect_ratio;
+                gpu_cull_info_data.p11_or_height_recipx2 = f;
+                gpu_cull_info_data.z_near              = near_clip;
+            },
+            Projection::Orthographic { half_width, near_clip, far_clip } => {
+                let width = half_width * 2.0;
+                let height = width * aspect_ratio.recip();
+                gpu_cull_info_data.projection_type     = 1;
+                gpu_cull_info_data.p00_or_width_recip_x2 = width.recip() * 2.0;
+                gpu_cull_info_data.p11_or_height_recipx2 = height.recip() * 2.0;
+                gpu_cull_info_data.z_near                = near_clip;
+                gpu_cull_info_data.z_far                 = far_clip;
+            },
+        }
     }
 
     let cull_data = context.transient_storage_data(
@@ -183,7 +211,9 @@ pub fn create_draw_commands(
         .render(move |cmd, graph| {
             let draw_commands = graph.get_buffer(draw_commands);
             cmd.fill_buffer(draw_commands, 0, 4, 0);
-        }); 
+        });
+
+    let debug_print: u32 = if cull_info.debug_print { 1 } else { 0 };
 
     context.add_pass(pass_name)
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
@@ -206,7 +236,8 @@ pub fn create_draw_commands(
                 .buffer(&mesh_infos)
                 .buffer(&draw_commands)
                 .buffer(&entity_buffer)
-                .buffer(&cull_data);
+                .buffer(&cull_data)
+                .uint(debug_print);
 
             cmd.dispatch([scene.submesh_count as u32 / 256 + 1, 1, 1]);
         });

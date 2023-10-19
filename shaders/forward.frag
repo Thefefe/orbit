@@ -108,8 +108,8 @@ float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers
     return clamp(80.0f * penumbra, 0.0, 1.0);
 }
 
-#define PENUMBRA_SAMPLE_COUNT 8
-#define SHADOW_SAMPLE_COUNT 64
+#define PENUMBRA_SAMPLE_COUNT 16
+#define SHADOW_SAMPLE_COUNT 16
 
 vec2 vogel_disk_sample(int sampleIndex, int samplesCount, float phi) {
     float GoldenAngle = 2.4;
@@ -388,6 +388,13 @@ const vec3 CASCADE_COLORS[6] = vec3[](
     vec3(1.0, 0.25, 1.0)
 );
 
+// used for debugging
+float debug_light(vec3 normal, vec3 light_dir, float shadow) {
+    float ambient = 0.3;
+    float diffuse = max(dot(normal, light_dir), 0.0) * shadow;
+    return ambient + diffuse;
+}
+
 #define MIP_SCALE 0.25
 
 void main() {
@@ -597,7 +604,10 @@ void main() {
             if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
                 cascade_color = CASCADE_COLORS[cascade_index];
             
-            out_color = vec4(cascade_color * base_color.rgb * shadow, 1.0);
+            vec3 light_direction = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
+
+            // out_color = vec4(cascade_color * base_color.rgb * shadow, 1.0);
+            out_color.xyz = cascade_color * debug_light(vout.normal, light_direction, shadow);
         } break;
         case 2:
             out_color = vec4(normal * 0.5 + 0.5, 1.0);

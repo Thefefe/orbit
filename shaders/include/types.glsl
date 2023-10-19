@@ -100,14 +100,20 @@ struct CullInfo {
     mat4 view_matrix;
     vec4 cull_planes[12];
     uint cull_plane_count;
+
     uint alpha_mode_flag;
+    uint noskip_alphamode;
 
     uint  occlusion_pass;
     uint  visibility_buffer;
     uint  depth_pyramid;
-    float p00;
-    float p11;
+
+    uint  projection_type;
+    float p00_or_width_recipx2;
+    float p11_or_height_recipx2;
     float z_near;
+    float z_far;
+    uint _padding;
 };
 
 struct LightData {

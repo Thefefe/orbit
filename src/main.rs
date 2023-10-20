@@ -350,27 +350,27 @@ impl App {
         //     scene.add_light(scene::LightData { position, ..light_data });
         // }
 
-        // use rand::Rng;
-        // let mut rng = rand::thread_rng();
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
 
-        // let prefab = scene.entities.pop().unwrap();
-        // let pos_range = 0.0..=32.0;
-        // let rot_range = 0.0..=2.0 * PI;
+        let prefab = scene.entities.pop().unwrap();
+        let pos_range = 0.0..=64.0;
+        let rot_range = 0.0..=2.0 * PI;
         
-        // for _ in 0..2048 * 8 {
-        //     let mut entity = prefab.clone();
+        for _ in 0..2048 * 8 {
+            let mut entity = prefab.clone();
             
-        //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));
-        //     entity.transform.orientation = Quat::from_euler(
-        //         glam::EulerRot::YXZ,
-        //         rng.gen_range(rot_range.clone()),
-        //         rng.gen_range(rot_range.clone()),
-        //         rng.gen_range(rot_range.clone()),
-        //     );
+            entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));
+            entity.transform.orientation = Quat::from_euler(
+                glam::EulerRot::YXZ,
+                rng.gen_range(rot_range.clone()),
+                rng.gen_range(rot_range.clone()),
+                rng.gen_range(rot_range.clone()),
+            );
 
 
-        //     scene.add_entity(entity);
-        // }
+            scene.add_entity(entity);
+        }
         
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);

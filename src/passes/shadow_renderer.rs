@@ -197,28 +197,34 @@ impl ShadowRenderer {
         view_projection: Mat4,
         draw_commands: graphics::GraphBufferHandle,
         clear: bool,
+        fragment_shader: bool,
     
         assets: AssetGraphData,
         scene: SceneGraphData,
     ) -> graphics::GraphImageHandle {
         let settings = self.settings;
     
+        let mut pipeline_desc = graphics::RasterPipelineDesc::builder()
+            .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
+            .rasterizer(graphics::RasterizerDesc {
+                depth_clamp: true,
+                ..Default::default()
+            })
+            .depth_bias_dynamic()
+            .depth_state(Some(graphics::DepthState {
+                format: vk::Format::D16_UNORM,
+                test: graphics::PipelineState::Static(true),
+                write: true,
+                compare: vk::CompareOp::GREATER,
+            }));
+
+        if fragment_shader {
+            pipeline_desc = pipeline_desc.fragment_shader(graphics::ShaderSource::spv("shaders/shadow.frag.spv"));
+        }
+
         let pipeline = context.create_raster_pipeline(
-            "shadowmap_renderer_pipeline",
-            &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/shadow.frag.spv"))
-                .rasterizer(graphics::RasterizerDesc {
-                    depth_clamp: true,
-                    ..Default::default()
-                })
-                .depth_bias_dynamic()
-                .depth_state(Some(graphics::DepthState {
-                    format: vk::Format::D16_UNORM,
-                    test: graphics::PipelineState::Static(true),
-                    write: true,
-                    compare: vk::CompareOp::GREATER,
-                }))
+            if fragment_shader { "shadow_pipeline" } else { "shadow_opaque_only_pipeline" },
+            &pipeline_desc
         );
     
         context.add_pass(pass_name)
@@ -530,7 +536,7 @@ impl ShadowRenderer {
                     view_matrix: light_matrix,
                     view_space_cull_planes: culling_planes,
                     occlusion_culling: OcclusionCullInfo::VisibilityRead { visibility_buffer },
-                    alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+                    alpha_mode_filter: AlphaModeFlags::OPAQUE,
                     debug_print: false,
                 },
                 None,
@@ -557,6 +563,7 @@ impl ShadowRenderer {
                 light_projection_matrix,
                 draw_commands,
                 true,
+                false,
                 imported_assets,
                 imported_scene,
             );
@@ -574,8 +581,8 @@ impl ShadowRenderer {
                     occlusion_culling: OcclusionCullInfo::VisibilityWrite {
                         visibility_buffer,
                         depth_pyramid,
-                        // noskip_alphamode: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
-                        noskip_alphamode: AlphaModeFlags::empty(),
+                        noskip_alphamode: AlphaModeFlags::MASKED,
+                        // noskip_alphamode: AlphaModeFlags::empty(),
                         projection: Projection::Orthographic {
                             half_width: radius,
                             near_clip,
@@ -596,6 +603,7 @@ impl ShadowRenderer {
                 light_projection_matrix,
                 draw_commands,
                 false,
+                true,
                 imported_assets,
                 imported_scene,
             );

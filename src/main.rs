@@ -350,27 +350,27 @@ impl App {
         //     scene.add_light(scene::LightData { position, ..light_data });
         // }
 
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+        // use rand::Rng;
+        // let mut rng = rand::thread_rng();
 
-        let prefab = scene.entities.pop().unwrap();
-        let pos_range = 0.0..=64.0;
-        let rot_range = 0.0..=2.0 * PI;
+        // let prefab = scene.entities.pop().unwrap();
+        // let pos_range = 0.0..=32.0;
+        // let rot_range = 0.0..=2.0 * PI;
         
-        for _ in 0..2048 * 8 {
-            let mut entity = prefab.clone();
+        // for _ in 0..2048 * 8 {
+        //     let mut entity = prefab.clone();
             
-            entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));
-            entity.transform.orientation = Quat::from_euler(
-                glam::EulerRot::YXZ,
-                rng.gen_range(rot_range.clone()),
-                rng.gen_range(rot_range.clone()),
-                rng.gen_range(rot_range.clone()),
-            );
+        //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));
+        //     entity.transform.orientation = Quat::from_euler(
+        //         glam::EulerRot::YXZ,
+        //         rng.gen_range(rot_range.clone()),
+        //         rng.gen_range(rot_range.clone()),
+        //         rng.gen_range(rot_range.clone()),
+        //     );
 
 
-            scene.add_entity(entity);
-        }
+        //     scene.add_entity(entity);
+        // }
         
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
@@ -793,6 +793,33 @@ impl App {
         let depth_target = context.import(&self.main_depth_image);
         let depth_resolve = self.main_depth_resolve_image.as_ref().map(|i| context.import(i));
 
+        let target_attachments =TargetAttachments {
+            color_target,
+            color_resolve: None,
+            depth_target,
+            depth_resolve,
+        };
+
+        self.forward_renderer.normal_depth_prepass(
+            context,
+            &self.settings,
+            
+            assets,
+            scene,
+
+            self.freeze_camera,
+        
+            self.enable_frustum_culling,
+            self.enable_occlusion_culling,
+
+            &target_attachments,
+            
+            &self.camera,
+            &self.frozen_camera,
+        );
+
+        let camera_depth_pyramid = self.forward_renderer.depth_pyramid.get_current(context);
+
         let directional_light = self.shadow_renderer.render_directional_light(
             context,
             "sun".into(),
@@ -800,6 +827,7 @@ impl App {
             self.light_color,
             self.light_intensitiy,
             &self.frozen_camera,
+            camera_depth_pyramid,
             &self.gpu_assets,
             &self.scene,
             &self.shadow_debug_settings,
@@ -813,19 +841,13 @@ impl App {
             assets,
             scene,
 
-            self.freeze_camera,
             self.enable_frustum_culling,
             self.enable_occlusion_culling,
             
             self.environment_map.as_ref(),
             directional_light,
 
-            &TargetAttachments {
-                color_target,
-                color_resolve: None,
-                depth_target,
-                depth_resolve,
-            },
+            &target_attachments,
             
             &self.camera,
             &self.frozen_camera,

@@ -98,6 +98,7 @@ struct MeshInfo {
 
 struct CullInfo {
     mat4 view_matrix;
+    mat4 reprojection_matrix;
     vec4 cull_planes[12];
     uint cull_plane_count;
 
@@ -107,13 +108,13 @@ struct CullInfo {
     uint  occlusion_pass;
     uint  visibility_buffer;
     uint  depth_pyramid;
+    uint  secondary_depth_pyramid;
 
     uint  projection_type;
     float p00_or_width_recipx2;
     float p11_or_height_recipx2;
     float z_near;
     float z_far;
-    uint _padding;
 };
 
 struct LightData {

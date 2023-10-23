@@ -5,7 +5,7 @@
 
 #extension GL_EXT_debug_printf : enable
 
-// #define USE_SUBGROUP_OPS
+#define USE_SUBGROUP_OPS
 
 #ifdef USE_SUBGROUP_OPS
 	#extension GL_KHR_shader_subgroup_vote : require
@@ -148,65 +148,98 @@ void main() {
 		}
 
 		// occlusion cull
-		if (cull_info.occlusion_pass == 2 && visible) {
+		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 3) && visible) {
+			bool occlusion_cull = true;
+			vec4 aabb;
+			float sphere_closest_depth;
+			float sampled_depth;
+
 			switch (cull_info.projection_type) {
 				case 0: { // perspective
 					bounding_sphere_view_space.z = -bounding_sphere_view_space.z;
-					if (bounding_sphere_view_space.z < bounding_sphere_view_space.w + cull_info.z_near) break;
-					vec4 aabb = project_sphere(
+					occlusion_cull = bounding_sphere_view_space.z >= bounding_sphere_view_space.w + cull_info.z_near;
+					aabb = project_sphere(
 						bounding_sphere_view_space,
 						cull_info.z_near,
 						cull_info.p00_or_width_recipx2,
 						cull_info.p11_or_height_recipx2
 					);
-					float depth_sphere = cull_info.z_near / (bounding_sphere_view_space.z - bounding_sphere_view_space.w);
-
-					vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.depth_pyramid), 0);
-					float width = (aabb.z - aabb.x) * pyramid_size.x;
-					float height = (aabb.w - aabb.y) * pyramid_size.y;
-
-					float depth = textureLod(
-						sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
-						(aabb.xy + aabb.zw) * 0.5,
-						log2(max(width, height))
-					).x;
-
-					visible = depth_sphere >= depth;
+					sphere_closest_depth = cull_info.z_near / (bounding_sphere_view_space.z - bounding_sphere_view_space.w);
 				} break;
 				case 1: {
 					vec2 size_recip = vec2(cull_info.p00_or_width_recipx2);
 					vec2 sphere_center = bounding_sphere_view_space.xy * size_recip;
 					vec2 sphere_box_size = size_recip * bounding_sphere_view_space.w;
-					vec4 aabb = sphere_center.xyxy + sphere_box_size.xyxy * vec4(-1.0, -1.0, 1.0, 1.0);
+					aabb = sphere_center.xyxy + sphere_box_size.xyxy * vec4(-1.0, -1.0, 1.0, 1.0);
 					aabb = clamp(aabb, -1.0, 1.0) * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f);
 
                     float closest_z = bounding_sphere_view_space.z + bounding_sphere_view_space.w;
                     float r = 1.0 / (cull_info.z_far - cull_info.z_near);
-                    float depth_sphere = closest_z * r + (r * cull_info.z_far);
-					
-					if (debug_print == 1) {
-						// debugPrintfEXT("aabb = %v4f\n", aabb);
-						// debugPrintfEXT("depth_sphere = %f\n", depth_sphere);
-					}
-
-					vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.depth_pyramid), 0);
-					float width = (aabb.z - aabb.x) * pyramid_size.x;
-					float height = (aabb.w - aabb.y) * pyramid_size.y;
-
-					float depth = textureLod(
-						sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
-						(aabb.xy + aabb.zw) * 0.5,
-						log2(max(width, height))
-					).x;
-					visible = depth_sphere >= depth;
+                    sphere_closest_depth = closest_z * r + (r * cull_info.z_far);
 				} break;
+			}
+
+			if (occlusion_cull) {
+				vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.depth_pyramid), 0);
+				float width = (aabb.z - aabb.x) * pyramid_size.x;
+				float height = (aabb.w - aabb.y) * pyramid_size.y;
+
+				sampled_depth = textureLod(
+					sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
+					(aabb.xy + aabb.zw) * 0.5,
+					log2(max(width, height))
+				).x;
+				visible = sphere_closest_depth >= sampled_depth;
+			}
+
+			// shadow volume culling
+			if (cull_info.occlusion_pass == 3 && occlusion_cull && visible) {
+				vec4 reprojected_aabb;
+				float closest_reprojected_depth;
+
+				for (uint i = 0; i <= 1; i++) {
+					for (uint j = 0; j <= 1; j++) {
+						for (uint k = 0; k <= 1; k++) {
+							vec3 point = mix(
+								vec3(aabb.xy, sphere_closest_depth),
+								vec3(aabb.zw, sampled_depth),
+								vec3(i, j, k)
+							);
+							vec3 projected_point = (cull_info.reprojection_matrix * vec4(point, 1.0)).xyz;
+							
+							if (i == 0 && j == 0 && j == 0) {
+								reprojected_aabb = projected_point.xyxy;
+								closest_reprojected_depth = projected_point.z;
+							}
+
+							reprojected_aabb.xy = min(reprojected_aabb.xy, projected_point.xy);
+							reprojected_aabb.zw = max(reprojected_aabb.zw, projected_point.xy);
+							closest_reprojected_depth = min(closest_reprojected_depth, projected_point.z);
+						}
+					}
+				}
+
+				reprojected_aabb = clamp(reprojected_aabb, -1.0, 1.0) * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f);
+
+				vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.secondary_depth_pyramid), 0);
+				float width = (aabb.z - aabb.x) * pyramid_size.x;
+				float height = (aabb.w - aabb.y) * pyramid_size.y;
+
+				float sampled_depth = textureLod(
+					sampler2D(GetTexture2D(cull_info.secondary_depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
+					(aabb.xy + aabb.zw) * 0.5,
+					log2(max(width, height))
+				).x;
+				visible = closest_reprojected_depth >= sampled_depth;
 			}
 		}
 
 		bool should_draw = visible && bool((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag);
 
 		// second occlusion pass: only proccess if submesh wasn't visible last frame
-		if (cull_info.occlusion_pass == 2 && !bool((1 << submesh.alpha_mode) & cull_info.noskip_alphamode)) {
+		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 3) &&
+		    !bool((1 << submesh.alpha_mode) & cull_info.noskip_alphamode)
+		) {
 			should_draw = visible && !visible_in_buffer;
 		}
 
@@ -226,7 +259,7 @@ void main() {
 		}
 
 		// update visibility buffer, only on second occlusion pass
-		if (cull_info.occlusion_pass == 2) {
+		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 3)) {
 #ifdef USE_SUBGROUP_OPS
 			uvec4 visiblity_bitset = subgroupBallot(visible);
 			

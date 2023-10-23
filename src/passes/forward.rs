@@ -69,6 +69,8 @@ pub struct ForwardRenderer {
     visibility_buffer: graphics::Buffer,
     is_visibility_buffer_initialized: bool,
     pub depth_pyramid: DepthPyramid,
+
+    normal_buffer: graphics::GraphImageHandle,
 }
 
 impl ForwardRenderer {
@@ -157,10 +159,11 @@ impl ForwardRenderer {
             visibility_buffer,
             is_visibility_buffer_initialized: false,
             depth_pyramid,
+            normal_buffer: graphics::GraphImageHandle::uninit(),
         }
     }
 
-    pub fn render(
+    pub fn normal_depth_prepass(
         &mut self,
         context: &mut graphics::Context,
         settings: &Settings,
@@ -172,14 +175,10 @@ impl ForwardRenderer {
         frustum_culling: bool,
         occlusion_culling: bool,
 
-        environment_map: Option<&EnvironmentMap>,
-        directional_light: DirectionalLightGraphData,
-
         target_attachments: &TargetAttachments,
         
         camera: &Camera,
         frozen_camera: &Camera,
-        render_mode: RenderMode,
     ) {
         puffin::profile_function!();
 
@@ -191,21 +190,6 @@ impl ForwardRenderer {
         let camera_view_matrix = camera.transform.compute_matrix().inverse();
         let camera_projection_matrix = camera.projection.compute_matrix(aspect_ratio);
         let camera_view_projection_matrix = camera_projection_matrix * camera_view_matrix;
-        let skybox_view_projection_matrix =
-            camera.projection.compute_matrix(aspect_ratio) *
-            Mat4::from_quat(camera.transform.orientation).inverse();
-
-        let frame_data = context.transient_storage_data("per_frame_data", bytemuck::bytes_of(&ForwardFrameData {
-            view_projection: camera_view_projection_matrix,
-            view: camera_view_matrix,
-            view_pos: camera.transform.position,
-            render_mode: render_mode as u32,
-        }));
-
-        let environment_map = environment_map.map(|e| e.import_to_graph(context));
-
-        let brdf_integration_map = context.import(&self.brdf_integration_map);
-        let jitter_texture = context.import(&self.jitter_offset_texture);
 
         let visibility_buffer = context.import_with(
             "visibility_buffer",
@@ -229,7 +213,7 @@ impl ForwardRenderer {
         let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
             .map(math::normalize_plane);
 
-        let draw_commands = create_draw_commands(context, "forward_draw_commands".into(), assets, scene,
+        let draw_commands = create_draw_commands(context, "first_forward_depth_prepass_commands".into(), assets, scene,
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
@@ -382,7 +366,7 @@ impl ForwardRenderer {
 
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
-        let draw_commands = create_draw_commands(context, "forward_draw_commands".into(), assets, scene,
+        let draw_commands = create_draw_commands(context, "second_forward_depth_prepass_commands".into(), assets, scene,
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
@@ -393,6 +377,7 @@ impl ForwardRenderer {
                     noskip_alphamode: AlphaModeFlags::empty(),
                     aspect_ratio: frozen_camera.aspect_ratio,
                     projection: frozen_camera.projection,
+                    shadow_volume_culling: None,
                 }).unwrap_or_default(),
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                 debug_print: false,
@@ -485,8 +470,72 @@ impl ForwardRenderer {
                 cmd.end_rendering();
             });
         
-        // select non-multisampled
-        let _normal_buffer = normal_resolve_buffer.unwrap_or(normal_buffer);
+        self.normal_buffer = normal_resolve_buffer.unwrap_or(normal_buffer);
+    }
+
+    pub fn render(
+        &mut self,
+        context: &mut graphics::Context,
+        settings: &Settings,
+        
+        assets: AssetGraphData,
+        scene: SceneGraphData,
+
+        frustum_culling: bool,
+        occlusion_culling: bool,
+
+        environment_map: Option<&EnvironmentMap>,
+        directional_light: DirectionalLightGraphData,
+
+        target_attachments: &TargetAttachments,
+        
+        camera: &Camera,
+        frozen_camera: &Camera,
+        render_mode: RenderMode,
+    ) {
+        puffin::profile_function!();
+
+        let target_attachments = target_attachments.clone();
+
+        let screen_extent = context.swapchain_extent();
+        let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
+
+        let camera_view_matrix = camera.transform.compute_matrix().inverse();
+        let camera_projection_matrix = camera.projection.compute_matrix(aspect_ratio);
+        let camera_view_projection_matrix = camera_projection_matrix * camera_view_matrix;
+        let skybox_view_projection_matrix =
+            camera.projection.compute_matrix(aspect_ratio) *
+            Mat4::from_quat(camera.transform.orientation).inverse();
+
+        let frame_data = context.transient_storage_data("per_frame_data", bytemuck::bytes_of(&ForwardFrameData {
+            view_projection: camera_view_projection_matrix,
+            view: camera_view_matrix,
+            view_pos: camera.transform.position,
+            render_mode: render_mode as u32,
+        }));
+
+        let environment_map = environment_map.map(|e| e.import_to_graph(context));
+
+        let brdf_integration_map = context.import(&self.brdf_integration_map);
+        let jitter_texture = context.import(&self.jitter_offset_texture);
+
+        let visibility_buffer = context.import_with(
+            "visibility_buffer",
+            &self.visibility_buffer,
+            graphics::GraphResourceImportDesc {
+                initial_access: if self.is_visibility_buffer_initialized {
+                    graphics::AccessKind::ComputeShaderWrite
+                } else {
+                    graphics::AccessKind::None
+                },
+                ..Default::default()
+            }
+        );
+
+        let projection_matrix = frozen_camera.compute_projection_matrix();
+        let view_matrix = frozen_camera.transform.compute_matrix().inverse();
+        let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
+            .map(math::normalize_plane);
 
         let draw_commands = create_draw_commands(context, "forward_draw_commands".into(), assets, scene,
             &CullInfo {
@@ -498,7 +547,7 @@ impl ForwardRenderer {
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                 debug_print: false,
             },
-            Some(draw_commands),
+            None,
         );
 
         forward_pass(

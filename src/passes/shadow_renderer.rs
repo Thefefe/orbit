@@ -17,7 +17,7 @@ use crate::{
     MAX_SHADOW_CASCADE_COUNT, ShadowDebugSettings,
 };
 
-use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, AlphaModeFlags}, debug_renderer::DebugRenderer};
+use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, AlphaModeFlags, ShadowVolumeCulling}, debug_renderer::DebugRenderer};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -300,6 +300,7 @@ impl ShadowRenderer {
         intensity: f32,
     
         camera: &Camera,
+        camera_depth_pyramid: graphics::GraphImageHandle,
     
         assets: &GpuAssetStore,
         scene: &SceneData,
@@ -571,6 +572,8 @@ impl ShadowRenderer {
             self.shadow_map_depth_pyramids[cascade_index].update(context, shadow_map);
             let depth_pyramid = self.shadow_map_depth_pyramids[cascade_index].get_current(context);
 
+            let reprojection_matrix = camera_view_projection_matrix * light_projection_matrix.inverse();
+
             let draw_commands = create_draw_commands(
                 context,
                 format!("second_pass_{shadow_map_name}_draw_commands").into(),
@@ -588,7 +591,11 @@ impl ShadowRenderer {
                             near_clip,
                             far_clip,
                         },
-                        aspect_ratio: 1.0
+                        aspect_ratio: 1.0,
+                        shadow_volume_culling: Some(ShadowVolumeCulling {
+                            reprojection_matrix,
+                            camera_depth_pyramid,
+                        })
                     },
                     alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                     debug_print: debug_settings.selected_cascade == cascade_index,

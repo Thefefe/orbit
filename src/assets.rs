@@ -1,27 +1,22 @@
-use crate::math;
-use crate::{graphics, collections::arena};
 use crate::collections::freelist_alloc::*;
+use crate::math;
+use crate::{collections::arena, graphics};
 
+use ash::vk;
 #[allow(unused_imports)]
 use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
-use ash::vk;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMeshVertex {
-    pub position:       [f32; 3],
+    pub position: [f32; 3],
     pub packed_normals: [i8; 4],
-    pub uv_coord:       [f32; 2],
+    pub uv_coord: [f32; 2],
 }
 
 impl GpuMeshVertex {
-    pub fn new(
-        position: Vec3,
-        uv_coord: Vec2,
-        normal: Vec3,
-        tangent: Vec4
-    ) -> Self {
+    pub fn new(position: Vec3, uv_coord: Vec2, normal: Vec3, tangent: Vec4) -> Self {
         Self {
             position: position.to_array(),
             packed_normals: math::pack_normal_tangent_bitangent(normal, tangent),
@@ -29,12 +24,7 @@ impl GpuMeshVertex {
         }
     }
 
-    pub fn from_arrays(
-        position: [f32; 3],
-        uv_coord: [f32; 2],
-        normal: [f32; 3],
-        tangent: [f32; 4],
-    ) -> Self {
+    pub fn from_arrays(position: [f32; 3], uv_coord: [f32; 2], normal: [f32; 3], tangent: [f32; 4]) -> Self {
         Self {
             position,
             packed_normals: math::pack_normal_tangent_bitangent(Vec3::from_array(normal), Vec4::from_array(tangent)),
@@ -45,7 +35,7 @@ impl GpuMeshVertex {
     pub fn position_a(&self) -> Vec3A {
         Vec3A::from_array(self.position)
     }
-    
+
     pub fn uv(&self) -> Vec2 {
         Vec2::from_array(self.uv_coord)
     }
@@ -58,7 +48,6 @@ impl GpuMeshVertex {
         math::unpack_normal_tangent_bitangent(self.packed_normals)
     }
 }
-
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -107,16 +96,16 @@ pub struct ModelData {
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlphaMode {
-    Opaque      = 0,
-    Masked      = 1,
+    Opaque = 0,
+    Masked = 1,
     Transparent = 2,
 }
 
 impl AlphaMode {
     pub fn raw_index(self) -> u32 {
         match self {
-            AlphaMode::Opaque      => 0,
-            AlphaMode::Masked      => 1,
+            AlphaMode::Opaque => 0,
+            AlphaMode::Masked => 1,
             AlphaMode::Transparent => 2,
         }
     }
@@ -126,8 +115,8 @@ impl From<gltf::material::AlphaMode> for AlphaMode {
     fn from(value: gltf::material::AlphaMode) -> Self {
         match value {
             gltf::material::AlphaMode::Opaque => Self::Opaque,
-            gltf::material::AlphaMode::Mask   => Self::Masked,
-            gltf::material::AlphaMode::Blend  => Self::Transparent,
+            gltf::material::AlphaMode::Mask => Self::Masked,
+            gltf::material::AlphaMode::Blend => Self::Transparent,
         }
     }
 }
@@ -162,7 +151,7 @@ pub struct GpuMaterialData {
     occulusion_factor: f32,
 
     alpha_cutoff: f32,
-    
+
     base_texture_index: u32,
     normal_texture_index: u32,
     metallic_roughness_texture_index: u32,
@@ -210,34 +199,46 @@ pub struct GpuAssetStore {
 
 impl GpuAssetStore {
     pub fn new(context: &graphics::Context) -> Self {
-        let vertex_buffer = context.create_buffer("mesh_vertex_buffer", &graphics::BufferDesc {
-            size: MAX_VERTEX_COUNT * std::mem::size_of::<GpuMeshVertex>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            memory_location: MemoryLocation::GpuOnly,
-        });
+        let vertex_buffer = context.create_buffer(
+            "mesh_vertex_buffer",
+            &graphics::BufferDesc {
+                size: MAX_VERTEX_COUNT * std::mem::size_of::<GpuMeshVertex>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+        );
 
-        let index_buffer = context.create_buffer("mesh_index_buffer", &graphics::BufferDesc {
-            size: MAX_INDEX_COUNT * std::mem::size_of::<u32>(),
-            usage: vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            memory_location: MemoryLocation::GpuOnly,
-        });
+        let index_buffer = context.create_buffer(
+            "mesh_index_buffer",
+            &graphics::BufferDesc {
+                size: MAX_INDEX_COUNT * std::mem::size_of::<u32>(),
+                usage: vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+        );
 
-        let mesh_info_buffer = context.create_buffer("mesh_info_buffer", &graphics::BufferDesc {
-            size: MAX_INDEX_COUNT * std::mem::size_of::<GpuMeshInfo>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            memory_location: MemoryLocation::GpuOnly,
-        });
+        let mesh_info_buffer = context.create_buffer(
+            "mesh_info_buffer",
+            &graphics::BufferDesc {
+                size: MAX_INDEX_COUNT * std::mem::size_of::<GpuMeshInfo>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+        );
 
-        let material_buffer = context.create_buffer("material_buffer", &graphics::BufferDesc {
-            size: MAX_MATERIAL_COUNT * std::mem::size_of::<GpuMaterialData>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            memory_location: MemoryLocation::GpuOnly,
-        });
+        let material_buffer = context.create_buffer(
+            "material_buffer",
+            &graphics::BufferDesc {
+                size: MAX_MATERIAL_COUNT * std::mem::size_of::<GpuMaterialData>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+        );
 
         Self {
             vertex_buffer,
             index_buffer,
-            
+
             vertex_allocator: FreeListAllocator::new(MAX_VERTEX_COUNT),
             index_allocator: FreeListAllocator::new(MAX_INDEX_COUNT),
 
@@ -259,8 +260,16 @@ impl GpuAssetStore {
         let (vertex_alloc_index, vertex_range) = self.vertex_allocator.allocate(mesh.vertices.len()).unwrap();
         let (index_alloc_index, index_range) = self.index_allocator.allocate(mesh.indices.len()).unwrap();
 
-        context.immediate_write_buffer(&self.vertex_buffer, vertex_bytes, vertex_range.start * std::mem::size_of::<GpuMeshVertex>());
-        context.immediate_write_buffer(&self.index_buffer, index_bytes, index_range.start * std::mem::size_of::<u32>());
+        context.immediate_write_buffer(
+            &self.vertex_buffer,
+            vertex_bytes,
+            vertex_range.start * std::mem::size_of::<GpuMeshVertex>(),
+        );
+        context.immediate_write_buffer(
+            &self.index_buffer,
+            index_bytes,
+            index_range.start * std::mem::size_of::<u32>(),
+        );
 
         let mesh_block = MeshInfo {
             vertex_range,
@@ -272,7 +281,6 @@ impl GpuAssetStore {
         };
         let mesh_index = self.mesh_infos.insert(mesh_block);
 
-
         let mesh_info = GpuMeshInfo {
             index_offset: index_range.start as u32,
             index_count: index_range.size() as u32,
@@ -282,8 +290,8 @@ impl GpuAssetStore {
         };
         context.immediate_write_buffer(
             &self.mesh_info_buffer,
-            bytemuck::bytes_of(&mesh_info), 
-            std::mem::size_of::<GpuMeshInfo>() * mesh_index.slot() as usize
+            bytemuck::bytes_of(&mesh_info),
+            std::mem::size_of::<GpuMeshInfo>() * mesh_index.slot() as usize,
         );
 
         mesh_index
@@ -295,7 +303,7 @@ impl GpuAssetStore {
         })
     }
 
-    pub fn import_texture(&mut self, image: graphics::Image)-> TextureHandle {
+    pub fn import_texture(&mut self, image: graphics::Image) -> TextureHandle {
         assert!(image.sampled_index().is_some());
         self.textures.insert(image)
     }
@@ -306,22 +314,21 @@ impl GpuAssetStore {
 
     pub fn add_material(&mut self, context: &graphics::Context, material_data: MaterialData) -> MaterialHandle {
         let index = self.material_indices.insert(material_data);
-        
-        let base_texture_index = material_data.base_texture
+
+        let base_texture_index =
+            material_data.base_texture.map(|handle| self.get_texture_desc_index(handle)).unwrap_or(u32::MAX);
+        let normal_texture_index =
+            material_data.normal_texture.map(|handle| self.get_texture_desc_index(handle)).unwrap_or(u32::MAX);
+        let metallic_roughness_texture_index = material_data
+            .metallic_roughness_texture
             .map(|handle| self.get_texture_desc_index(handle))
             .unwrap_or(u32::MAX);
-        let normal_texture_index = material_data.normal_texture
+        let occulusion_texture_index = material_data
+            .occlusion_texture
             .map(|handle| self.get_texture_desc_index(handle))
             .unwrap_or(u32::MAX);
-        let metallic_roughness_texture_index = material_data.metallic_roughness_texture
-            .map(|handle| self.get_texture_desc_index(handle))
-            .unwrap_or(u32::MAX);
-        let occulusion_texture_index = material_data.occlusion_texture
-            .map(|handle| self.get_texture_desc_index(handle))
-            .unwrap_or(u32::MAX);
-        let emissive_texture_index = material_data.emissive_texture
-            .map(|handle| self.get_texture_desc_index(handle))
-            .unwrap_or(u32::MAX);
+        let emissive_texture_index =
+            material_data.emissive_texture.map(|handle| self.get_texture_desc_index(handle)).unwrap_or(u32::MAX);
 
         let gpu_data = GpuMaterialData {
             base_color: material_data.base_color,
@@ -329,7 +336,7 @@ impl GpuAssetStore {
             metallic_factor: material_data.metallic_factor,
             roughness_factor: material_data.roughness_factor,
             occulusion_factor: material_data.occlusion_factor,
-            
+
             alpha_cutoff: material_data.alpha_cutoff,
 
             base_texture_index,
@@ -345,7 +352,7 @@ impl GpuAssetStore {
         context.immediate_write_buffer(
             &self.material_buffer,
             bytemuck::bytes_of(&gpu_data),
-            index.slot_index() * std::mem::size_of::<GpuMaterialData>()
+            index.slot_index() * std::mem::size_of::<GpuMaterialData>(),
         );
 
         index
@@ -357,8 +364,8 @@ impl GpuAssetStore {
 
     pub fn import_to_graph(&self, context: &mut graphics::Context) -> AssetGraphData {
         AssetGraphData {
-            vertex_buffer:    context.import(&self.vertex_buffer),
-            index_buffer:     context.import(&self.index_buffer),
+            vertex_buffer: context.import(&self.vertex_buffer),
+            index_buffer: context.import(&self.index_buffer),
             mesh_info_buffer: context.import(&self.mesh_info_buffer),
             materials_buffer: context.import(&self.material_buffer),
         }
@@ -373,12 +380,7 @@ struct SepVertexIter<'a> {
 }
 
 impl<'a> SepVertexIter<'a> {
-    fn new(
-        positions: &'a [f32],
-        uvs: &'a [f32],
-        normals: &'a [f32],
-        tangents: &'a [f32],
-    ) -> Self {
+    fn new(positions: &'a [f32], uvs: &'a [f32], normals: &'a [f32], tangents: &'a [f32]) -> Self {
         Self {
             positions: positions.chunks_exact(3),
             uvs: uvs.chunks_exact(2),
@@ -394,7 +396,7 @@ impl<'a> SepVertexIter<'a> {
     fn next_uv(&mut self) -> Option<Vec2> {
         self.uvs.next().map(|slice| Vec2::from_array(slice.try_into().unwrap()))
     }
-    
+
     fn next_normal(&mut self) -> Option<Vec3> {
         self.normals.next().map(|slice| Vec3::from_array(slice.try_into().unwrap()))
     }
@@ -471,7 +473,7 @@ impl MeshData {
 
             std::mem::swap(&mut mesh_data.indices, &mut mesh.indices);
             mesh_data.vertices = SepVertexIter::new(&mesh.positions, &mesh.texcoords, &mesh.normals, &[]).collect();
-            
+
             if !have_normals {
                 log::info!("computing normals for '{name}'...");
                 mesh_data.compute_normals();
@@ -605,7 +607,11 @@ fn compute_tangents(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
         // Gram-Schmidt orthogonalize
         let tangent = (t - normal * normal.dot(t)).normalize();
         // Calculate handedness
-        let bitangent = if normal.cross(t).dot(tan2[i]).is_sign_negative() { -1.0 } else { 1.0 };
+        let bitangent = if normal.cross(t).dot(tan2[i]).is_sign_negative() {
+            -1.0
+        } else {
+            1.0
+        };
 
         vertices[i].pack_normals(normal, tangent.extend(bitangent));
     }
@@ -621,7 +627,7 @@ pub fn sep_vertex_merge(
     let mut uv_coords = uvs.into_iter();
     let mut normals = normals.into_iter();
     let mut tangents = tangents.into_iter();
-    
+
     std::iter::from_fn(move || {
         let position = positions.next()?;
         let uv_coord = uv_coords.next().unwrap_or_default();

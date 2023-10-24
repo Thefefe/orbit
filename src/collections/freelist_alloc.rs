@@ -58,7 +58,10 @@ impl FreeListAllocator {
         let start = self.blocks[free_block_index].range.start;
         let prev_index = self.blocks[free_block_index].prev_index;
 
-        let range = BlockRange { start, end: start + size };
+        let range = BlockRange {
+            start,
+            end: start + size,
+        };
 
         let new_block = self.blocks.insert(Block {
             free: false,
@@ -79,12 +82,8 @@ impl FreeListAllocator {
             return;
         }
 
-        let prev_free_index = self.blocks[index]
-            .prev_index
-            .filter(|&index| self.blocks[index].free);
-        let next_free_index = self.blocks[index]
-            .next_index
-            .filter(|&index| self.blocks[index].free);
+        let prev_free_index = self.blocks[index].prev_index.filter(|&index| self.blocks[index].free);
+        let next_free_index = self.blocks[index].next_index.filter(|&index| self.blocks[index].free);
 
         self.blocks[index].free = true;
 

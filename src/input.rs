@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use winit::{event::{DeviceEvent, ElementState, Event, MouseButton, VirtualKeyCode as KeyCode, WindowEvent}, window::Window};
+use winit::{
+    event::{DeviceEvent, ElementState, Event, MouseButton, VirtualKeyCode as KeyCode, WindowEvent},
+    window::Window,
+};
 
 pub struct Input {
     close_requested: bool,
@@ -47,7 +50,7 @@ impl Input {
                     self.screen_size = (*new_size).into();
                     self.resized = true;
                 }
-                WindowEvent::ScaleFactorChanged {scale_factor, .. } => {
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                     self.pixels_per_point = *scale_factor as f32;
                 }
                 WindowEvent::KeyboardInput {

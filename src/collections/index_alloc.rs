@@ -1,4 +1,7 @@
-use std::sync::{atomic::{AtomicU32, Ordering}, Mutex};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Mutex,
+};
 
 pub struct IndexAllocator {
     index_counter: AtomicU32,

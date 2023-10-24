@@ -4,7 +4,12 @@ use ash::vk;
 use glam::{Mat4, Vec4};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, assets::{AssetGraphData, AlphaMode}, scene::{SceneGraphData, GpuMeshDrawCommand}, MAX_DRAW_COUNT, Projection};
+use crate::{
+    assets::{AlphaMode, AssetGraphData},
+    graphics,
+    scene::{GpuMeshDrawCommand, SceneGraphData},
+    Projection, MAX_DRAW_COUNT,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ShadowVolumeCulling {
@@ -32,8 +37,8 @@ pub enum OcclusionCullInfo {
 impl OcclusionCullInfo {
     fn visibility_buffer(&self) -> Option<graphics::GraphBufferHandle> {
         match self {
-            OcclusionCullInfo::None                                 => None,
-            OcclusionCullInfo::VisibilityRead { visibility_buffer, .. }  => Some(*visibility_buffer),
+            OcclusionCullInfo::None => None,
+            OcclusionCullInfo::VisibilityRead { visibility_buffer, .. } => Some(*visibility_buffer),
             OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => Some(*visibility_buffer),
         }
     }
@@ -41,27 +46,27 @@ impl OcclusionCullInfo {
     fn visibility_buffer_dependency(&self) -> Option<(graphics::GraphBufferHandle, graphics::AccessKind)> {
         match self {
             OcclusionCullInfo::None => None,
-            OcclusionCullInfo::VisibilityRead { visibility_buffer } => Some(
-                (*visibility_buffer, graphics::AccessKind::ComputeShaderRead)
-            ),
-            OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => Some(
-                (*visibility_buffer, graphics::AccessKind::ComputeShaderWrite)
-            ),
+            OcclusionCullInfo::VisibilityRead { visibility_buffer } => {
+                Some((*visibility_buffer, graphics::AccessKind::ComputeShaderRead))
+            }
+            OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => {
+                Some((*visibility_buffer, graphics::AccessKind::ComputeShaderWrite))
+            }
         }
     }
 
     fn write_visibility_buffer(&self) -> bool {
         match self {
-            OcclusionCullInfo::None              => false,
-            OcclusionCullInfo::VisibilityRead { .. }  => false,
+            OcclusionCullInfo::None => false,
+            OcclusionCullInfo::VisibilityRead { .. } => false,
             OcclusionCullInfo::VisibilityWrite { .. } => true,
         }
     }
 
     fn depth_pyramid(&self) -> Option<graphics::GraphImageHandle> {
         match self {
-            OcclusionCullInfo::None                             => None,
-            OcclusionCullInfo::VisibilityRead { .. }                 => None,
+            OcclusionCullInfo::None => None,
+            OcclusionCullInfo::VisibilityRead { .. } => None,
             OcclusionCullInfo::VisibilityWrite { depth_pyramid, .. } => Some(*depth_pyramid),
         }
     }
@@ -75,8 +80,15 @@ impl OcclusionCullInfo {
     }
 
     fn secondary_depth_pyramid_dependency(self) -> Option<(graphics::GraphImageHandle, graphics::AccessKind)> {
-        if let OcclusionCullInfo::VisibilityWrite { shadow_volume_culling: Some(shadow_volume_culling), .. } = self {
-            Some((shadow_volume_culling.camera_depth_pyramid, graphics::AccessKind::ComputeShaderReadGeneral))
+        if let OcclusionCullInfo::VisibilityWrite {
+            shadow_volume_culling: Some(shadow_volume_culling),
+            ..
+        } = self
+        {
+            Some((
+                shadow_volume_culling.camera_depth_pyramid,
+                graphics::AccessKind::ComputeShaderReadGeneral,
+            ))
         } else {
             None
         }
@@ -84,11 +96,13 @@ impl OcclusionCullInfo {
 
     fn pass_index(&self) -> u32 {
         match self {
-            OcclusionCullInfo::None              => 0,
-            OcclusionCullInfo::VisibilityRead { .. }  => 1,
-            OcclusionCullInfo::VisibilityWrite { shadow_volume_culling, .. } => match shadow_volume_culling.is_some() {
+            OcclusionCullInfo::None => 0,
+            OcclusionCullInfo::VisibilityRead { .. } => 1,
+            OcclusionCullInfo::VisibilityWrite {
+                shadow_volume_culling, ..
+            } => match shadow_volume_culling.is_some() {
                 false => 2,
-                true  => 3,
+                true => 3,
             },
         }
     }
@@ -119,7 +133,7 @@ pub struct GpuCullInfo {
     visibility_buffer: u32,
     depth_pyramid: u32,
     secondary_depth_pyramid: u32,
-    
+
     projection_type: u32,
     p00_or_width_recip_x2: f32,
     p11_or_height_recipx2: f32,
@@ -138,28 +152,32 @@ pub fn create_draw_commands(
     assert!(cull_info.view_space_cull_planes.len() <= MAX_CULL_PLANES);
 
     let pass_name = format!("{draw_commands_name}_generation");
-    
-    let draw_commands = reuse_buffer.unwrap_or_else(|| context.create_transient(
-        draw_commands_name.clone(),
-        graphics::BufferDesc {
-            size: MAX_DRAW_COUNT * std::mem::size_of::<GpuMeshDrawCommand>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER |
-                   vk::BufferUsageFlags::INDIRECT_BUFFER |
-                   vk::BufferUsageFlags::TRANSFER_DST,
-            memory_location: MemoryLocation::GpuOnly,
-        }
-    ));
-    
+
+    let draw_commands = reuse_buffer.unwrap_or_else(|| {
+        context.create_transient(
+            draw_commands_name.clone(),
+            graphics::BufferDesc {
+                size: MAX_DRAW_COUNT * std::mem::size_of::<GpuMeshDrawCommand>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::INDIRECT_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+        )
+    });
+
     let pipeline = context.create_compute_pipeline(
         "scene_draw_gen_pipeline",
-        graphics::ShaderSource::spv("shaders/scene_draw_gen.comp.spv")
+        graphics::ShaderSource::spv("shaders/scene_draw_gen.comp.spv"),
     );
 
-    let depth_pyramid_descriptor_index = cull_info.occlusion_culling
+    let depth_pyramid_descriptor_index = cull_info
+        .occlusion_culling
         .depth_pyramid()
         .map(|i| context.get_resource_descriptor_index(i).unwrap());
 
-    let visibility_buffer_descriptor_index = cull_info.occlusion_culling
+    let visibility_buffer_descriptor_index = cull_info
+        .occlusion_culling
         .visibility_buffer()
         .map(|b| context.get_resource_descriptor_index(b).unwrap());
 
@@ -168,11 +186,11 @@ pub fn create_draw_commands(
         cull_plane_count: cull_info.view_space_cull_planes.len() as u32,
 
         alpha_mode_flags: cull_info.alpha_mode_filter.0,
-            
+
         occlusion_pass: cull_info.occlusion_culling.pass_index(),
         visibility_buffer: visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
         depth_pyramid: depth_pyramid_descriptor_index.unwrap_or(u32::MAX),
-        
+
         ..Default::default()
     };
 
@@ -192,41 +210,48 @@ pub fn create_draw_commands(
         noskip_alphamode,
         shadow_volume_culling,
         ..
-    } = cull_info.occlusion_culling {
+    } = cull_info.occlusion_culling
+    {
         gpu_cull_info_data.noskip_alpha_mode = noskip_alphamode.0;
 
         match projection {
             Projection::Perspective { fov, near_clip } => {
                 let f = 1.0 / f32::tan(0.5 * fov);
-                gpu_cull_info_data.projection_type     = 0;
-                gpu_cull_info_data.p00_or_width_recip_x2  = f / aspect_ratio;
+                gpu_cull_info_data.projection_type = 0;
+                gpu_cull_info_data.p00_or_width_recip_x2 = f / aspect_ratio;
                 gpu_cull_info_data.p11_or_height_recipx2 = f;
-                gpu_cull_info_data.z_near              = near_clip;
-            },
-            Projection::Orthographic { half_width, near_clip, far_clip } => {
+                gpu_cull_info_data.z_near = near_clip;
+            }
+            Projection::Orthographic {
+                half_width,
+                near_clip,
+                far_clip,
+            } => {
                 let width = half_width * 2.0;
                 let height = width * aspect_ratio.recip();
-                gpu_cull_info_data.projection_type     = 1;
+                gpu_cull_info_data.projection_type = 1;
                 gpu_cull_info_data.p00_or_width_recip_x2 = width.recip() * 2.0;
                 gpu_cull_info_data.p11_or_height_recipx2 = height.recip() * 2.0;
-                gpu_cull_info_data.z_near                = near_clip;
-                gpu_cull_info_data.z_far                 = far_clip;
-            },
+                gpu_cull_info_data.z_near = near_clip;
+                gpu_cull_info_data.z_far = far_clip;
+            }
         }
 
         if let Some(shadow_volume_culling) = shadow_volume_culling {
             gpu_cull_info_data.reprojection_matrix = shadow_volume_culling.reprojection_matrix;
-            gpu_cull_info_data.secondary_depth_pyramid = context
-                .get_resource_descriptor_index(shadow_volume_culling.camera_depth_pyramid)
-                .unwrap();
+            gpu_cull_info_data.secondary_depth_pyramid =
+                context.get_resource_descriptor_index(shadow_volume_culling.camera_depth_pyramid).unwrap();
         }
     }
 
     let cull_data = context.transient_storage_data(
-        format!("{draw_commands_name}_cull_data"), bytemuck::bytes_of(&gpu_cull_info_data));
+        format!("{draw_commands_name}_cull_data"),
+        bytemuck::bytes_of(&gpu_cull_info_data),
+    );
 
     // TODO: come up with a better way to do this, maybe in the compute shader
-    context.add_pass("zeroing_draw_commands_buffer")
+    context
+        .add_pass("zeroing_draw_commands_buffer")
         .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
             let draw_commands = graph.get_buffer(draw_commands);
@@ -235,7 +260,8 @@ pub fn create_draw_commands(
 
     let debug_print: u32 = if cull_info.debug_print { 1 } else { 0 };
 
-    context.add_pass(pass_name)
+    context
+        .add_pass(pass_name)
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
         // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
         .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
@@ -261,7 +287,7 @@ pub fn create_draw_commands(
 
             cmd.dispatch([scene.submesh_count as u32 / 256 + 1, 1, 1]);
         });
-    
+
     draw_commands
 }
 
@@ -275,83 +301,98 @@ impl DepthPyramid {
         let [width, height] = [width.next_power_of_two() / 2, height.next_power_of_two() / 2];
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
 
-        let pyramid = context.create_image(name, &graphics::ImageDesc {
-            ty: graphics::ImageType::Single2D,
-            format: vk::Format::R32_SFLOAT,
-            dimensions: [width, height, 1],
-            mip_levels,
-            samples: graphics::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
-            aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: graphics::ImageSubresourceViewDesc {
-                mip_count: u32::MAX,
-                mip_descriptors: graphics::ImageDescriptorFlags::STORAGE,
+        let pyramid = context.create_image(
+            name,
+            &graphics::ImageDesc {
+                ty: graphics::ImageType::Single2D,
+                format: vk::Format::R32_SFLOAT,
+                dimensions: [width, height, 1],
+                mip_levels,
+                samples: graphics::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+                aspect: vk::ImageAspectFlags::COLOR,
+                subresource_desc: graphics::ImageSubresourceViewDesc {
+                    mip_count: u32::MAX,
+                    mip_descriptors: graphics::ImageDescriptorFlags::STORAGE,
+                    ..Default::default()
+                },
+                default_sampler: Some(graphics::SamplerKind::NearestClamp),
                 ..Default::default()
             },
-            default_sampler: Some(graphics::SamplerKind::NearestClamp),
-            ..Default::default()
-        });
+        );
 
-        Self {
-            pyramid,
-            usable: false,
-        }
+        Self { pyramid, usable: false }
     }
 
     pub fn resize(&mut self, [width, height]: [u32; 2]) {
         let dimensions = [width.next_power_of_two() / 2, height.next_power_of_two() / 2, 1];
         let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(dimensions[0], dimensions[1]));
-        if self.pyramid.recreate(&graphics::ImageDesc { dimensions, mip_levels, ..self.pyramid.desc }) {
+        if self.pyramid.recreate(&graphics::ImageDesc {
+            dimensions,
+            mip_levels,
+            ..self.pyramid.desc
+        }) {
             self.usable = false;
         }
     }
 
     pub fn get_current(&mut self, context: &mut graphics::Context) -> graphics::GraphImageHandle {
-        let pyramid = context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
-            initial_access: graphics::AccessKind::ComputeShaderReadGeneral,
-            target_access: graphics::AccessKind::None,
-            ..Default::default()
-        });
-        
+        let pyramid = context.import_with(
+            self.pyramid.name.clone(),
+            &self.pyramid,
+            graphics::GraphResourceImportDesc {
+                initial_access: graphics::AccessKind::ComputeShaderReadGeneral,
+                target_access: graphics::AccessKind::None,
+                ..Default::default()
+            },
+        );
+
         pyramid
     }
 
     pub fn update(&mut self, context: &mut graphics::Context, depth_buffer: graphics::GraphImageHandle) {
         self.usable = true;
-        
-        let pyramid = context.import_with(self.pyramid.name.clone(), &self.pyramid, graphics::GraphResourceImportDesc {
-            initial_access: graphics::AccessKind::ComputeShaderReadGeneral,
-            target_access: graphics::AccessKind::None,
-            ..Default::default()
-        });
+
+        let pyramid = context.import_with(
+            self.pyramid.name.clone(),
+            &self.pyramid,
+            graphics::GraphResourceImportDesc {
+                initial_access: graphics::AccessKind::ComputeShaderReadGeneral,
+                target_access: graphics::AccessKind::None,
+                ..Default::default()
+            },
+        );
 
         let reduce_pipeline = context.create_compute_pipeline(
             "depth_reduce_pipeline",
-            graphics::ShaderSource::spv("shaders/depth_reduce.comp.spv")
+            graphics::ShaderSource::spv("shaders/depth_reduce.comp.spv"),
         );
-    
-        context.add_pass("depth_pyramid_reduce")
+
+        context
+            .add_pass("depth_pyramid_reduce")
             .with_dependency(pyramid, graphics::AccessKind::ComputeShaderWrite)
             .with_dependency(depth_buffer, graphics::AccessKind::ComputeShaderRead)
             .render(move |cmd, graph| {
                 let depth_buffer = graph.get_image(depth_buffer);
                 let pyramid = graph.get_image(pyramid);
-                
+
                 cmd.bind_compute_pipeline(reduce_pipeline);
-    
+
                 for mip_level in 0..pyramid.mip_view_count() {
                     let src_view = if mip_level == 0 {
                         depth_buffer.full_view
                     } else {
-                        cmd.barrier(&[], &[], &[
-                            vk::MemoryBarrier2 {
+                        cmd.barrier(
+                            &[],
+                            &[],
+                            &[vk::MemoryBarrier2 {
                                 src_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
                                 src_access_mask: vk::AccessFlags2::SHADER_WRITE,
                                 dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
                                 dst_access_mask: vk::AccessFlags2::SHADER_READ,
                                 ..Default::default()
-                            }
-                        ]);
+                            }],
+                        );
 
                         pyramid.mip_view(mip_level - 1).unwrap()
                     };
@@ -360,7 +401,7 @@ impl DepthPyramid {
                     cmd.build_constants()
                         .uint(dst_view.width())
                         .uint(dst_view.height())
-                        .sampled_image(&src_view) 
+                        .sampled_image(&src_view)
                         .storage_image(&dst_view);
                     cmd.dispatch([dst_view.width() / 16 + 1, dst_view.height() / 16 + 1, 1]);
                 }
@@ -376,35 +417,40 @@ pub fn update_multiple_depth_pyramids<const C: usize>(
 ) {
     let reduce_pipeline = context.create_compute_pipeline(
         "depth_reduce_pipeline",
-        graphics::ShaderSource::spv("shaders/depth_reduce.comp.spv")
+        graphics::ShaderSource::spv("shaders/depth_reduce.comp.spv"),
     );
 
-    context.add_pass("depth_pyramid_reduce_multiple")
+    context
+        .add_pass("depth_pyramid_reduce_multiple")
         .with_dependencies(depth_pyramids.into_iter().map(|i| (i, graphics::AccessKind::ComputeShaderWrite)))
         .with_dependencies(depth_buffers.into_iter().map(|i| (i, graphics::AccessKind::ComputeShaderRead)))
         .render(move |cmd, graph| {
             let depth_pyramids = depth_pyramids.map(|i| graph.get_image(i));
             let depth_buffers = depth_buffers.map(|i| graph.get_image(i));
-            
+
             let max_mip_level = depth_pyramids.iter().map(|i| i.mip_view_count()).max().unwrap();
 
             cmd.bind_compute_pipeline(reduce_pipeline);
 
             for mip_level in 0..max_mip_level {
                 if mip_level != 0 {
-                    cmd.barrier(&[], &[], &[
-                        vk::MemoryBarrier2 {
+                    cmd.barrier(
+                        &[],
+                        &[],
+                        &[vk::MemoryBarrier2 {
                             src_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
                             src_access_mask: vk::AccessFlags2::SHADER_WRITE,
                             dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
                             dst_access_mask: vk::AccessFlags2::SHADER_READ,
                             ..Default::default()
-                        }
-                    ]);
+                        }],
+                    );
                 }
 
                 for i in 0..C {
-                    if depth_pyramids[i].mip_view_count() <= mip_level { continue; }
+                    if depth_pyramids[i].mip_view_count() <= mip_level {
+                        continue;
+                    }
 
                     let src_view = if mip_level == 0 {
                         depth_buffers[i].full_view
@@ -416,7 +462,7 @@ pub fn update_multiple_depth_pyramids<const C: usize>(
                     cmd.build_constants()
                         .uint(dst_view.width())
                         .uint(dst_view.height())
-                        .sampled_image(&src_view) 
+                        .sampled_image(&src_view)
                         .storage_image(&dst_view);
                     cmd.dispatch([dst_view.width() / 16 + 1, dst_view.height() / 16 + 1, 1]);
                 }
@@ -430,8 +476,8 @@ pub struct AlphaModeFlags(u32);
 ash::vk_bitflags_wrapped!(AlphaModeFlags, u32);
 
 impl AlphaModeFlags {
-    pub const OPAQUE: Self      = Self(1 << (AlphaMode::Opaque as usize));
-    pub const MASKED: Self      = Self(1 << (AlphaMode::Masked as usize));
+    pub const OPAQUE: Self = Self(1 << (AlphaMode::Opaque as usize));
+    pub const MASKED: Self = Self(1 << (AlphaMode::Masked as usize));
     pub const TRANSPARENT: Self = Self(1 << (AlphaMode::Transparent as usize));
 
     pub const ALL: Self = Self(0b111);

@@ -41,7 +41,7 @@ struct Entry<T> {
 #[derive(Debug, Clone)]
 enum EntryValue<T> {
     Occupied { val: T },
-    Free { next_free: Option<NonZeroSlot> }
+    Free { next_free: Option<NonZeroSlot> },
 }
 
 impl<T> EntryValue<T> {
@@ -56,11 +56,11 @@ impl<T> EntryValue<T> {
         if self.is_occupied() {
             let mut swap_value = Self::Free { next_free };
             std::mem::swap(&mut swap_value, self);
-            
+
             let EntryValue::Occupied { val } = swap_value else {
                 unreachable!()
             };
-            
+
             Some(val)
         } else {
             None
@@ -141,7 +141,10 @@ impl<T> Arena<T> {
     }
 
     pub fn insert(&mut self, val: T) -> Index {
-        assert!(self.len < u32::MAX, "cannot insert more then u32::MAX elements into arena");
+        assert!(
+            self.len < u32::MAX,
+            "cannot insert more then u32::MAX elements into arena"
+        );
         self.len += 1;
         if let Some(slot) = self.first_free.take() {
             let slot_index = slot.get_index();
@@ -159,13 +162,20 @@ impl<T> Arena<T> {
         } else {
             let generation = Generation::new();
             let slot = NonZeroSlot::new(self.entries.len() as u32);
-            self.entries.push(Entry { generation, value: EntryValue::Occupied { val } });
+            self.entries.push(Entry {
+                generation,
+                value: EntryValue::Occupied { val },
+            });
             Index { generation, slot }
         }
     }
 
     pub fn get(&self, index: Index) -> Option<&T> {
-        if let Some(Entry { generation, value: EntryValue::Occupied { val } }) = self.entries.get(index.slot.get_index()) {
+        if let Some(Entry {
+            generation,
+            value: EntryValue::Occupied { val },
+        }) = self.entries.get(index.slot.get_index())
+        {
             if *generation == index.generation {
                 return Some(val);
             }
@@ -174,7 +184,11 @@ impl<T> Arena<T> {
     }
 
     pub fn get_mut(&mut self, index: Index) -> Option<&mut T> {
-        if let Some(Entry { generation, value: EntryValue::Occupied { val } }) = self.entries.get_mut(index.slot.get_index()) {
+        if let Some(Entry {
+            generation,
+            value: EntryValue::Occupied { val },
+        }) = self.entries.get_mut(index.slot.get_index())
+        {
             if *generation == index.generation {
                 return Some(val);
             }
@@ -198,15 +212,35 @@ impl<T> Arena<T> {
     }
 
     pub fn get_slot(&self, slot: u32) -> Option<(Index, &T)> {
-        if let Some(Entry { generation, value: EntryValue::Occupied { val } }) = self.entries.get(slot as usize) {
-            return Some((Index { generation: *generation, slot: NonZeroSlot::new(slot) }, val));
+        if let Some(Entry {
+            generation,
+            value: EntryValue::Occupied { val },
+        }) = self.entries.get(slot as usize)
+        {
+            return Some((
+                Index {
+                    generation: *generation,
+                    slot: NonZeroSlot::new(slot),
+                },
+                val,
+            ));
         }
         None
     }
 
     pub fn get_slot_mut(&mut self, slot: u32) -> Option<(Index, &mut T)> {
-        if let Some(Entry { generation, value: EntryValue::Occupied { val } }) = self.entries.get_mut(slot as usize) {
-            return Some((Index { generation: *generation, slot: NonZeroSlot::new(slot) }, val));
+        if let Some(Entry {
+            generation,
+            value: EntryValue::Occupied { val },
+        }) = self.entries.get_mut(slot as usize)
+        {
+            return Some((
+                Index {
+                    generation: *generation,
+                    slot: NonZeroSlot::new(slot),
+                },
+                val,
+            ));
         }
         None
     }
@@ -239,11 +273,17 @@ impl<T> Arena<T> {
     }
 
     pub fn iter(&self) -> Iter<T> {
-        Iter { entries: self.entries.iter(), slot: 0 }
+        Iter {
+            entries: self.entries.iter(),
+            slot: 0,
+        }
     }
 
     pub fn iter_mut(&mut self) -> IterMut<T> {
-        IterMut { entries: self.entries.iter_mut(), slot: 0 }
+        IterMut {
+            entries: self.entries.iter_mut(),
+            slot: 0,
+        }
     }
 
     pub fn drain(&mut self) -> Drain<T> {
@@ -253,7 +293,7 @@ impl<T> Arena<T> {
 
 pub struct Iter<'a, T> {
     entries: std::slice::Iter<'a, Entry<T>>,
-    slot: u32
+    slot: u32,
 }
 
 impl<'a, T> Iterator for Iter<'a, T> {
@@ -266,7 +306,13 @@ impl<'a, T> Iterator for Iter<'a, T> {
             self.slot += 1;
 
             if let EntryValue::Occupied { ref val } = entry.value {
-                return Some((Index { generation: entry.generation, slot: NonZeroSlot::new(slot) }, val));
+                return Some((
+                    Index {
+                        generation: entry.generation,
+                        slot: NonZeroSlot::new(slot),
+                    },
+                    val,
+                ));
             }
         }
     }
@@ -274,7 +320,7 @@ impl<'a, T> Iterator for Iter<'a, T> {
 
 pub struct IterMut<'a, T> {
     entries: std::slice::IterMut<'a, Entry<T>>,
-    slot: u32
+    slot: u32,
 }
 
 impl<'a, T> Iterator for IterMut<'a, T> {
@@ -287,7 +333,13 @@ impl<'a, T> Iterator for IterMut<'a, T> {
             self.slot += 1;
 
             if let EntryValue::Occupied { ref mut val } = entry.value {
-                return Some((Index { generation: entry.generation, slot: NonZeroSlot::new(slot) }, val));
+                return Some((
+                    Index {
+                        generation: entry.generation,
+                        slot: NonZeroSlot::new(slot),
+                    },
+                    val,
+                ));
             }
         }
     }
@@ -414,7 +466,7 @@ mod tests {
     #[test]
     fn has_index() {
         let mut arena = Arena::new();
-        
+
         let i0 = arena.insert(0);
         let i1 = arena.insert(1);
         let i2 = arena.insert(2);
@@ -434,7 +486,7 @@ mod tests {
     #[test]
     fn iter() {
         let mut arena = Arena::new();
-        
+
         let i0 = arena.insert(0);
         let i1 = arena.insert(1);
         let i2 = arena.insert(2);

@@ -1,4 +1,4 @@
-use std::{sync::Arc, borrow::Cow, time::Instant, marker::PhantomData, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, marker::PhantomData, sync::Arc, time::Instant};
 
 use ash::vk;
 use parking_lot::Mutex;
@@ -7,7 +7,10 @@ use winit::window::Window;
 
 use crate::graphics::{self, QueueType};
 
-use super::{graph::{RenderGraph, CompiledRenderGraph, self}, TransientResourceCache, ResourceKind, BatchDependency};
+use super::{
+    graph::{self, CompiledRenderGraph, RenderGraph},
+    BatchDependency, ResourceKind, TransientResourceCache,
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -37,7 +40,7 @@ pub struct Frame {
 }
 
 struct RecordSubmitStuff {
-    command_pool: graphics::CommandPool, 
+    command_pool: graphics::CommandPool,
     fence: vk::Fence,
 }
 
@@ -110,11 +113,16 @@ impl Context {
             //     QueueType::Graphics
             // );
 
-            let global_buffer = graphics::BufferRaw::create_impl(&device, "global_buffer".into(), &graphics::BufferDesc {
-                size: std::mem::size_of::<GpuGlobalData>(),
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-                memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
-            }, None);
+            let global_buffer = graphics::BufferRaw::create_impl(
+                &device,
+                "global_buffer".into(),
+                &graphics::BufferDesc {
+                    size: std::mem::size_of::<GpuGlobalData>(),
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
+                },
+                None,
+            );
 
             let timestamp_query_pool = unsafe {
                 let create_info = vk::QueryPoolCreateInfo::builder()
@@ -132,7 +140,13 @@ impl Context {
                 render_finished_semaphore,
                 // command_pool,
                 command_pools: (0..rayon::current_num_threads())
-                    .map(|i| Mutex::new(graphics::CommandPool::new(&device, &format!("command_pool_thread_{i}"), QueueType::Graphics)))
+                    .map(|i| {
+                        Mutex::new(graphics::CommandPool::new(
+                            &device,
+                            &format!("command_pool_thread_{i}"),
+                            QueueType::Graphics,
+                        ))
+                    })
                     .collect(),
                 global_buffer,
 
@@ -147,7 +161,7 @@ impl Context {
             let command_pool = graphics::CommandPool::new(&device, "global", QueueType::Graphics);
             let fence = device.create_fence("record_submit_fence", false);
 
-            Mutex::new(RecordSubmitStuff { command_pool, fence })  
+            Mutex::new(RecordSubmitStuff { command_pool, fence })
         };
 
         Self {
@@ -155,14 +169,14 @@ impl Context {
 
             device,
             swapchain,
-            
+
             shader_modules: HashMap::new(),
             raster_pipelines: HashMap::new(),
             compute_pipelines: HashMap::new(),
 
             graph: RenderGraph::new(),
             transient_resource_cache: TransientResourceCache::new(),
-            
+
             frames,
             frame_index: 0,
             elapsed_frames: 0,
@@ -203,17 +217,17 @@ impl Drop for Context {
         if std::thread::panicking() {
             return;
         }
-        
+
         unsafe {
             self.device.raw.device_wait_idle().unwrap();
         }
 
-        let record_submit_stuff = self.record_submit_stuff.lock(); 
+        let record_submit_stuff = self.record_submit_stuff.lock();
         unsafe {
             self.device.raw.destroy_fence(record_submit_stuff.fence, None);
         }
         record_submit_stuff.command_pool.destroy(&self.device);
-        
+
         for frame in self.frames.iter_mut() {
             unsafe {
                 self.device.raw.destroy_fence(frame.in_flight_fence, None);
@@ -230,13 +244,17 @@ impl Drop for Context {
 
             graphics::BufferRaw::destroy_impl(&self.device, &frame.global_buffer);
 
-            for graph::CompiledGraphResource { resource, owned_by_graph } in frame.compiled_graph.resources.drain(..) {
+            for graph::CompiledGraphResource {
+                resource,
+                owned_by_graph,
+            } in frame.compiled_graph.resources.drain(..)
+            {
                 if owned_by_graph || !resource.is_owned() {
                     graphics::AnyResource::destroy(&self.device, resource);
                 }
             }
         }
-        
+
         for resource in self.transient_resource_cache.drain_resources() {
             graphics::AnyResource::destroy(&self.device, resource);
         }
@@ -273,16 +291,19 @@ impl Context {
             puffin::profile_scope!("fence_wait");
             self.device.raw.wait_for_fences(&[frame.in_flight_fence], false, u64::MAX).unwrap();
             self.device.raw.reset_fences(&[frame.in_flight_fence]).unwrap();
-            
+
             if !frame.first_time_use {
                 let timestamp_count = frame.graph_debug_info.timestamp_count;
-                self.device.raw.get_query_pool_results::<u64>(
-                    frame.timestamp_query_pool,
-                    0,
-                    timestamp_count,
-                    &mut frame.graph_debug_info.timestamp_data,
-                    vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
-                ).unwrap();
+                self.device
+                    .raw
+                    .get_query_pool_results::<u64>(
+                        frame.timestamp_query_pool,
+                        0,
+                        timestamp_count,
+                        &mut frame.graph_debug_info.timestamp_data,
+                        vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
+                    )
+                    .unwrap();
             } else {
                 frame.first_time_use = false;
             }
@@ -297,14 +318,23 @@ impl Context {
 
         let acquired_image = self
             .swapchain
-            .acquire_image(&mut self.device, self.frame_index, frame.image_available_semaphore.handle)
+            .acquire_image(
+                &mut self.device,
+                self.frame_index,
+                frame.image_available_semaphore.handle,
+            )
             .unwrap();
 
         self.graph.clear();
 
         assert!(self.transient_resource_cache.is_empty());
-        for graph::CompiledGraphResource { resource, owned_by_graph } in frame.compiled_graph.resources.drain(..) {
-            if !owned_by_graph && resource.is_owned() { // swapchain image
+        for graph::CompiledGraphResource {
+            resource,
+            owned_by_graph,
+        } in frame.compiled_graph.resources.drain(..)
+        {
+            if !owned_by_graph && resource.is_owned() {
+                // swapchain image
                 continue;
             }
             self.transient_resource_cache.insert(resource);
@@ -312,7 +342,7 @@ impl Context {
 
         let acquired_image_handle = self.graph.add_resource(graph::GraphResourceData {
             name: "swapchain_image".into(),
-            
+
             source: graph::ResourceSource::Import {
                 resource: acquired_image.image.clone().into(),
             },
@@ -327,8 +357,11 @@ impl Context {
 
         self.frame_context = Some(FrameContext {
             acquired_image,
-            acquired_image_handle: GraphHandle { resource_index:acquired_image_handle, _phantom: PhantomData },
-        });        
+            acquired_image_handle: GraphHandle {
+                resource_index: acquired_image_handle,
+                _phantom: PhantomData,
+            },
+        });
     }
 }
 
@@ -340,7 +373,10 @@ pub struct GraphHandle<T: ?Sized> {
 
 impl<T> GraphHandle<T> {
     pub fn uninit() -> Self {
-        Self { resource_index: 0, _phantom: PhantomData }
+        Self {
+            resource_index: 0,
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -348,12 +384,12 @@ impl<T> Clone for GraphHandle<T> {
     fn clone(&self) -> Self {
         Self {
             resource_index: self.resource_index.clone(),
-            _phantom: self._phantom.clone()
+            _phantom: self._phantom.clone(),
         }
     }
 }
 
-impl<T> Copy for GraphHandle<T> { }
+impl<T> Copy for GraphHandle<T> {}
 
 pub type GraphBufferHandle = GraphHandle<graphics::BufferRaw>;
 pub type GraphImageHandle = GraphHandle<graphics::ImageRaw>;
@@ -389,13 +425,16 @@ impl<'a> PassBuilder<'a> {
     pub fn with_dependencies<I>(mut self, iter: I) -> Self
     where
         I: IntoIterator,
-        I::Item: IntoGraphDependency
+        I::Item: IntoGraphDependency,
     {
         self.dependencies.extend(iter.into_iter().map(|item| item.into_dependency()));
         self
     }
 
-    pub fn render(self, f: impl Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + Send + Sync + 'static) -> graphics::GraphPassIndex {
+    pub fn render(
+        self,
+        f: impl Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + Send + Sync + 'static,
+    ) -> graphics::GraphPassIndex {
         let pass = self.context.graph.add_pass(self.name, Box::new(f));
         for (resource, access) in self.dependencies.iter().copied() {
             self.context.graph.add_dependency(pass, resource, access);
@@ -408,7 +447,7 @@ impl Context {
     pub fn frame_index(&self) -> usize {
         self.frame_index
     }
-    
+
     pub fn swapchain_extent(&self) -> vk::Extent3D {
         self.frame_context.as_ref().unwrap().acquired_image.extent
     }
@@ -429,10 +468,7 @@ impl Context {
         self.graph.resources[handle.resource_index].descriptor_index
     }
 
-    pub fn import<R: graphics::RenderResource>(
-        &mut self,
-        resource: R
-    ) -> GraphHandle<R::RawResource> {
+    pub fn import<R: graphics::RenderResource>(&mut self, resource: R) -> GraphHandle<R::RawResource> {
         let resource = resource.into();
         let descriptor_index = resource.as_ref().descriptor_index();
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
@@ -447,7 +483,10 @@ impl Context {
             versions: vec![],
         });
 
-        GraphHandle { resource_index, _phantom: PhantomData }
+        GraphHandle {
+            resource_index,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn import_with<R: graphics::RenderResource>(
@@ -471,13 +510,16 @@ impl Context {
             versions: vec![],
         });
 
-        GraphHandle { resource_index, _phantom: PhantomData }
+        GraphHandle {
+            resource_index,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn transient_storage_data(
         &mut self,
         name: impl Into<Cow<'static, str>>,
-        data: &[u8], 
+        data: &[u8],
     ) -> GraphHandle<graphics::BufferRaw> {
         let name: Cow<'static, str> = name.into();
         let buffer_desc = graphics::BufferDesc {
@@ -486,20 +528,20 @@ impl Context {
             memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
         };
         let desc = graphics::AnyResourceDesc::Buffer(buffer_desc);
-        let (mut cache, cache_needs_rename) = self.transient_resource_cache
-            .get(&name, &desc)
-            .unwrap_or_else(|| (graphics::AnyResource::create_owned(
-                &self.device,
-                name.clone(),
-                &desc,
-                None
-            ), false));
+        let (mut cache, cache_needs_rename) = self.transient_resource_cache.get(&name, &desc).unwrap_or_else(|| {
+            (
+                graphics::AnyResource::create_owned(&self.device, name.clone(), &desc, None),
+                false,
+            )
+        });
 
         if cache_needs_rename {
             cache.rename(&self.device, name.clone());
         }
 
-        let graphics::AnyResourceRef::Buffer(buffer) = cache.as_ref() else { unreachable!() };
+        let graphics::AnyResourceRef::Buffer(buffer) = cache.as_ref() else {
+            unreachable!()
+        };
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), buffer.mapped_ptr.unwrap().as_ptr(), data.len());
         }
@@ -507,8 +549,11 @@ impl Context {
 
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,
-         
-            source: graph::ResourceSource::Create { desc, cache: Some(cache) },
+
+            source: graph::ResourceSource::Create {
+                desc,
+                cache: Some(cache),
+            },
             descriptor_index,
 
             initial_access: graphics::AccessKind::None,
@@ -518,7 +563,10 @@ impl Context {
             versions: vec![],
         });
 
-        GraphHandle { resource_index, _phantom: PhantomData }
+        GraphHandle {
+            resource_index,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn create_transient<R: graphics::OwnedRenderResource>(
@@ -540,12 +588,12 @@ impl Context {
         let descriptor_index = match &cache {
             Some(cache) => cache.as_ref().descriptor_index(),
             None if desc.needs_descriptor_index() => Some(self.device.alloc_descriptor_index()),
-            _ => None
+            _ => None,
         };
 
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
             name,
-            
+
             source: graph::ResourceSource::Create { desc, cache },
             descriptor_index,
 
@@ -556,7 +604,10 @@ impl Context {
             versions: vec![],
         });
 
-        GraphHandle { resource_index, _phantom: PhantomData }
+        GraphHandle {
+            resource_index,
+            _phantom: PhantomData,
+        }
     }
 
     #[inline(always)]
@@ -578,7 +629,7 @@ impl Context {
     }
 
     pub fn add_pass(&mut self, name: impl Into<Cow<'static, str>>) -> PassBuilder {
-        PassBuilder { 
+        PassBuilder {
             context: self,
             name: name.into(),
             dependencies: Vec::new(),
@@ -588,10 +639,12 @@ impl Context {
     pub fn end_frame(&mut self) {
         puffin::profile_function!();
         let frame_context = self.frame_context.take().unwrap();
-        
+
         unsafe {
             let screen_size = frame_context.acquired_image.extent;
-            self.frames[self.frame_index].global_buffer.mapped_ptr
+            self.frames[self.frame_index]
+                .global_buffer
+                .mapped_ptr
                 .unwrap()
                 .cast::<GpuGlobalData>()
                 .as_ptr()
@@ -599,18 +652,18 @@ impl Context {
                     screen_size: [screen_size.width, screen_size.height],
                     elapsed_frames: self.elapsed_frames as u32,
                     elapsed_time: self.start.elapsed().as_secs_f32(),
-            })
+                })
         };
         let frame = &mut self.frames[self.frame_index];
 
         frame.graph_debug_info.clear();
-        
-        self.graph.compile_and_flush(
-            &self.device,
-            &mut frame.compiled_graph,
-        );
 
-        frame.graph_debug_info.batch_infos.resize(frame.compiled_graph.batches.len(), GraphBatchDebugInfo::default());
+        self.graph.compile_and_flush(&self.device, &mut frame.compiled_graph);
+
+        frame
+            .graph_debug_info
+            .batch_infos
+            .resize(frame.compiled_graph.batches.len(), GraphBatchDebugInfo::default());
         frame.graph_debug_info.timestamp_count = frame.compiled_graph.batches.len() as u32 * 2;
 
         // let commands = frame.compiled_graph
@@ -629,7 +682,9 @@ impl Context {
 
         let batch_cmd_indices: Vec<(usize, usize)> = {
             puffin::profile_scope!("command_recording");
-            frame.compiled_graph.batches
+            frame
+                .compiled_graph
+                .batches
                 .par_iter()
                 .zip(frame.graph_debug_info.batch_infos.par_iter_mut())
                 .enumerate()
@@ -637,7 +692,7 @@ impl Context {
                     || frame.command_pools[rayon::current_thread_index().unwrap()].lock(),
                     |command_pool, (batch_index, (batch_data, batch_debug_info))| {
                         let batch_ref = frame.compiled_graph.get_batch_ref(&batch_data);
-    
+
                         let command_index = record_batch(
                             &self.device,
                             &frame.compiled_graph,
@@ -645,11 +700,11 @@ impl Context {
                             frame.timestamp_query_pool,
                             batch_index,
                             batch_ref,
-                            batch_debug_info
+                            batch_debug_info,
                         );
-    
+
                         (rayon::current_thread_index().unwrap(), command_index)
-                    }
+                    },
                 )
                 .collect()
         };
@@ -657,14 +712,11 @@ impl Context {
         {
             puffin::profile_scope!("command_submit");
             self.submit_infos.clear();
-            self.submit_infos.extend(batch_cmd_indices
-                .iter()
-                .copied()
-                .map(|(pool_index, command_buffer_index)| frame.command_pools[pool_index]
-                    .get_mut()
-                    .buffers()[command_buffer_index]
-                    .submit_info()
-                ));
+            self.submit_infos.extend(
+                batch_cmd_indices.iter().copied().map(|(pool_index, command_buffer_index)| {
+                    frame.command_pools[pool_index].get_mut().buffers()[command_buffer_index].submit_info()
+                }),
+            );
             self.device.queue_submit(QueueType::Graphics, &self.submit_infos, frame.in_flight_fence);
             self.submit_infos.clear();
         }
@@ -704,12 +756,18 @@ fn record_batch(
     let mut memory_barrier = vk::MemoryBarrier2::default();
     let mut image_barriers = Vec::new();
 
-    for BatchDependency { resource_index: resoure_index, src_access, dst_access } in batch_ref.begin_dependencies.iter().copied() {
+    for BatchDependency {
+        resource_index: resoure_index,
+        src_access,
+        dst_access,
+    } in batch_ref.begin_dependencies.iter().copied()
+    {
         let resource = compiled_graph.resources[resoure_index].resource.as_ref();
 
         if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
-            if src_access.read_write_kind() == graphics::ReadWriteKind::Read &&
-                dst_access.read_write_kind() == graphics::ReadWriteKind::Read {
+            if src_access.read_write_kind() == graphics::ReadWriteKind::Read
+                && dst_access.read_write_kind() == graphics::ReadWriteKind::Read
+            {
                 continue;
             }
             memory_barrier.src_stage_mask |= src_access.stage_mask();
@@ -735,7 +793,7 @@ fn record_batch(
     for (semaphore, stage) in batch_ref.signal_semaphores {
         cmd_buffer.signal_semaphore(semaphore.handle, *stage);
     }
-    
+
     let recorder = cmd_buffer.record(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
     if batch_index == 0 {
@@ -747,7 +805,7 @@ fn record_batch(
     } else {
         recorder.barrier(&[], &image_barriers, &[]);
     }
-    
+
     batch_debug_info.timestamp_start_index = batch_index as u32 * 2;
     batch_debug_info.timestamp_end_index = batch_index as u32 * 2 + 1;
 
@@ -770,7 +828,12 @@ fn record_batch(
     );
 
     image_barriers.clear();
-    for BatchDependency { resource_index: resoure_index, src_access, dst_access } in batch_ref.finish_dependencies.iter().copied() {
+    for BatchDependency {
+        resource_index: resoure_index,
+        src_access,
+        dst_access,
+    } in batch_ref.finish_dependencies.iter().copied()
+    {
         if let graphics::AnyResourceRef::Image(image) = compiled_graph.resources[resoure_index].resource.as_ref() {
             image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
         }
@@ -804,7 +867,7 @@ impl Context {
                             ui.label(format!("{semaphore:?}, {stage:?}"));
                         }
                     });
-                
+
                 egui::CollapsingHeader::new(format!("begin_dependencies ({})", batch.begin_dependencies.len()))
                     .id_source([i, 1])
                     .show(ui, |ui| {
@@ -817,14 +880,15 @@ impl Context {
                         }
                     });
 
-                egui::CollapsingHeader::new(format!("passes ({})", batch.passes.len()))
-                    .id_source([i, 2])
-                    .show(ui, |ui| {
+                egui::CollapsingHeader::new(format!("passes ({})", batch.passes.len())).id_source([i, 2]).show(
+                    ui,
+                    |ui| {
                         for pass in batch.passes {
                             ui.label(pass.name.as_ref());
                         }
-                    });
-                
+                    },
+                );
+
                 egui::CollapsingHeader::new(format!("finish_dependencies ({})", batch.finish_dependencies.len()))
                     .id_source([i, 3])
                     .show(ui, |ui| {
@@ -837,7 +901,6 @@ impl Context {
                         }
                     });
 
-                    
                 egui::CollapsingHeader::new(format!("signal_semaphores ({})", batch.signal_semaphores.len()))
                     .id_source([i, 4])
                     .show(ui, |ui| {
@@ -868,16 +931,21 @@ impl GraphDebugInfo {
             batch_infos: Vec::new(),
             timestamp_data: [0; MAX_TIMESTAMP_COUNT as usize],
             timestamp_count: 0,
-        }       
+        }
     }
 
     pub fn clear(&mut self) {
         self.batch_infos.clear();
     }
-    
+
     pub fn timestamp_delta(&self, batch_index: usize, timestamp_period: f32) -> f32 {
-        let GraphBatchDebugInfo { timestamp_start_index, timestamp_end_index, ..} = self.batch_infos[batch_index];
-        let delta = self.timestamp_data[timestamp_end_index as usize] - self.timestamp_data[timestamp_start_index as usize];
+        let GraphBatchDebugInfo {
+            timestamp_start_index,
+            timestamp_end_index,
+            ..
+        } = self.batch_infos[batch_index];
+        let delta =
+            self.timestamp_data[timestamp_end_index as usize] - self.timestamp_data[timestamp_start_index as usize];
         delta as f32 * timestamp_period
     }
 }

@@ -1,101 +1,102 @@
-use std::{collections::HashMap, path::Path, borrow::Cow};
+use std::{borrow::Cow, collections::HashMap, path::Path};
 
 use ash::vk;
-use glam::{Vec4, Mat4, Vec3, Vec3A};
+use glam::{Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 use image::EncodableLayout;
 
 use crate::{
-    assets::{sep_vertex_merge, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle, Aabb},
+    assets::{sep_vertex_merge, Aabb, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle},
     graphics,
-    scene::{EntityData, SceneData, Transform}, utils::OptionDefaultIterator,
+    scene::{EntityData, SceneData, Transform},
+    utils::OptionDefaultIterator,
 };
 
-fn dxgi_format_to_vk(format : ddsfile::DxgiFormat) -> Option<vk::Format> {
+fn dxgi_format_to_vk(format: ddsfile::DxgiFormat) -> Option<vk::Format> {
     let vk_format = match format {
-        ddsfile::DxgiFormat::R32G32B32A32_Typeless      => vk::Format::R32G32B32A32_SINT,
-        ddsfile::DxgiFormat::R32G32B32A32_Float         => vk::Format::R32G32B32A32_SFLOAT,
-        ddsfile::DxgiFormat::R32G32B32A32_UInt          => vk::Format::R32G32B32A32_UINT,
-        ddsfile::DxgiFormat::R32G32B32A32_SInt          => vk::Format::R32G32B32A32_UINT,
-        ddsfile::DxgiFormat::R32G32B32_Typeless         => vk::Format::R32G32B32_SINT,
-        ddsfile::DxgiFormat::R32G32B32_Float            => vk::Format::R32G32B32_SFLOAT,
-        ddsfile::DxgiFormat::R32G32B32_UInt             => vk::Format::R32G32B32_UINT,
-        ddsfile::DxgiFormat::R32G32B32_SInt             => vk::Format::R32G32B32_SINT,
-        ddsfile::DxgiFormat::R16G16B16A16_Typeless      => vk::Format::R16G16B16A16_SINT,
-        ddsfile::DxgiFormat::R16G16B16A16_Float         => vk::Format::R16G16B16A16_SFLOAT,
-        ddsfile::DxgiFormat::R16G16B16A16_UNorm         => vk::Format::R16G16B16A16_UNORM,
-        ddsfile::DxgiFormat::R16G16B16A16_UInt          => vk::Format::R16G16B16A16_UINT,
-        ddsfile::DxgiFormat::R16G16B16A16_SNorm         => vk::Format::R16G16B16A16_SNORM,
-        ddsfile::DxgiFormat::R16G16B16A16_SInt          => vk::Format::R16G16B16A16_SINT,
-        ddsfile::DxgiFormat::R32G32_Typeless            => vk::Format::R32G32_SINT,
-        ddsfile::DxgiFormat::R32G32_Float               => vk::Format::R32G32_SFLOAT,
-        ddsfile::DxgiFormat::R32G32_UInt                => vk::Format::R32G32_UINT,
-        ddsfile::DxgiFormat::R32G32_SInt                => vk::Format::R32G32_SINT,
-        ddsfile::DxgiFormat::R10G10B10A2_Typeless       => vk::Format::A2R10G10B10_SINT_PACK32,
-        ddsfile::DxgiFormat::R10G10B10A2_UNorm          => vk::Format::A2R10G10B10_UNORM_PACK32,
-        ddsfile::DxgiFormat::R10G10B10A2_UInt           => vk::Format::A2R10G10B10_UINT_PACK32,
-        ddsfile::DxgiFormat::R8G8B8A8_Typeless          => vk::Format::R8G8B8A8_SINT,
-        ddsfile::DxgiFormat::R8G8B8A8_UNorm             => vk::Format::R8G8B8A8_UNORM,
-        ddsfile::DxgiFormat::R8G8B8A8_UNorm_sRGB        => vk::Format::R8G8B8A8_SRGB,
-        ddsfile::DxgiFormat::R8G8B8A8_UInt              => vk::Format::R8G8B8A8_UINT,
-        ddsfile::DxgiFormat::R8G8B8A8_SNorm             => vk::Format::R8G8B8A8_SNORM,
-        ddsfile::DxgiFormat::R8G8B8A8_SInt              => vk::Format::R8G8B8A8_SINT,
-        ddsfile::DxgiFormat::R16G16_Typeless            => vk::Format::R16G16_SINT,
-        ddsfile::DxgiFormat::R16G16_Float               => vk::Format::R16G16_SFLOAT,
-        ddsfile::DxgiFormat::R16G16_UNorm               => vk::Format::R16G16_UNORM,
-        ddsfile::DxgiFormat::R16G16_UInt                => vk::Format::R16G16_UINT,
-        ddsfile::DxgiFormat::R16G16_SNorm               => vk::Format::R16G16_SNORM,
-        ddsfile::DxgiFormat::R16G16_SInt                => vk::Format::R16G16_SINT,
-        ddsfile::DxgiFormat::R32_Typeless               => vk::Format::R32_SINT,
-        ddsfile::DxgiFormat::D32_Float                  => vk::Format::D32_SFLOAT,
-        ddsfile::DxgiFormat::R32_Float                  => vk::Format::R32_SFLOAT,
-        ddsfile::DxgiFormat::R32_UInt                   => vk::Format::R32_UINT,
-        ddsfile::DxgiFormat::R32_SInt                   => vk::Format::R32_SINT,
-        ddsfile::DxgiFormat::D24_UNorm_S8_UInt          => vk::Format::D24_UNORM_S8_UINT,
-        ddsfile::DxgiFormat::R8G8_Typeless              => vk::Format::R8G8_SINT,
-        ddsfile::DxgiFormat::R8G8_UNorm                 => vk::Format::R8G8_UNORM,
-        ddsfile::DxgiFormat::R8G8_UInt                  => vk::Format::R8G8_UINT,
-        ddsfile::DxgiFormat::R8G8_SNorm                 => vk::Format::R8G8_SNORM,
-        ddsfile::DxgiFormat::R8G8_SInt                  => vk::Format::R8G8_SINT,
-        ddsfile::DxgiFormat::R16_Typeless               => vk::Format::R16_SINT,
-        ddsfile::DxgiFormat::R16_Float                  => vk::Format::R16_SFLOAT,
-        ddsfile::DxgiFormat::D16_UNorm                  => vk::Format::D16_UNORM,
-        ddsfile::DxgiFormat::R16_UNorm                  => vk::Format::R16_UNORM,
-        ddsfile::DxgiFormat::R16_UInt                   => vk::Format::R16_UINT,
-        ddsfile::DxgiFormat::R16_SNorm                  => vk::Format::R16_SNORM,
-        ddsfile::DxgiFormat::R16_SInt                   => vk::Format::R16_SINT,
-        ddsfile::DxgiFormat::R8_Typeless                => vk::Format::R8_SINT,
-        ddsfile::DxgiFormat::R8_UNorm                   => vk::Format::R8_UNORM,
-        ddsfile::DxgiFormat::R8_UInt                    => vk::Format::R8_UINT,
-        ddsfile::DxgiFormat::R8_SNorm                   => vk::Format::R8_SNORM,
-        ddsfile::DxgiFormat::R8_SInt                    => vk::Format::R8_SINT,
-        ddsfile::DxgiFormat::R9G9B9E5_SharedExp         => vk::Format::E5B9G9R9_UFLOAT_PACK32,
-        ddsfile::DxgiFormat::BC1_Typeless               => vk::Format::BC1_RGBA_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC1_UNorm                  => vk::Format::BC1_RGBA_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC1_UNorm_sRGB             => vk::Format::BC1_RGBA_SRGB_BLOCK,
-        ddsfile::DxgiFormat::BC2_Typeless               => vk::Format::BC2_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC2_UNorm                  => vk::Format::BC2_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC2_UNorm_sRGB             => vk::Format::BC2_SRGB_BLOCK,
-        ddsfile::DxgiFormat::BC3_Typeless               => vk::Format::BC3_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC3_UNorm                  => vk::Format::BC3_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC3_UNorm_sRGB             => vk::Format::BC3_SRGB_BLOCK,
-        ddsfile::DxgiFormat::BC4_Typeless               => vk::Format::BC4_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC4_UNorm                  => vk::Format::BC4_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC4_SNorm                  => vk::Format::BC4_SNORM_BLOCK,
-        ddsfile::DxgiFormat::BC5_Typeless               => vk::Format::BC5_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC5_UNorm                  => vk::Format::BC5_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC5_SNorm                  => vk::Format::BC5_SNORM_BLOCK,
-        ddsfile::DxgiFormat::B5G6R5_UNorm               => vk::Format::B5G6R5_UNORM_PACK16,
-        ddsfile::DxgiFormat::B5G5R5A1_UNorm             => vk::Format::B5G5R5A1_UNORM_PACK16,
-        ddsfile::DxgiFormat::B8G8R8A8_UNorm             => vk::Format::B8G8R8A8_UNORM,
-        ddsfile::DxgiFormat::B8G8R8A8_Typeless          => vk::Format::B8G8R8A8_SINT,
-        ddsfile::DxgiFormat::B8G8R8A8_UNorm_sRGB        => vk::Format::B8G8R8A8_SRGB,
-        ddsfile::DxgiFormat::BC6H_Typeless              => vk::Format::BC6H_SFLOAT_BLOCK,
-        ddsfile::DxgiFormat::BC6H_UF16                  => vk::Format::BC6H_UFLOAT_BLOCK,
-        ddsfile::DxgiFormat::BC6H_SF16                  => vk::Format::BC6H_SFLOAT_BLOCK,
-        ddsfile::DxgiFormat::BC7_Typeless               => vk::Format::BC7_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC7_UNorm                  => vk::Format::BC7_UNORM_BLOCK,
-        ddsfile::DxgiFormat::BC7_UNorm_sRGB             => vk::Format::BC7_SRGB_BLOCK,
+        ddsfile::DxgiFormat::R32G32B32A32_Typeless => vk::Format::R32G32B32A32_SINT,
+        ddsfile::DxgiFormat::R32G32B32A32_Float => vk::Format::R32G32B32A32_SFLOAT,
+        ddsfile::DxgiFormat::R32G32B32A32_UInt => vk::Format::R32G32B32A32_UINT,
+        ddsfile::DxgiFormat::R32G32B32A32_SInt => vk::Format::R32G32B32A32_UINT,
+        ddsfile::DxgiFormat::R32G32B32_Typeless => vk::Format::R32G32B32_SINT,
+        ddsfile::DxgiFormat::R32G32B32_Float => vk::Format::R32G32B32_SFLOAT,
+        ddsfile::DxgiFormat::R32G32B32_UInt => vk::Format::R32G32B32_UINT,
+        ddsfile::DxgiFormat::R32G32B32_SInt => vk::Format::R32G32B32_SINT,
+        ddsfile::DxgiFormat::R16G16B16A16_Typeless => vk::Format::R16G16B16A16_SINT,
+        ddsfile::DxgiFormat::R16G16B16A16_Float => vk::Format::R16G16B16A16_SFLOAT,
+        ddsfile::DxgiFormat::R16G16B16A16_UNorm => vk::Format::R16G16B16A16_UNORM,
+        ddsfile::DxgiFormat::R16G16B16A16_UInt => vk::Format::R16G16B16A16_UINT,
+        ddsfile::DxgiFormat::R16G16B16A16_SNorm => vk::Format::R16G16B16A16_SNORM,
+        ddsfile::DxgiFormat::R16G16B16A16_SInt => vk::Format::R16G16B16A16_SINT,
+        ddsfile::DxgiFormat::R32G32_Typeless => vk::Format::R32G32_SINT,
+        ddsfile::DxgiFormat::R32G32_Float => vk::Format::R32G32_SFLOAT,
+        ddsfile::DxgiFormat::R32G32_UInt => vk::Format::R32G32_UINT,
+        ddsfile::DxgiFormat::R32G32_SInt => vk::Format::R32G32_SINT,
+        ddsfile::DxgiFormat::R10G10B10A2_Typeless => vk::Format::A2R10G10B10_SINT_PACK32,
+        ddsfile::DxgiFormat::R10G10B10A2_UNorm => vk::Format::A2R10G10B10_UNORM_PACK32,
+        ddsfile::DxgiFormat::R10G10B10A2_UInt => vk::Format::A2R10G10B10_UINT_PACK32,
+        ddsfile::DxgiFormat::R8G8B8A8_Typeless => vk::Format::R8G8B8A8_SINT,
+        ddsfile::DxgiFormat::R8G8B8A8_UNorm => vk::Format::R8G8B8A8_UNORM,
+        ddsfile::DxgiFormat::R8G8B8A8_UNorm_sRGB => vk::Format::R8G8B8A8_SRGB,
+        ddsfile::DxgiFormat::R8G8B8A8_UInt => vk::Format::R8G8B8A8_UINT,
+        ddsfile::DxgiFormat::R8G8B8A8_SNorm => vk::Format::R8G8B8A8_SNORM,
+        ddsfile::DxgiFormat::R8G8B8A8_SInt => vk::Format::R8G8B8A8_SINT,
+        ddsfile::DxgiFormat::R16G16_Typeless => vk::Format::R16G16_SINT,
+        ddsfile::DxgiFormat::R16G16_Float => vk::Format::R16G16_SFLOAT,
+        ddsfile::DxgiFormat::R16G16_UNorm => vk::Format::R16G16_UNORM,
+        ddsfile::DxgiFormat::R16G16_UInt => vk::Format::R16G16_UINT,
+        ddsfile::DxgiFormat::R16G16_SNorm => vk::Format::R16G16_SNORM,
+        ddsfile::DxgiFormat::R16G16_SInt => vk::Format::R16G16_SINT,
+        ddsfile::DxgiFormat::R32_Typeless => vk::Format::R32_SINT,
+        ddsfile::DxgiFormat::D32_Float => vk::Format::D32_SFLOAT,
+        ddsfile::DxgiFormat::R32_Float => vk::Format::R32_SFLOAT,
+        ddsfile::DxgiFormat::R32_UInt => vk::Format::R32_UINT,
+        ddsfile::DxgiFormat::R32_SInt => vk::Format::R32_SINT,
+        ddsfile::DxgiFormat::D24_UNorm_S8_UInt => vk::Format::D24_UNORM_S8_UINT,
+        ddsfile::DxgiFormat::R8G8_Typeless => vk::Format::R8G8_SINT,
+        ddsfile::DxgiFormat::R8G8_UNorm => vk::Format::R8G8_UNORM,
+        ddsfile::DxgiFormat::R8G8_UInt => vk::Format::R8G8_UINT,
+        ddsfile::DxgiFormat::R8G8_SNorm => vk::Format::R8G8_SNORM,
+        ddsfile::DxgiFormat::R8G8_SInt => vk::Format::R8G8_SINT,
+        ddsfile::DxgiFormat::R16_Typeless => vk::Format::R16_SINT,
+        ddsfile::DxgiFormat::R16_Float => vk::Format::R16_SFLOAT,
+        ddsfile::DxgiFormat::D16_UNorm => vk::Format::D16_UNORM,
+        ddsfile::DxgiFormat::R16_UNorm => vk::Format::R16_UNORM,
+        ddsfile::DxgiFormat::R16_UInt => vk::Format::R16_UINT,
+        ddsfile::DxgiFormat::R16_SNorm => vk::Format::R16_SNORM,
+        ddsfile::DxgiFormat::R16_SInt => vk::Format::R16_SINT,
+        ddsfile::DxgiFormat::R8_Typeless => vk::Format::R8_SINT,
+        ddsfile::DxgiFormat::R8_UNorm => vk::Format::R8_UNORM,
+        ddsfile::DxgiFormat::R8_UInt => vk::Format::R8_UINT,
+        ddsfile::DxgiFormat::R8_SNorm => vk::Format::R8_SNORM,
+        ddsfile::DxgiFormat::R8_SInt => vk::Format::R8_SINT,
+        ddsfile::DxgiFormat::R9G9B9E5_SharedExp => vk::Format::E5B9G9R9_UFLOAT_PACK32,
+        ddsfile::DxgiFormat::BC1_Typeless => vk::Format::BC1_RGBA_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC1_UNorm => vk::Format::BC1_RGBA_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC1_UNorm_sRGB => vk::Format::BC1_RGBA_SRGB_BLOCK,
+        ddsfile::DxgiFormat::BC2_Typeless => vk::Format::BC2_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC2_UNorm => vk::Format::BC2_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC2_UNorm_sRGB => vk::Format::BC2_SRGB_BLOCK,
+        ddsfile::DxgiFormat::BC3_Typeless => vk::Format::BC3_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC3_UNorm => vk::Format::BC3_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC3_UNorm_sRGB => vk::Format::BC3_SRGB_BLOCK,
+        ddsfile::DxgiFormat::BC4_Typeless => vk::Format::BC4_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC4_UNorm => vk::Format::BC4_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC4_SNorm => vk::Format::BC4_SNORM_BLOCK,
+        ddsfile::DxgiFormat::BC5_Typeless => vk::Format::BC5_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC5_UNorm => vk::Format::BC5_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC5_SNorm => vk::Format::BC5_SNORM_BLOCK,
+        ddsfile::DxgiFormat::B5G6R5_UNorm => vk::Format::B5G6R5_UNORM_PACK16,
+        ddsfile::DxgiFormat::B5G5R5A1_UNorm => vk::Format::B5G5R5A1_UNORM_PACK16,
+        ddsfile::DxgiFormat::B8G8R8A8_UNorm => vk::Format::B8G8R8A8_UNORM,
+        ddsfile::DxgiFormat::B8G8R8A8_Typeless => vk::Format::B8G8R8A8_SINT,
+        ddsfile::DxgiFormat::B8G8R8A8_UNorm_sRGB => vk::Format::B8G8R8A8_SRGB,
+        ddsfile::DxgiFormat::BC6H_Typeless => vk::Format::BC6H_SFLOAT_BLOCK,
+        ddsfile::DxgiFormat::BC6H_UF16 => vk::Format::BC6H_UFLOAT_BLOCK,
+        ddsfile::DxgiFormat::BC6H_SF16 => vk::Format::BC6H_SFLOAT_BLOCK,
+        ddsfile::DxgiFormat::BC7_Typeless => vk::Format::BC7_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC7_UNorm => vk::Format::BC7_UNORM_BLOCK,
+        ddsfile::DxgiFormat::BC7_UNorm_sRGB => vk::Format::BC7_SRGB_BLOCK,
         _ => return None,
     };
     Some(vk_format)
@@ -106,12 +107,16 @@ pub fn mip_levels_from_size(max_size: u32) -> u32 {
 }
 
 pub fn next_mip_size(prev: u32) -> u32 {
-    if prev > 1 { prev / 2 } else { 1 }
+    if prev > 1 {
+        prev / 2
+    } else {
+        1
+    }
 }
 
 // taken from https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-file-layout-for-textures
 fn tex_level_size(width: usize, height: usize, min_mip_size: usize) -> usize {
-    usize::max(1, (width + 3) / 4 ) * usize::max(1, (height + 3) / 4 ) * min_mip_size
+    usize::max(1, (width + 3) / 4) * usize::max(1, (height + 3) / 4) * min_mip_size
 }
 
 pub fn upload_dds_image(
@@ -129,31 +134,46 @@ pub fn upload_dds_image(
     let mip_levels = dds.get_num_mipmap_levels().max(1);
     assert!(mip_levels >= 1);
 
-    let image = context.create_image(name, &graphics::ImageDesc {
-        ty: graphics::ImageType::Single2D,
-        format,
-        dimensions: [width, height, 1],
-        mip_levels,
-        samples: graphics::MultisampleCount::None,
-        usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-        aspect: vk::ImageAspectFlags::COLOR,
-        subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-        default_sampler: Some(sampler),
-    });
+    let image = context.create_image(
+        name,
+        &graphics::ImageDesc {
+            ty: graphics::ImageType::Single2D,
+            format,
+            dimensions: [width, height, 1],
+            mip_levels,
+            samples: graphics::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+            default_sampler: Some(sampler),
+        },
+    );
 
     let data = dds.get_data(0).unwrap();
 
-    let scratch_buffer = context.create_buffer_init("scratch_buffer", &graphics::BufferDesc {
-        size: data.len(),
-        usage: vk::BufferUsageFlags::TRANSFER_SRC,
-        memory_location: MemoryLocation::CpuToGpu,
-    }, data);
+    let scratch_buffer = context.create_buffer_init(
+        "scratch_buffer",
+        &graphics::BufferDesc {
+            size: data.len(),
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+            memory_location: MemoryLocation::CpuToGpu,
+        },
+        data,
+    );
 
     let min_mip_size = dds.get_min_mipmap_size_in_bytes();
 
     context.record_and_submit(|cmd| {
         use graphics::AccessKind;
-        cmd.barrier(&[], &[graphics::image_barrier(&image, AccessKind::None, AccessKind::TransferWrite)], &[]);
+        cmd.barrier(
+            &[],
+            &[graphics::image_barrier(
+                &image,
+                AccessKind::None,
+                AccessKind::TransferWrite,
+            )],
+            &[],
+        );
 
         let mut buffer_offset = 0;
         let mut dimensions = [width, height];
@@ -161,21 +181,36 @@ pub fn upload_dds_image(
         for mip_level in 0..mip_levels {
             let [width, height] = dimensions;
 
-            cmd.copy_buffer_to_image(&scratch_buffer, &image, &[vk::BufferImageCopy {
-                buffer_offset,
-                buffer_row_length: 0,
-                buffer_image_height: 0,
-                image_subresource: image.subresource_layers(mip_level, 0..1),
-                image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
-                image_extent: vk::Extent3D { width, height, depth: 1 },
-            }]);
+            cmd.copy_buffer_to_image(
+                &scratch_buffer,
+                &image,
+                &[vk::BufferImageCopy {
+                    buffer_offset,
+                    buffer_row_length: 0,
+                    buffer_image_height: 0,
+                    image_subresource: image.subresource_layers(mip_level, 0..1),
+                    image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                    image_extent: vk::Extent3D {
+                        width,
+                        height,
+                        depth: 1,
+                    },
+                }],
+            );
 
             buffer_offset += tex_level_size(width as usize, height as usize, min_mip_size as usize) as u64;
             dimensions = dimensions.map(next_mip_size);
         }
 
-
-        cmd.barrier(&[], &[graphics::image_barrier(&image, AccessKind::TransferWrite, AccessKind::AllGraphicsRead)], &[]);
+        cmd.barrier(
+            &[],
+            &[graphics::image_barrier(
+                &image,
+                AccessKind::TransferWrite,
+                AccessKind::AllGraphicsRead,
+            )],
+            &[],
+        );
     });
 
     drop(scratch_buffer);
@@ -199,8 +234,8 @@ fn image_data_from_gltf<'a>(
             let buffer = &buffers[view.buffer().index()];
             let data = &buffer[view.offset()..view.offset() + view.length()];
 
-            let format = image::ImageFormat::from_mime_type(mime_type)
-                .unwrap_or_else(|| image::guess_format(data).unwrap());
+            let format =
+                image::ImageFormat::from_mime_type(mime_type).unwrap_or_else(|| image::guess_format(data).unwrap());
 
             Ok((data.into(), format))
         }
@@ -230,22 +265,25 @@ pub fn upload_image_and_generate_mipmaps(
     let (width, height) = (image_data.width(), image_data.height());
     let max_size = u32::max(width, height);
     let mip_levels = u32::max(1, f32::floor(f32::log2(max_size as f32)) as u32 + 1);
-    
-    let image = context.create_image(name, &graphics::ImageDesc {
-        ty: graphics::ImageType::Single2D,
-        format: match (srgb, hdr) {
-            (true, false)  => vk::Format::R8G8B8A8_SRGB,
-            (false, false) => vk::Format::R8G8B8A8_UNORM,
-            (_, true)      => vk::Format::R32G32B32A32_SFLOAT, // the `image` crate doesn't support 16 bit floats
+
+    let image = context.create_image(
+        name,
+        &graphics::ImageDesc {
+            ty: graphics::ImageType::Single2D,
+            format: match (srgb, hdr) {
+                (true, false) => vk::Format::R8G8B8A8_SRGB,
+                (false, false) => vk::Format::R8G8B8A8_UNORM,
+                (_, true) => vk::Format::R32G32B32A32_SFLOAT, // the `image` crate doesn't support 16 bit floats
+            },
+            dimensions: [width, height, 1],
+            mip_levels,
+            samples: graphics::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
+            aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+            default_sampler: Some(sampler),
         },
-        dimensions: [width, height, 1],
-        mip_levels,
-        samples: graphics::MultisampleCount::None,
-        usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
-        aspect: vk::ImageAspectFlags::COLOR,
-        subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-        default_sampler: Some(sampler),
-    });
+    );
 
     let scratch_buffer = if hdr {
         let image = image_data.into_rgba32f();
@@ -274,7 +312,15 @@ pub fn upload_image_and_generate_mipmaps(
     context.record_and_submit(|cmd| {
         use graphics::AccessKind;
 
-        cmd.barrier(&[], &[graphics::image_barrier(&image, AccessKind::None, AccessKind::TransferWrite)], &[]);
+        cmd.barrier(
+            &[],
+            &[graphics::image_barrier(
+                &image,
+                AccessKind::None,
+                AccessKind::TransferWrite,
+            )],
+            &[],
+        );
         cmd.copy_buffer_to_image(
             &scratch_buffer,
             &image,
@@ -295,11 +341,15 @@ pub fn upload_image_and_generate_mipmaps(
         if mip_levels > 1 {
             cmd.generate_mipmaps(&image, 0..1, AccessKind::TransferWrite, AccessKind::AllGraphicsRead);
         } else {
-            cmd.barrier(&[], &[graphics::image_barrier(
-                &image,
-                AccessKind::TransferWrite,
-                AccessKind::AllGraphicsRead,
-            )], &[]);
+            cmd.barrier(
+                &[],
+                &[graphics::image_barrier(
+                    &image,
+                    AccessKind::TransferWrite,
+                    AccessKind::AllGraphicsRead,
+                )],
+                &[],
+            );
         }
     });
 
@@ -318,9 +368,7 @@ pub fn load_image(
     sampler: graphics::SamplerKind,
 ) -> graphics::Image {
     match image_format {
-        image::ImageFormat::Dds => {
-            upload_dds_image(context, name, &image_binary, sampler)
-        },
+        image::ImageFormat::Dds => upload_dds_image(context, name, &image_binary, sampler),
         format => {
             // https://github.com/image-rs/image/issues/1936
             let image_data = if image_format == image::ImageFormat::Hdr {
@@ -328,16 +376,19 @@ pub fn load_image(
                 let width = hdr_decoder.metadata().width;
                 let height = hdr_decoder.metadata().height;
                 let buffer = hdr_decoder.read_image_hdr().ok().unwrap();
-                image::DynamicImage::ImageRgb32F(image::ImageBuffer::from_vec(
-                    width,
-                    height,
-                    buffer.into_iter().flat_map(|c| vec![c[0], c[1], c[2]]).collect(),
-                ).unwrap())
+                image::DynamicImage::ImageRgb32F(
+                    image::ImageBuffer::from_vec(
+                        width,
+                        height,
+                        buffer.into_iter().flat_map(|c| vec![c[0], c[1], c[2]]).collect(),
+                    )
+                    .unwrap(),
+                )
             } else {
                 image::load_from_memory_with_format(&image_binary, format).unwrap()
             };
             upload_image_and_generate_mipmaps(context, name, image_data, srgb, hdr, sampler)
-        },
+        }
     }
 }
 
@@ -380,19 +431,16 @@ pub fn load_gltf(
         let mag_filter = gltf_texture.sampler().mag_filter().unwrap_or(MagFilter::Linear);
         let wrapping_mode = gltf_texture.sampler().wrap_s();
         let sampler_flags = match (mag_filter, wrapping_mode) {
-            (MagFilter::Nearest, WrappingMode::ClampToEdge      ) => graphics::SamplerKind::NearestClamp,
-            (MagFilter::Nearest, WrappingMode::MirroredRepeat   ) => graphics::SamplerKind::NearestRepeat,
-            (MagFilter::Nearest, WrappingMode::Repeat           ) => graphics::SamplerKind::NearestRepeat,
-            (MagFilter::Linear,  WrappingMode::ClampToEdge      ) => graphics::SamplerKind::LinearClamp,
-            (MagFilter::Linear,  WrappingMode::MirroredRepeat   ) => graphics::SamplerKind::LinearRepeat,
-            (MagFilter::Linear,  WrappingMode::Repeat           ) => graphics::SamplerKind::LinearRepeat,
+            (MagFilter::Nearest, WrappingMode::ClampToEdge) => graphics::SamplerKind::NearestClamp,
+            (MagFilter::Nearest, WrappingMode::MirroredRepeat) => graphics::SamplerKind::NearestRepeat,
+            (MagFilter::Nearest, WrappingMode::Repeat) => graphics::SamplerKind::NearestRepeat,
+            (MagFilter::Linear, WrappingMode::ClampToEdge) => graphics::SamplerKind::LinearClamp,
+            (MagFilter::Linear, WrappingMode::MirroredRepeat) => graphics::SamplerKind::LinearRepeat,
+            (MagFilter::Linear, WrappingMode::Repeat) => graphics::SamplerKind::LinearRepeat,
         };
-        
-        let (image_binary, image_format) = image_data_from_gltf(
-            base_path,
-            gltf_texture.source().source(),
-            &buffers
-        ).unwrap();
+
+        let (image_binary, image_format) =
+            image_data_from_gltf(base_path, gltf_texture.source().source(), &buffers).unwrap();
 
         let texture = load_image(
             context,
@@ -401,13 +449,13 @@ pub fn load_gltf(
             image_format,
             srgb,
             false,
-            sampler_flags
+            sampler_flags,
         );
 
         let handle = assets.import_texture(texture);
-            texture_lookup_table.insert(index, handle);
-            handle
-        };
+        texture_lookup_table.insert(index, handle);
+        handle
+    };
 
     let mut material_lookup_table = Vec::new();
     for material in document.materials() {
@@ -415,12 +463,9 @@ pub fn load_gltf(
 
         let base_texture = pbr.base_color_texture().map(|tex| get_texture(asset_store, tex.texture(), true));
         let normal_texture = material.normal_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
-        let metallic_roughness_texture = pbr
-            .metallic_roughness_texture()
-            .map(|tex| get_texture(asset_store, tex.texture(), false));
-        let occulusion_texture = material
-            .occlusion_texture()
-            .map(|tex| get_texture(asset_store, tex.texture(), false));
+        let metallic_roughness_texture =
+            pbr.metallic_roughness_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
+        let occulusion_texture = material.occlusion_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
         let emissive_texture = material.emissive_texture().map(|tex| get_texture(asset_store, tex.texture(), true));
 
         let base_color = Vec4::from_array(pbr.base_color_factor());
@@ -443,7 +488,7 @@ pub fn load_gltf(
                 occlusion_factor: occulusion_factor,
 
                 alpha_cutoff,
-                
+
                 base_texture,
                 normal_texture,
                 metallic_roughness_texture,
@@ -483,27 +528,13 @@ pub fn load_gltf(
                 log::warn!("model '{name}' primitive {prim_index} has no tangents");
             }
 
-            let tex_coords = OptionDefaultIterator::new(
-                reader.read_tex_coords(0).map(|i| i.into_f32()),
-                [0.0, 0.0],
-            );
+            let tex_coords = OptionDefaultIterator::new(reader.read_tex_coords(0).map(|i| i.into_f32()), [0.0, 0.0]);
 
-            let normals = OptionDefaultIterator::new(
-                reader.read_normals(),
-                [0.0, 0.0, 0.0],
-            );
+            let normals = OptionDefaultIterator::new(reader.read_normals(), [0.0, 0.0, 0.0]);
 
-            let tangents = OptionDefaultIterator::new(
-                reader.read_tangents(),
-                [0.0, 0.0, 0.0, 0.0],
-            );
+            let tangents = OptionDefaultIterator::new(reader.read_tangents(), [0.0, 0.0, 0.0, 0.0]);
 
-            let vertices = sep_vertex_merge(
-                reader.read_positions().unwrap(),
-                tex_coords,
-                normals,
-                tangents,
-            );
+            let vertices = sep_vertex_merge(reader.read_positions().unwrap(), tex_coords, normals, tangents);
             let indices = reader.read_indices().unwrap().into_u32();
 
             mesh_data.vertices.extend(vertices);
@@ -531,11 +562,11 @@ pub fn load_gltf(
             let mut bounding_sphere_radius_sqr: f32 = 0.0;
             for vertex in mesh_data.vertices.iter() {
                 let position = Vec3A::from(vertex.position);
-                bounding_sphere_radius_sqr = bounding_sphere_radius_sqr
-                    .max(bounding_sphere_center.distance_squared(position));
+                bounding_sphere_radius_sqr =
+                    bounding_sphere_radius_sqr.max(bounding_sphere_center.distance_squared(position));
             }
             mesh_data.bounding_sphere = bounding_sphere_center.extend(bounding_sphere_radius_sqr.sqrt());
-            
+
             let mesh_handle = asset_store.add_mesh(context, &mesh_data);
             submeshes.push(Submesh {
                 mesh_handle,

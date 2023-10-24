@@ -1,4 +1,4 @@
-use std::{ops::Range, collections::HashMap};
+use std::{collections::HashMap, ops::Range};
 
 use crate::graphics;
 use ash::vk;
@@ -26,18 +26,23 @@ impl EguiRenderer {
     const PER_FRAME_INDEX_BYTE_SIZE: usize = Self::MAX_INDEX_COUNT * std::mem::size_of::<u32>();
 
     pub fn new(context: &mut graphics::Context) -> Self {
+        let vertex_buffer = context.create_buffer(
+            "egui_vertex_buffer",
+            &graphics::BufferDesc {
+                size: Self::PER_FRAME_VERTEX_BYTE_SIZE * graphics::FRAME_COUNT,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                memory_location: MemoryLocation::CpuToGpu,
+            },
+        );
 
-        let vertex_buffer = context.create_buffer("egui_vertex_buffer", &graphics::BufferDesc {
-            size: Self::PER_FRAME_VERTEX_BYTE_SIZE * graphics::FRAME_COUNT,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            memory_location: MemoryLocation::CpuToGpu,
-        });
-
-        let index_buffer = context.create_buffer("egui_index_buffer", &graphics::BufferDesc {
-            size: Self::PER_FRAME_INDEX_BYTE_SIZE * graphics::FRAME_COUNT,
-            usage: vk::BufferUsageFlags::INDEX_BUFFER,
-            memory_location: MemoryLocation::CpuToGpu,
-        });
+        let index_buffer = context.create_buffer(
+            "egui_index_buffer",
+            &graphics::BufferDesc {
+                size: Self::PER_FRAME_INDEX_BYTE_SIZE * graphics::FRAME_COUNT,
+                usage: vk::BufferUsageFlags::INDEX_BUFFER,
+                memory_location: MemoryLocation::CpuToGpu,
+            },
+        );
 
         Self {
             vertex_buffer,
@@ -70,8 +75,9 @@ impl EguiRenderer {
 
         for clipped_primitive in clipped_primitives {
             if let egui::epaint::Primitive::Mesh(ref mesh) = clipped_primitive.primitive {
-                if vertex_cursor as usize + mesh.vertices.len() > Self::MAX_VERTEX_COUNT ||
-                   index_cursor as usize + mesh.indices.len() > Self::MAX_INDEX_COUNT {
+                if vertex_cursor as usize + mesh.vertices.len() > Self::MAX_VERTEX_COUNT
+                    || index_cursor as usize + mesh.indices.len() > Self::MAX_INDEX_COUNT
+                {
                     log::error!("egui buffers are full, but there are more to draw");
                     break;
                 }
@@ -96,17 +102,15 @@ impl EguiRenderer {
                 };
 
                 let texture = match mesh.texture_id {
-                    egui::TextureId::Managed(id) => {
-                        context.import_with(
-                            "egui_image",
-                            self.textures.get(&id).unwrap(),
-                            graphics::GraphResourceImportDesc {
-                                initial_access: graphics::AccessKind::FragmentShaderRead,
-                                target_access: graphics::AccessKind::FragmentShaderRead,
-                                ..Default::default()
-                            },
-                        )
-                    },
+                    egui::TextureId::Managed(id) => context.import_with(
+                        "egui_image",
+                        self.textures.get(&id).unwrap(),
+                        graphics::GraphResourceImportDesc {
+                            initial_access: graphics::AccessKind::FragmentShaderRead,
+                            target_access: graphics::AccessKind::FragmentShaderRead,
+                            ..Default::default()
+                        },
+                    ),
                     egui::TextureId::User(handle) => graphics::GraphHandle {
                         resource_index: handle as usize,
                         _phantom: std::marker::PhantomData,
@@ -123,14 +127,14 @@ impl EguiRenderer {
                 context.immediate_write_buffer(
                     &self.vertex_buffer,
                     vertices,
-                    Self::PER_FRAME_VERTEX_BYTE_SIZE * context.frame_index() + 
-                    vertex_cursor as usize * std::mem::size_of::<egui::epaint::Vertex>()
+                    Self::PER_FRAME_VERTEX_BYTE_SIZE * context.frame_index()
+                        + vertex_cursor as usize * std::mem::size_of::<egui::epaint::Vertex>(),
                 );
                 context.immediate_write_buffer(
                     &self.index_buffer,
                     bytemuck::cast_slice(&mesh.indices),
-                    Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index() +
-                    index_cursor as usize * std::mem::size_of::<u32>(),
+                    Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index()
+                        + index_cursor as usize * std::mem::size_of::<u32>(),
                 );
 
                 vertex_cursor += mesh.vertices.len() as u32;
@@ -141,13 +145,18 @@ impl EguiRenderer {
         clipped_batches
     }
 
-    pub fn update_texture(&mut self, context: &graphics::Context, id: egui::TextureId, delta: &egui::epaint::ImageDelta) {
+    pub fn update_texture(
+        &mut self,
+        context: &graphics::Context,
+        id: egui::TextureId,
+        delta: &egui::epaint::ImageDelta,
+    ) {
         puffin::profile_function!();
-        
+
         let egui::TextureId::Managed(id) = id else {
             return;
         };
-        
+
         let [width, height] = delta.image.size();
         let bytes: Vec<u8> = match &delta.image {
             egui::ImageData::Color(image) => {
@@ -164,23 +173,33 @@ impl EguiRenderer {
         let (image, is_new) = if let Some(image) = self.textures.get(&id) {
             (image.full_view, false)
         } else {
-            let image = context.create_image(format!("egui_image_{id}"), &graphics::ImageDesc {
-                ty: graphics::ImageType::Single2D,
-                format: Self::IMAGE_FORMAT,
-                dimensions: [width as u32, height as u32, 1],
-                mip_levels: 1,
-                samples: graphics::MultisampleCount::None,
-                usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-                aspect: vk::ImageAspectFlags::COLOR,
-                subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-                ..Default::default()
-            });
+            let image = context.create_image(
+                format!("egui_image_{id}"),
+                &graphics::ImageDesc {
+                    ty: graphics::ImageType::Single2D,
+                    format: Self::IMAGE_FORMAT,
+                    dimensions: [width as u32, height as u32, 1],
+                    mip_levels: 1,
+                    samples: graphics::MultisampleCount::None,
+                    usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+                    ..Default::default()
+                },
+            );
             let image_view = image.full_view;
             self.textures.insert(id, image);
             (image_view, true)
         };
 
-        let offset = delta.pos.map(|[x, y]| vk::Offset3D { x: x as i32, y: y as i32, z: 0 }).unwrap_or_default();
+        let offset = delta
+            .pos
+            .map(|[x, y]| vk::Offset3D {
+                x: x as i32,
+                y: y as i32,
+                z: 0,
+            })
+            .unwrap_or_default();
         let extent = vk::Extent3D {
             width: delta.image.width() as u32,
             height: delta.image.height() as u32,
@@ -215,7 +234,9 @@ impl EguiRenderer {
 
         let clipped_batches = self.update(context, clipped_primitives, textures_delta);
 
-        if clipped_batches.is_empty() {return;}
+        if clipped_batches.is_empty() {
+            return;
+        }
 
         let window_size: [u32; 2] = context.window().inner_size().into();
         let screen_size = window_size.map(|n| n as f32);
@@ -253,17 +274,17 @@ impl EguiRenderer {
                         src_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_DST_ALPHA,
                         dst_alpha_blend_factor: vk::BlendFactor::ONE,
                         alpha_blend_op: vk::BlendOp::ADD,
-                        
                     }),
                     ..Default::default()
-                }])
+                }]),
         );
 
-        context.add_pass("egui_draw")
+        context
+            .add_pass("egui_draw")
             .with_dependency(target_image, graphics::AccessKind::ColorAttachmentWrite)
             .render(move |cmd, graph| {
                 let target_image = graph.get_image(target_image);
-                
+
                 let index_buffer = graph.get_buffer(index_buffer);
                 let vertex_buffer = graph.get_buffer(vertex_buffer);
 
@@ -295,7 +316,7 @@ impl EguiRenderer {
                         .buffer(&vertex_buffer)
                         .uint(vertex_offset as u32);
 
-                    cmd.draw_indexed(batch.index_range.clone(), 0..1, batch.vertex_offset);                    
+                    cmd.draw_indexed(batch.index_range.clone(), 0..1, batch.vertex_offset);
                 }
 
                 cmd.end_rendering();

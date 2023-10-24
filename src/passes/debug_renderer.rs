@@ -1,10 +1,12 @@
 use std::{f32::consts::PI, mem::size_of};
 
 use ash::vk;
-use glam::{Vec3A, Vec4, vec3, Vec3, Mat4};
+use glam::{vec3, Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, App, Settings, math, collections::arena::Index, assets::GpuAssetStore, scene::GpuMeshDrawCommand};
+use crate::{
+    assets::GpuAssetStore, collections::arena::Index, graphics, math, scene::GpuMeshDrawCommand, App, Settings,
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -37,7 +39,7 @@ pub struct DebugRenderer {
     mesh_instances: Vec<GpuDebugMeshInstance>,
     mesh_draw_commands: Vec<DebugMeshDrawCommand>,
     mesh_expanded_draw_commands: Vec<GpuMeshDrawCommand>,
-    
+
     line_vertex_buffer: graphics::Buffer,
     mesh_instance_buffer: graphics::Buffer,
     mesh_draw_commands_buffer: graphics::Buffer,
@@ -50,36 +52,33 @@ impl DebugRenderer {
     const CIRCLE_LINE_SEGMENTS: usize = 24;
 
     pub fn new(context: &mut graphics::Context) -> Self {
-        let line_buffer = context.create_buffer("debug_line_buffer", &graphics::BufferDesc {
-            size: graphics::FRAME_COUNT * Self::MAX_VERTEX_COUNT * size_of::<GpuDebugLineVertex>(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER |
-                   vk::BufferUsageFlags::TRANSFER_DST,
-            memory_location: MemoryLocation::GpuOnly,
-        });
-        
+        let line_buffer = context.create_buffer(
+            "debug_line_buffer",
+            &graphics::BufferDesc {
+                size: graphics::FRAME_COUNT * Self::MAX_VERTEX_COUNT * size_of::<GpuDebugLineVertex>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+        );
+
         let mesh_instance_buffer = context.create_buffer(
             "debug_mesh_intance_buffermesh_intance_buffer",
             &graphics::BufferDesc {
-                size: graphics::FRAME_COUNT *
-                      Self::MAX_MESH_INSTANCE_COUNT *
-                      size_of::<GpuDebugMeshInstance>(),
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER |
-                       vk::BufferUsageFlags::TRANSFER_DST,
+                size: graphics::FRAME_COUNT * Self::MAX_MESH_INSTANCE_COUNT * size_of::<GpuDebugMeshInstance>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: MemoryLocation::GpuOnly,
-            }
+            },
         );
 
         let mesh_draw_commands_buffer = context.create_buffer(
             "debug_mesh_draw_commands_buffer",
             &graphics::BufferDesc {
-                size: graphics::FRAME_COUNT *
-                      Self::MAX_MESH_DRAW_COMMANDS *
-                      size_of::<GpuMeshDrawCommand>(),
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER |
-                       vk::BufferUsageFlags::TRANSFER_DST |
-                       vk::BufferUsageFlags::INDIRECT_BUFFER,
+                size: graphics::FRAME_COUNT * Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuMeshDrawCommand>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::INDIRECT_BUFFER,
                 memory_location: MemoryLocation::GpuOnly,
-            }
+            },
         );
 
         Self {
@@ -106,14 +105,38 @@ impl DebugRenderer {
         let color = color.to_array().map(|f| (f * 255.0) as u8);
 
         self.line_vertices.extend_from_slice(&[
-            GpuDebugLineVertex { position: corners[0].truncate(), color },
-            GpuDebugLineVertex { position: corners[1].truncate(), color },
-            GpuDebugLineVertex { position: corners[1].truncate(), color },
-            GpuDebugLineVertex { position: corners[2].truncate(), color },
-            GpuDebugLineVertex { position: corners[2].truncate(), color },
-            GpuDebugLineVertex { position: corners[3].truncate(), color },
-            GpuDebugLineVertex { position: corners[3].truncate(), color },
-            GpuDebugLineVertex { position: corners[0].truncate(), color },
+            GpuDebugLineVertex {
+                position: corners[0].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[1].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[1].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[2].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[2].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[3].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[3].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[0].truncate(),
+                color,
+            },
         ]);
     }
 
@@ -121,32 +144,102 @@ impl DebugRenderer {
         let color = color.to_array().map(|f| (f * 255.0) as u8);
 
         self.line_vertices.extend_from_slice(&[
-            GpuDebugLineVertex { position: corners[0].truncate(), color },
-            GpuDebugLineVertex { position: corners[1].truncate(), color },
-            GpuDebugLineVertex { position: corners[1].truncate(), color },
-            GpuDebugLineVertex { position: corners[2].truncate(), color },
-            GpuDebugLineVertex { position: corners[2].truncate(), color },
-            GpuDebugLineVertex { position: corners[3].truncate(), color },
-            GpuDebugLineVertex { position: corners[3].truncate(), color },
-            GpuDebugLineVertex { position: corners[0].truncate(), color },
-            
-            GpuDebugLineVertex { position: corners[4].truncate(), color },
-            GpuDebugLineVertex { position: corners[5].truncate(), color },
-            GpuDebugLineVertex { position: corners[5].truncate(), color },
-            GpuDebugLineVertex { position: corners[6].truncate(), color },
-            GpuDebugLineVertex { position: corners[6].truncate(), color },
-            GpuDebugLineVertex { position: corners[7].truncate(), color },
-            GpuDebugLineVertex { position: corners[7].truncate(), color },
-            GpuDebugLineVertex { position: corners[4].truncate(), color },
-
-            GpuDebugLineVertex { position: corners[0].truncate(), color },
-            GpuDebugLineVertex { position: corners[4].truncate(), color },
-            GpuDebugLineVertex { position: corners[1].truncate(), color },
-            GpuDebugLineVertex { position: corners[5].truncate(), color },
-            GpuDebugLineVertex { position: corners[2].truncate(), color },
-            GpuDebugLineVertex { position: corners[6].truncate(), color },
-            GpuDebugLineVertex { position: corners[3].truncate(), color },
-            GpuDebugLineVertex { position: corners[7].truncate(), color },
+            GpuDebugLineVertex {
+                position: corners[0].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[1].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[1].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[2].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[2].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[3].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[3].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[0].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[4].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[5].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[5].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[6].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[6].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[7].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[7].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[4].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[0].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[4].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[1].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[5].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[2].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[6].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[3].truncate(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: corners[7].truncate(),
+                color,
+            },
         ]);
     }
 
@@ -154,14 +247,38 @@ impl DebugRenderer {
         let color = color.to_array().map(|f| (f * 255.0) as u8);
 
         self.line_vertices.extend_from_slice(&[
-            GpuDebugLineVertex { position: pos - vec3( 1.0,  1.0, 1.0) * 0.01, color },
-            GpuDebugLineVertex { position: pos + vec3( 1.0,  1.0, 1.0) * 0.01, color },
-            GpuDebugLineVertex { position: pos - vec3(-1.0,  1.0, 1.0) * 0.01, color },
-            GpuDebugLineVertex { position: pos + vec3(-1.0,  1.0, 1.0) * 0.01, color },
-            GpuDebugLineVertex { position: pos - vec3( 1.0, -1.0, 1.0) * 0.01, color },
-            GpuDebugLineVertex { position: pos + vec3( 1.0, -1.0, 1.0) * 0.01, color },
-            GpuDebugLineVertex { position: pos - vec3(-1.0, -1.0, 1.0) * 0.01, color },
-            GpuDebugLineVertex { position: pos + vec3(-1.0, -1.0, 1.0) * 0.01, color },
+            GpuDebugLineVertex {
+                position: pos - vec3(1.0, 1.0, 1.0) * 0.01,
+                color,
+            },
+            GpuDebugLineVertex {
+                position: pos + vec3(1.0, 1.0, 1.0) * 0.01,
+                color,
+            },
+            GpuDebugLineVertex {
+                position: pos - vec3(-1.0, 1.0, 1.0) * 0.01,
+                color,
+            },
+            GpuDebugLineVertex {
+                position: pos + vec3(-1.0, 1.0, 1.0) * 0.01,
+                color,
+            },
+            GpuDebugLineVertex {
+                position: pos - vec3(1.0, -1.0, 1.0) * 0.01,
+                color,
+            },
+            GpuDebugLineVertex {
+                position: pos + vec3(1.0, -1.0, 1.0) * 0.01,
+                color,
+            },
+            GpuDebugLineVertex {
+                position: pos - vec3(-1.0, -1.0, 1.0) * 0.01,
+                color,
+            },
+            GpuDebugLineVertex {
+                position: pos + vec3(-1.0, -1.0, 1.0) * 0.01,
+                color,
+            },
         ]);
     }
 
@@ -169,10 +286,10 @@ impl DebugRenderer {
         self.draw_cross(pos, color);
         let color = color.to_array().map(|f| (f * 255.0) as u8);
 
-        let mut circle_vertices = [
-            GpuDebugLineVertex { position: Vec3::ZERO, color };
-            Self::CIRCLE_LINE_SEGMENTS * 2
-        ];
+        let mut circle_vertices = [GpuDebugLineVertex {
+            position: Vec3::ZERO,
+            color,
+        }; Self::CIRCLE_LINE_SEGMENTS * 2];
 
         for (vertex_index, vertex) in circle_vertices.iter_mut().enumerate() {
             let point = vertex_index / 2 + (vertex_index % 2);
@@ -207,37 +324,81 @@ impl DebugRenderer {
         let (plane_x, plane_y) = normal.any_orthonormal_pair();
         let center = normal * distance;
         self.line_vertices.extend_from_slice(&[
-            GpuDebugLineVertex { position: (center + ( plane_x +  plane_y) * half_size).into(), color },
-            GpuDebugLineVertex { position: (center + ( plane_x + -plane_y) * half_size).into(), color },
-
-            GpuDebugLineVertex { position: (center + ( plane_x + -plane_y) * half_size).into(), color },
-            GpuDebugLineVertex { position: (center + (-plane_x + -plane_y) * half_size).into(), color },
-            
-            GpuDebugLineVertex { position: (center + (-plane_x + -plane_y) * half_size).into(), color },
-            GpuDebugLineVertex { position: (center + (-plane_x +  plane_y) * half_size).into(), color },
-            
-            GpuDebugLineVertex { position: (center + (-plane_x +  plane_y) * half_size).into(), color },
-            GpuDebugLineVertex { position: (center + ( plane_x +  plane_y) * half_size).into(), color },
-
-
-            GpuDebugLineVertex { position: (center + ( plane_x +  plane_y) * half_size).into(), color },
-            GpuDebugLineVertex { position: (center + ( plane_x +  plane_y + normal * 0.5) * half_size).into(), color },
-            
-            GpuDebugLineVertex { position: (center + ( plane_x + -plane_y) * half_size).into(), color },
-            GpuDebugLineVertex { position: (center + ( plane_x + -plane_y + normal * 0.5) * half_size).into(), color },
-            
-            GpuDebugLineVertex { position: (center + (-plane_x + -plane_y) * half_size).into(), color },
-            GpuDebugLineVertex { position: (center + (-plane_x + -plane_y + normal * 0.5) * half_size).into(), color },
-            
-            GpuDebugLineVertex { position: (center + (-plane_x +  plane_y) * half_size).into(), color },
-            GpuDebugLineVertex { position: (center + (-plane_x +  plane_y + normal * 0.5) * half_size).into(), color },
+            GpuDebugLineVertex {
+                position: (center + (plane_x + plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (plane_x + -plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (plane_x + -plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (-plane_x + -plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (-plane_x + -plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (-plane_x + plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (-plane_x + plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (plane_x + plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (plane_x + plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (plane_x + plane_y + normal * 0.5) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (plane_x + -plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (plane_x + -plane_y + normal * 0.5) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (-plane_x + -plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (-plane_x + -plane_y + normal * 0.5) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (-plane_x + plane_y) * half_size).into(),
+                color,
+            },
+            GpuDebugLineVertex {
+                position: (center + (-plane_x + plane_y + normal * 0.5) * half_size).into(),
+                color,
+            },
         ]);
     }
 
     pub fn draw_model_wireframe(&mut self, matrix: Mat4, model: Index, color: Vec4) {
         let instance_start = self.mesh_instances.len() as u32;
         self.mesh_instances.push(GpuDebugMeshInstance { matrix, color });
-        self.mesh_draw_commands.push(DebugMeshDrawCommand { instance_start, instance_count: 1, model });
+        self.mesh_draw_commands.push(DebugMeshDrawCommand {
+            instance_start,
+            instance_count: 1,
+            model,
+        });
     }
 
     pub fn render(
@@ -250,7 +411,7 @@ impl DebugRenderer {
         depth_image: graphics::GraphImageHandle,
         view_projection: Mat4,
     ) {
-        // for now the msaa resolve always happens here so we always need this pass 
+        // for now the msaa resolve always happens here so we always need this pass
         // if self.line_vertices.is_empty() && self.mesh_draw_commands.is_empty() { return; }
 
         self.mesh_expanded_draw_commands.clear();
@@ -291,7 +452,6 @@ impl DebugRenderer {
         let mesh_draw_commands_buffer = context.import(&self.mesh_draw_commands_buffer);
         let mesh_draw_commands_count = self.mesh_expanded_draw_commands.len();
 
-
         let line_pipeline = context.create_raster_pipeline(
             "debug_line_pipeline",
             &graphics::RasterPipelineDesc::builder()
@@ -317,8 +477,8 @@ impl DebugRenderer {
                 }))
                 .multisample_state(graphics::MultisampleState {
                     sample_count: settings.msaa,
-                    alpha_to_coverage: false
-                })
+                    alpha_to_coverage: false,
+                }),
         );
 
         let mesh_wireframe_pipeline = context.create_raster_pipeline(
@@ -346,13 +506,14 @@ impl DebugRenderer {
                 }))
                 .multisample_state(graphics::MultisampleState {
                     sample_count: settings.msaa,
-                    alpha_to_coverage: false
-                })
+                    alpha_to_coverage: false,
+                }),
         );
 
         let assets = assets.import_to_graph(context);
 
-        context.add_pass("debug_render")
+        context
+            .add_pass("debug_render")
             .with_dependency(target_image, graphics::AccessKind::ColorAttachmentWrite)
             .with_dependency(depth_image, graphics::AccessKind::DepthAttachmentWrite)
             .with_dependencies(resolve_image.map(|h| (h, graphics::AccessKind::ColorAttachmentWrite)))
@@ -373,7 +534,7 @@ impl DebugRenderer {
                         .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                         .resolve_mode(vk::ResolveModeFlags::AVERAGE);
                 }
-                
+
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
                     .image_view(depth_image.view)
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
@@ -392,7 +553,7 @@ impl DebugRenderer {
                 if line_vertex_count > 0 {
                     let line_buffer = graph.get_buffer(line_vertex_buffer);
                     cmd.bind_raster_pipeline(line_pipeline);
-                    
+
                     // back
                     cmd.build_constants()
                         .mat4(&view_projection)
@@ -401,7 +562,7 @@ impl DebugRenderer {
                         .uint(line_vertex_offset as u32);
                     cmd.set_depth_test_enable(false);
                     cmd.draw(0..line_vertex_count as u32, 0..1);
-                    
+
                     // front
                     cmd.build_constants()
                         .mat4(&view_projection)
@@ -416,13 +577,13 @@ impl DebugRenderer {
                 if mesh_draw_commands_count > 0 {
                     let index_buffer = graph.get_buffer(assets.index_buffer);
                     let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-    
+
                     let instance_buffer = graph.get_buffer(mesh_instance_buffer);
                     let draw_commands_buffer = graph.get_buffer(mesh_draw_commands_buffer);
-    
+
                     cmd.bind_raster_pipeline(mesh_wireframe_pipeline);
                     cmd.bind_index_buffer(index_buffer, 0);
-    
+
                     // back
                     cmd.build_constants()
                         .mat4(&view_projection)
@@ -434,9 +595,9 @@ impl DebugRenderer {
                         draw_commands_buffer,
                         0,
                         mesh_draw_commands_count as u32,
-                        size_of::<GpuMeshDrawCommand>() as u32
+                        size_of::<GpuMeshDrawCommand>() as u32,
                     );
-    
+
                     // front
                     cmd.build_constants()
                         .mat4(&view_projection)
@@ -448,7 +609,7 @@ impl DebugRenderer {
                         draw_commands_buffer,
                         0,
                         mesh_draw_commands_count as u32,
-                        size_of::<GpuMeshDrawCommand>() as u32
+                        size_of::<GpuMeshDrawCommand>() as u32,
                     );
                 }
 

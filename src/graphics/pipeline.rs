@@ -1,4 +1,4 @@
-use std::{path::Path, borrow::Cow};
+use std::{borrow::Cow, path::Path};
 
 use crate::{graphics, utils};
 
@@ -50,7 +50,7 @@ pub struct DepthBias {
 pub struct OrderedDepthBias {
     pub constant_factor: ordered_float::OrderedFloat<f32>,
     pub clamp: ordered_float::OrderedFloat<f32>,
-    pub slope_factor: ordered_float::OrderedFloat<f32>,   
+    pub slope_factor: ordered_float::OrderedFloat<f32>,
 }
 
 impl From<DepthBias> for OrderedDepthBias {
@@ -106,7 +106,7 @@ impl Default for PipelineColorAttachment {
         Self {
             format: Default::default(),
             color_mask: vk::ColorComponentFlags::RGBA,
-            color_blend: Default::default()
+            color_blend: Default::default(),
         }
     }
 }
@@ -143,19 +143,15 @@ pub struct DepthState {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum MultisampleCount {
-    #[default] None,
+    #[default]
+    None,
     X2,
     X4,
     X8,
 }
 
 impl MultisampleCount {
-    pub const ALL: [Self; 4] = [
-        Self::None,
-        Self::X2,
-        Self::X4,
-        Self::X8,
-    ];
+    pub const ALL: [Self; 4] = [Self::None, Self::X2, Self::X4, Self::X8];
 
     pub fn is_some(self) -> bool {
         self != Self::None
@@ -178,7 +174,7 @@ impl From<vk::SampleCountFlags> for MultisampleCount {
             vk::SampleCountFlags::TYPE_2 => MultisampleCount::X2,
             vk::SampleCountFlags::TYPE_4 => MultisampleCount::X4,
             vk::SampleCountFlags::TYPE_8 => MultisampleCount::X8,
-            _ => unimplemented!()
+            _ => unimplemented!(),
         }
     }
 }
@@ -187,9 +183,9 @@ impl std::fmt::Display for MultisampleCount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MultisampleCount::None => write!(f, "off"),
-            MultisampleCount::X2   => write!(f, "2x"),
-            MultisampleCount::X4   => write!(f, "4x"),
-            MultisampleCount::X8   => write!(f, "8x"),
+            MultisampleCount::X2 => write!(f, "2x"),
+            MultisampleCount::X4 => write!(f, "4x"),
+            MultisampleCount::X8 => write!(f, "8x"),
         }
     }
 }
@@ -276,7 +272,7 @@ impl RasterPipelineDescBuilder {
             std::ptr::copy_nonoverlapping(
                 attachments.as_ptr(),
                 self.desc.color_attachments.as_mut_ptr(),
-                attachments.len()
+                attachments.len(),
             );
         }
         self
@@ -321,25 +317,29 @@ impl graphics::Context {
         if let Some(vertex_source) = &desc.vertex_source {
             let module = self.get_shader_module(vertex_source);
 
-            stages.push(vk::PipelineShaderStageCreateInfo::builder()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(module)
-                .name(cstr::cstr!("main"))
-                .build());
+            stages.push(
+                vk::PipelineShaderStageCreateInfo::builder()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(module)
+                    .name(cstr::cstr!("main"))
+                    .build(),
+            );
         }
 
         if let Some(fragment_source) = &desc.fragment_source {
             let module = self.get_shader_module(fragment_source);
 
-            stages.push(vk::PipelineShaderStageCreateInfo::builder()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(module)
-                .name(cstr::cstr!("main"))
-                .build());
+            stages.push(
+                vk::PipelineShaderStageCreateInfo::builder()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(module)
+                    .name(cstr::cstr!("main"))
+                    .build(),
+            );
         }
 
-        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
-            .topology(desc.rasterizer.primitive_topology);
+        let input_assembly =
+            vk::PipelineInputAssemblyStateCreateInfo::builder().topology(desc.rasterizer.primitive_topology);
 
         let mut rasterization = vk::PipelineRasterizationStateCreateInfo::builder()
             .polygon_mode(desc.rasterizer.polygon_mode)
@@ -349,21 +349,21 @@ impl graphics::Context {
             .depth_clamp_enable(desc.rasterizer.depth_clamp);
 
         match &desc.depth_bias {
-            PipelineState::Static(Some(depth_bias)) => rasterization = rasterization
-                .depth_bias_enable(true)
-                .depth_bias_constant_factor(depth_bias.constant_factor.0)
-                .depth_bias_clamp(depth_bias.clamp.0)
-                .depth_bias_slope_factor(depth_bias.slope_factor.0),
+            PipelineState::Static(Some(depth_bias)) => {
+                rasterization = rasterization
+                    .depth_bias_enable(true)
+                    .depth_bias_constant_factor(depth_bias.constant_factor.0)
+                    .depth_bias_clamp(depth_bias.clamp.0)
+                    .depth_bias_slope_factor(depth_bias.slope_factor.0)
+            }
             PipelineState::Static(None) => rasterization = rasterization.depth_bias_enable(false),
             PipelineState::Dynamic => {
                 rasterization = rasterization.depth_bias_enable(true);
                 dynamic_states.push(vk::DynamicState::DEPTH_BIAS)
-            },
+            }
         }
 
-        let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
-            .viewport_count(1)
-            .scissor_count(1);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::builder().viewport_count(1).scissor_count(1);
 
         let multisample_state = desc.multisample_state.to_vk();
 
@@ -381,7 +381,7 @@ impl graphics::Context {
                 PipelineState::Dynamic => {
                     depth_stencil_state = depth_stencil_state.depth_test_enable(true);
                     dynamic_states.push(vk::DynamicState::DEPTH_TEST_ENABLE);
-                },
+                }
             }
 
             depth_stencil_state = depth_stencil_state
@@ -395,14 +395,11 @@ impl graphics::Context {
 
         let mut rendering_info = vk::PipelineRenderingCreateInfo::builder()
             .color_attachment_formats(&color_attachment_formats[..desc.color_attachment_count])
-            .depth_attachment_format(
-                desc.depth_state.as_ref().map_or(vk::Format::UNDEFINED, |depth| depth.format),
-            );
+            .depth_attachment_format(desc.depth_state.as_ref().map_or(vk::Format::UNDEFINED, |depth| depth.format));
 
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
 
-        let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
-            .dynamic_states(&dynamic_states);
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
 
         let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
             .stages(&stages)
@@ -418,7 +415,8 @@ impl graphics::Context {
             .push_next(&mut rendering_info);
 
         let handle = unsafe {
-            self.device.raw
+            self.device
+                .raw
                 .create_graphics_pipelines(
                     vk::PipelineCache::null(),
                     std::slice::from_ref(&pipeline_create_info),
@@ -446,12 +444,12 @@ impl graphics::Context {
             .module(module)
             .name(cstr::cstr!("main"))
             .build();
-        let create_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(stage)
-            .layout(self.device.pipeline_layout);
+        let create_info = vk::ComputePipelineCreateInfo::builder().stage(stage).layout(self.device.pipeline_layout);
 
         let handle = unsafe {
-            self.device.raw.create_compute_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&create_info), None)
+            self.device
+                .raw
+                .create_compute_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&create_info), None)
                 .unwrap()[0]
         };
 
@@ -475,7 +473,7 @@ impl graphics::Context {
                     self.device.set_debug_name(handle, &name);
                     self.shader_modules.insert(source.clone(), handle);
                     handle
-                },
+                }
             }
         }
     }

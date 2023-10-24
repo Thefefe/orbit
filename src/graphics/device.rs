@@ -1,19 +1,20 @@
 use crate::graphics;
 
 use ash::{
+    extensions::{ext, khr},
     vk::{self, Handle},
-    extensions::{khr, ext},
 };
 
 use std::{
     collections::HashSet,
     ffi::{c_void, CStr, CString},
     mem::ManuallyDrop,
-    sync::Mutex, ptr::NonNull,
+    ptr::NonNull,
+    sync::Mutex,
 };
 
 use gpu_allocator::{
-    vulkan::{Allocator, AllocatorCreateDesc, Allocation, AllocationCreateDesc},
+    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
     AllocatorDebugSettings,
 };
 
@@ -112,7 +113,8 @@ impl SurfaceInfo {
     fn query(surface_fns: &khr::Surface, physical_device: vk::PhysicalDevice, surface: vk::SurfaceKHR) -> Self {
         unsafe {
             let capabilities = surface_fns.get_physical_device_surface_capabilities(physical_device, surface).unwrap();
-            let present_modes = surface_fns.get_physical_device_surface_present_modes(physical_device, surface).unwrap();
+            let present_modes =
+                surface_fns.get_physical_device_surface_present_modes(physical_device, surface).unwrap();
             let formats = surface_fns.get_physical_device_surface_formats(physical_device, surface).unwrap();
 
             Self {
@@ -132,8 +134,10 @@ impl SurfaceInfo {
             (device.surface_fns.fp().get_physical_device_surface_capabilities_khr)(
                 device.gpu.handle,
                 device.surface,
-                &mut self.capabilities
-            ).result().unwrap();
+                &mut self.capabilities,
+            )
+            .result()
+            .unwrap();
         };
     }
 }
@@ -201,13 +205,9 @@ impl GpuInfo {
     }
 
     pub fn supported_multisample_counts(&self) -> impl Iterator<Item = graphics::MultisampleCount> + '_ {
-        graphics::MultisampleCount::ALL.into_iter().filter(|sample_count| self
-            .properties
-            .properties10
-            .limits
-            .framebuffer_color_sample_counts
-            .contains(sample_count.to_vk())
-        )
+        graphics::MultisampleCount::ALL.into_iter().filter(|sample_count| {
+            self.properties.properties10.limits.framebuffer_color_sample_counts.contains(sample_count.to_vk())
+        })
     }
 }
 
@@ -227,9 +227,8 @@ fn enumerate_gpus<'a>(
                 .map(|(index, queue_family)| {
                     let index = index as u32;
                     let count = queue_family.queue_count;
-                    let supports_present = surface_fns
-                        .get_physical_device_surface_support(handle, index, surface)
-                        .unwrap();
+                    let supports_present =
+                        surface_fns.get_physical_device_surface_support(handle, index, surface).unwrap();
 
                     QueueFamily {
                         index,
@@ -281,7 +280,7 @@ impl std::error::Error for DeviceCreateError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             DeviceCreateError::LoadError(err) => Some(err),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -295,10 +294,10 @@ impl From<ash::LoadingError> for DeviceCreateError {
 impl std::fmt::Display for DeviceCreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DeviceCreateError::LoadError(err)       => write!(f, "vulkan loading error: {err}"),
-            DeviceCreateError::NoSuitableVersion    => write!(f, "vulkan 1.3 required"),
+            DeviceCreateError::LoadError(err) => write!(f, "vulkan loading error: {err}"),
+            DeviceCreateError::NoSuitableVersion => write!(f, "vulkan 1.3 required"),
             DeviceCreateError::MissingInstanceExtensions(ext) => write!(f, "missing instance extensions: {ext:?}"),
-            DeviceCreateError::NoSuitableGpu        => write!(f, "no suitable graphics device found"),
+            DeviceCreateError::NoSuitableGpu => write!(f, "no suitable graphics device found"),
         }
     }
 }
@@ -469,9 +468,8 @@ impl Device {
         let gpu = enumerate_gpus(&instance, &surface_fns, surface)
             .rev()
             .filter(|gpu| {
-                let universal_queue = gpu
-                    .queues()
-                    .any(|queue| queue.ty == QueueType::Graphics && queue.supports_present);
+                let universal_queue =
+                    gpu.queues().any(|queue| queue.ty == QueueType::Graphics && queue.supports_present);
                 let required_extensions = gpu.has_all_extensions(required_device_extensions);
 
                 universal_queue && required_extensions
@@ -507,41 +505,41 @@ impl Device {
             enabled_device_extensions.iter().map(|ext| ext.as_c_str().as_ptr()).collect::<Vec<_>>();
 
         log::info!("selected gpu: {}", gpu.name());
-        
+
         let mut queue_create_infos = Vec::new();
-        
-        let graphics_queue_family = gpu.queues()
+
+        let graphics_queue_family = gpu
+            .queues()
             .find(|queue| queue.ty == QueueType::Graphics && queue.supports_present)
             .copied()
             .unwrap();
-        let async_compute_queue_family = gpu.queues()
-            .find(|queue| queue.ty == QueueType::AsyncCompute)
-            .copied();
-        let async_transfer_queue_family = gpu.queues()
-            .find(|queue| queue.ty == QueueType::AsyncTransfer)
-            .copied();
+        let async_compute_queue_family = gpu.queues().find(|queue| queue.ty == QueueType::AsyncCompute).copied();
+        let async_transfer_queue_family = gpu.queues().find(|queue| queue.ty == QueueType::AsyncTransfer).copied();
 
         let queue_priorities = [1.0];
 
-        queue_create_infos.push(vk::DeviceQueueCreateInfo::builder()
-            .queue_family_index(graphics_queue_family.index)
-            .queue_priorities(&queue_priorities)
-            .build()
+        queue_create_infos.push(
+            vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(graphics_queue_family.index)
+                .queue_priorities(&queue_priorities)
+                .build(),
         );
 
         if let Some(async_comptute_queue_family) = async_compute_queue_family {
-            queue_create_infos.push(vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(async_comptute_queue_family.index)
-                .queue_priorities(&queue_priorities)
-                .build()
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(async_comptute_queue_family.index)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
             );
         }
 
         if let Some(async_transfer_queue_family) = async_transfer_queue_family {
-            queue_create_infos.push(vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(async_transfer_queue_family.index)
-                .queue_priorities(&queue_priorities)
-                .build()
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(async_transfer_queue_family.index)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
             );
         }
 
@@ -555,9 +553,7 @@ impl Device {
             .shader_int64(true)
             .build();
 
-        let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()
-            .shader_draw_parameters(true)
-            .build();
+        let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder().shader_draw_parameters(true).build();
 
         let mut vulkan12_features = vk::PhysicalDeviceVulkan12Features::builder()
             .runtime_descriptor_array(true)
@@ -602,11 +598,11 @@ impl Device {
         let device_metadata = DeviceMetadata {
             enabled_extensions: enabled_device_extensions,
         };
-        
+
         // helper closure for simple debug name setting only for this function
         // let device_handle = device.handle();
         let set_debug_name = |ty: vk::ObjectType, handle: u64, name: &str| {
-                if let Some(ref debug_utils) = debug_utils_fns {
+            if let Some(ref debug_utils) = debug_utils_fns {
                 unsafe {
                     let cname = CString::new(name).unwrap(); // TODO: cache allocation?
                     let name_info = vk::DebugUtilsObjectNameInfoEXT::builder()
@@ -614,8 +610,7 @@ impl Device {
                         .object_handle(handle)
                         .object_name(cname.as_c_str());
 
-                    debug_utils.set_debug_utils_object_name(device.handle(), &name_info)
-                        .unwrap();
+                    debug_utils.set_debug_utils_object_name(device.handle(), &name_info).unwrap();
                 }
             }
         };
@@ -640,7 +635,8 @@ impl Device {
                 physical_device: gpu.handle,
                 debug_settings: AllocatorDebugSettings::default(),
                 buffer_device_address: true,
-            }).expect("failed to create vulkan allocator");
+            })
+            .expect("failed to create vulkan allocator");
 
             let allocations = arena::Arena::new();
 
@@ -688,13 +684,15 @@ impl Device {
 
                 let layout_create_info = vk::DescriptorSetLayoutCreateInfo::builder()
                     .bindings(&set)
-                    .flags(
-                        vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
-                    )
+                    .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
                     .push_next(&mut ext_flags);
 
                 let layout = unsafe { device.create_descriptor_set_layout(&layout_create_info, None) }.unwrap();
-                set_debug_name(vk::DescriptorSetLayout::TYPE, layout.as_raw(), &format!("bindless_{}_layout", desc_type.name()));
+                set_debug_name(
+                    vk::DescriptorSetLayout::TYPE,
+                    layout.as_raw(),
+                    &format!("bindless_{}_layout", desc_type.name()),
+                );
                 layout
             })
             .collect();
@@ -710,7 +708,11 @@ impl Device {
             .push_constant_ranges(std::slice::from_ref(&push_constant_range));
 
         let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_create_info, None).unwrap() };
-        set_debug_name(vk::PipelineLayout::TYPE, pipeline_layout.as_raw(), "bindless_pipeline_layout");
+        set_debug_name(
+            vk::PipelineLayout::TYPE,
+            pipeline_layout.as_raw(),
+            "bindless_pipeline_layout",
+        );
 
         let pool_sizes: Vec<_> = DescriptorTableType::all_types()
             .map(|desc_ty| vk::DescriptorPoolSize {
@@ -726,11 +728,13 @@ impl Device {
 
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_create_info, None).unwrap() };
 
-        set_debug_name(vk::DescriptorPool::TYPE, descriptor_pool.as_raw(), "bindless_descriptor_pool");
+        set_debug_name(
+            vk::DescriptorPool::TYPE,
+            descriptor_pool.as_raw(),
+            "bindless_descriptor_pool",
+        );
 
-        let descriptor_counts: Vec<_> = DescriptorTableType::all_types()
-            .map(|ty| ty.max_count(&gpu))
-            .collect();
+        let descriptor_counts: Vec<_> = DescriptorTableType::all_types().map(|ty| ty.max_count(&gpu)).collect();
 
         let mut variable_count =
             vk::DescriptorSetVariableDescriptorCountAllocateInfo::builder().descriptor_counts(&descriptor_counts);
@@ -789,10 +793,10 @@ impl Device {
     }
 
     #[inline]
-    pub fn try_get_queue(&self, ty: QueueType) -> Option<&Queue>{
+    pub fn try_get_queue(&self, ty: QueueType) -> Option<&Queue> {
         match ty {
-            QueueType::Graphics      => Some(&self.graphics_queue),
-            QueueType::AsyncCompute  => self.async_compute_queue.as_ref(),
+            QueueType::Graphics => Some(&self.graphics_queue),
+            QueueType::AsyncCompute => self.async_compute_queue.as_ref(),
             QueueType::AsyncTransfer => self.async_transfer_queue.as_ref(),
         }
     }
@@ -800,17 +804,15 @@ impl Device {
     #[inline]
     pub fn get_queue(&self, ty: QueueType) -> &Queue {
         match ty {
-            QueueType::Graphics      => &self.graphics_queue,
-            QueueType::AsyncCompute  => self.async_compute_queue.as_ref().unwrap_or(&self.graphics_queue),
+            QueueType::Graphics => &self.graphics_queue,
+            QueueType::AsyncCompute => self.async_compute_queue.as_ref().unwrap_or(&self.graphics_queue),
             QueueType::AsyncTransfer => self.async_transfer_queue.as_ref().unwrap_or(&self.graphics_queue),
         }
     }
 
     #[inline]
     pub fn queue_submit(&self, ty: QueueType, submits: &[vk::SubmitInfo2], fence: vk::Fence) {
-        unsafe {
-            self.raw.queue_submit2(self.get_queue(ty).handle, submits, fence).unwrap()
-        }
+        unsafe { self.raw.queue_submit2(self.get_queue(ty).handle, submits, fence).unwrap() }
     }
 
     pub fn create_fence(&self, name: &str, signaled: bool) -> vk::Fence {
@@ -838,8 +840,7 @@ impl Device {
                     .object_handle(handle.as_raw())
                     .object_name(cname.as_c_str());
 
-                debug_utils.set_debug_utils_object_name(self.raw.handle(), &name_info)
-                    .unwrap();
+                debug_utils.set_debug_utils_object_name(self.raw.handle(), &name_info).unwrap();
             }
         }
     }
@@ -850,8 +851,7 @@ impl Device {
     ) -> (AllocIndex, vk::DeviceMemory, u64, Option<NonNull<u8>>) {
         puffin::profile_function!(alloc_desc.name);
         let mut allocator_stuff = self.allocator_stuff.lock().unwrap();
-        let allocation = allocator_stuff.allocator.allocate(alloc_desc)
-            .expect("failed to allocate memory");
+        let allocation = allocator_stuff.allocator.allocate(alloc_desc).expect("failed to allocate memory");
 
         let memory = unsafe { allocation.memory() };
         let offset = allocation.offset();
@@ -929,10 +929,8 @@ impl Device {
 
     pub fn write_storage_image(&self, index: DescriptorIndex, handle: vk::ImageView) {
         unsafe {
-            let image_info = vk::DescriptorImageInfo::builder()
-                .image_layout(vk::ImageLayout::GENERAL)
-                .image_view(handle)
-                .build();
+            let image_info =
+                vk::DescriptorImageInfo::builder().image_layout(vk::ImageLayout::GENERAL).image_view(handle).build();
 
             let write_info = vk::WriteDescriptorSet::builder()
                 .dst_set(self.descriptor_sets[DescriptorTableType::StorageImage.set_index() as usize])
@@ -979,8 +977,8 @@ impl Drop for Device {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DescriptorTableType {
     StorageBuffer = 0,
-    SampledImage  = 1,
-    StorageImage  = 2,
+    SampledImage = 1,
+    StorageImage = 2,
 }
 
 impl DescriptorTableType {
@@ -1002,17 +1000,17 @@ impl DescriptorTableType {
 
     fn to_vk(self) -> vk::DescriptorType {
         match self {
-            DescriptorTableType::StorageBuffer  => vk::DescriptorType::STORAGE_BUFFER,
-            DescriptorTableType::SampledImage   => vk::DescriptorType::SAMPLED_IMAGE,
-            DescriptorTableType::StorageImage   => vk::DescriptorType::STORAGE_IMAGE,
+            DescriptorTableType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
+            DescriptorTableType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+            DescriptorTableType::StorageImage => vk::DescriptorType::STORAGE_IMAGE,
         }
     }
 
     fn name(self) -> &'static str {
         match self {
-            DescriptorTableType::StorageBuffer  => "storage_buffer",
-            DescriptorTableType::SampledImage   => "sampled_image",
-            DescriptorTableType::StorageImage   => "storage_image",
+            DescriptorTableType::StorageBuffer => "storage_buffer",
+            DescriptorTableType::SampledImage => "sampled_image",
+            DescriptorTableType::StorageImage => "storage_image",
         }
     }
 
@@ -1040,13 +1038,13 @@ pub type DescriptorIndex = u32;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SamplerKind {
-    LinearClamp      = 0,
-    LinearRepeat     = 1,
-    NearestClamp     = 2,
-    NearestRepeat    = 3,
+    LinearClamp = 0,
+    LinearRepeat = 1,
+    NearestClamp = 2,
+    NearestRepeat = 3,
     ShadowComparison = 4,
-    ShadowDepth      = 5,
-    ReduceMin        = 6,
+    ShadowDepth = 5,
+    ReduceMin = 6,
 }
 
 const SAMPLER_COUNT: usize = 7;
@@ -1078,7 +1076,7 @@ impl SamplerKind {
                     .max_lod(vk::LOD_CLAMP_NONE);
 
                 unsafe { device.create_sampler(&create_info, None).unwrap() }
-            },
+            }
             SamplerKind::LinearRepeat => {
                 let create_info = vk::SamplerCreateInfo::builder()
                     .address_mode_u(vk::SamplerAddressMode::REPEAT)
@@ -1093,7 +1091,7 @@ impl SamplerKind {
                     .max_lod(vk::LOD_CLAMP_NONE);
 
                 unsafe { device.create_sampler(&create_info, None).unwrap() }
-            },
+            }
             SamplerKind::NearestClamp => {
                 let create_info = vk::SamplerCreateInfo::builder()
                     .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
@@ -1108,7 +1106,7 @@ impl SamplerKind {
                     .max_lod(vk::LOD_CLAMP_NONE);
 
                 unsafe { device.create_sampler(&create_info, None).unwrap() }
-            },
+            }
             SamplerKind::NearestRepeat => {
                 let create_info = vk::SamplerCreateInfo::builder()
                     .address_mode_u(vk::SamplerAddressMode::REPEAT)
@@ -1123,7 +1121,7 @@ impl SamplerKind {
                     .max_lod(vk::LOD_CLAMP_NONE);
 
                 unsafe { device.create_sampler(&create_info, None).unwrap() }
-            },
+            }
             SamplerKind::ShadowComparison => {
                 let create_info = vk::SamplerCreateInfo::builder()
                     .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
@@ -1138,7 +1136,7 @@ impl SamplerKind {
                     .compare_op(vk::CompareOp::GREATER_OR_EQUAL);
 
                 unsafe { device.create_sampler(&create_info, None).unwrap() }
-            },
+            }
             SamplerKind::ShadowDepth => {
                 let create_info = vk::SamplerCreateInfo::builder()
                     .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
@@ -1151,10 +1149,10 @@ impl SamplerKind {
                     .max_lod(vk::LOD_CLAMP_NONE);
 
                 unsafe { device.create_sampler(&create_info, None).unwrap() }
-            },
+            }
             SamplerKind::ReduceMin => {
-                let mut reduction_mode = vk::SamplerReductionModeCreateInfo::builder()
-                    .reduction_mode(vk::SamplerReductionMode::MIN);
+                let mut reduction_mode =
+                    vk::SamplerReductionModeCreateInfo::builder().reduction_mode(vk::SamplerReductionMode::MIN);
 
                 let create_info = vk::SamplerCreateInfo::builder()
                     .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
@@ -1168,7 +1166,7 @@ impl SamplerKind {
                     .push_next(&mut reduction_mode);
 
                 unsafe { device.create_sampler(&create_info, None).unwrap() }
-            },
+            }
         }
     }
 }
@@ -1208,7 +1206,7 @@ unsafe extern "system" fn vk_debug_log_callback(
         Severity::VERBOSE => log::Level::Trace,
         _ => log::Level::Debug,
     };
-    
+
     let message_cstr = CStr::from_ptr((*p_callback_data).p_message);
     let Ok(message) = message_cstr.to_str() else {
         log::error!("failed to parse debug callback message, displaying cstr...");

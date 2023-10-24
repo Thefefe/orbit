@@ -2,21 +2,27 @@ use ash::vk;
 use glam::{Mat4, Vec3};
 use rand::prelude::Distribution;
 
-use crate::{graphics, Camera, EnvironmentMap, assets::AssetGraphData, scene::{SceneGraphData, GpuMeshDrawCommand}, MAX_DRAW_COUNT, App, Settings, passes::draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, AlphaModeFlags}, math};
+use crate::{
+    assets::AssetGraphData,
+    graphics, math,
+    passes::draw_gen::{create_draw_commands, AlphaModeFlags, CullInfo, OcclusionCullInfo},
+    scene::{GpuMeshDrawCommand, SceneGraphData},
+    App, Camera, EnvironmentMap, Settings, MAX_DRAW_COUNT,
+};
 
-use super::{shadow_renderer::DirectionalLightGraphData, env_map_loader::GraphEnvironmentMap, draw_gen::DepthPyramid};
+use super::{draw_gen::DepthPyramid, env_map_loader::GraphEnvironmentMap, shadow_renderer::DirectionalLightGraphData};
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
-    Shaded    = 0,
-    Cascade   = 1,
-    Normal    = 2,
-    Metalic   = 3,
+    Shaded = 0,
+    Cascade = 1,
+    Normal = 2,
+    Metalic = 3,
     Roughness = 4,
-    Emissive  = 5,
-    Ao        = 6,
-    Overdraw  = 7,
+    Emissive = 5,
+    Ao = 6,
+    Overdraw = 7,
 }
 
 impl From<u32> for RenderMode {
@@ -48,7 +54,8 @@ impl TargetAttachments {
         [
             (self.color_target, graphics::AccessKind::ColorAttachmentWrite),
             (self.depth_target, graphics::AccessKind::DepthAttachmentWrite),
-        ].into_iter()
+        ]
+        .into_iter()
         .chain(self.color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
         .chain(self.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
     }
@@ -96,36 +103,45 @@ impl ForwardRenderer {
                     test: graphics::PipelineState::Static(true),
                     write: false,
                     compare: vk::CompareOp::GREATER,
-                }))
+                })),
         );
 
-        let brdf_integration_map = context.create_image("brdf_integration_map", &graphics::ImageDesc {
-            ty: graphics::ImageType::Single2D,
-            format: Self::LUT_FORMAT,
-            dimensions: [512, 512, 1],
-            mip_levels: 1,
-            samples: graphics::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-            ..Default::default()
-        });
+        let brdf_integration_map = context.create_image(
+            "brdf_integration_map",
+            &graphics::ImageDesc {
+                ty: graphics::ImageType::Single2D,
+                format: Self::LUT_FORMAT,
+                dimensions: [512, 512, 1],
+                mip_levels: 1,
+                samples: graphics::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                aspect: vk::ImageAspectFlags::COLOR,
+                subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+                ..Default::default()
+            },
+        );
 
-        
-        let visibility_buffer = context.create_buffer("visibility_buffer", &graphics::BufferDesc {
-            size: 4 * MAX_DRAW_COUNT,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            memory_location: gpu_allocator::MemoryLocation::GpuOnly,
-        });
+        let visibility_buffer = context.create_buffer(
+            "visibility_buffer",
+            &graphics::BufferDesc {
+                size: 4 * MAX_DRAW_COUNT,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: gpu_allocator::MemoryLocation::GpuOnly,
+            },
+        );
 
         context.record_and_submit(|cmd| {
             cmd.fill_buffer(&visibility_buffer, 0, vk::WHOLE_SIZE, 0);
 
-            cmd.barrier(&[], &[graphics::image_barrier(
-                &brdf_integration_map,
-                graphics::AccessKind::None,
-                graphics::AccessKind::ColorAttachmentWrite
-            )], &[]);
+            cmd.barrier(
+                &[],
+                &[graphics::image_barrier(
+                    &brdf_integration_map,
+                    graphics::AccessKind::None,
+                    graphics::AccessKind::ColorAttachmentWrite,
+                )],
+                &[],
+            );
 
             let color_attachment = vk::RenderingAttachmentInfo::builder()
                 .image_view(brdf_integration_map.view)
@@ -137,21 +153,29 @@ impl ForwardRenderer {
                 .render_area(brdf_integration_map.full_rect())
                 .layer_count(1)
                 .color_attachments(std::slice::from_ref(&color_attachment));
-        
+
             cmd.begin_rendering(&rendering_info);
             cmd.bind_raster_pipeline(brdf_integration_pipeline);
             cmd.draw(0..6, 0..1);
             cmd.end_rendering();
 
-            cmd.barrier(&[], &[graphics::image_barrier(
-                &brdf_integration_map,
-                graphics::AccessKind::ColorAttachmentWrite,
-                graphics::AccessKind::AllGraphicsRead
-            )], &[]);
+            cmd.barrier(
+                &[],
+                &[graphics::image_barrier(
+                    &brdf_integration_map,
+                    graphics::AccessKind::ColorAttachmentWrite,
+                    graphics::AccessKind::AllGraphicsRead,
+                )],
+                &[],
+            );
         });
 
         let screen_extent = context.swapchain.extent();
-        let depth_pyramid = DepthPyramid::new(context, "camera_depth_pyramid".into(), [screen_extent.width, screen_extent.height]);
+        let depth_pyramid = DepthPyramid::new(
+            context,
+            "camera_depth_pyramid".into(),
+            [screen_extent.width, screen_extent.height],
+        );
 
         Self {
             brdf_integration_map,
@@ -167,17 +191,17 @@ impl ForwardRenderer {
         &mut self,
         context: &mut graphics::Context,
         settings: &Settings,
-        
+
         assets: AssetGraphData,
         scene: SceneGraphData,
 
         target_attachments: &TargetAttachments,
-        
+
         camera: &Camera,
         frozen_camera: &Camera,
     ) {
         puffin::profile_function!();
-        
+
         let frustum_culling = settings.camera_debug_settings.frustum_culling;
         let occlusion_culling = settings.camera_debug_settings.occlusion_culling;
         let camera_frozen = settings.camera_debug_settings.freeze_camera;
@@ -201,7 +225,7 @@ impl ForwardRenderer {
                     graphics::AccessKind::None
                 },
                 ..Default::default()
-            }
+            },
         );
 
         if !camera_frozen {
@@ -210,10 +234,13 @@ impl ForwardRenderer {
 
         let projection_matrix = frozen_camera.compute_projection_matrix();
         let view_matrix = frozen_camera.transform.compute_matrix().inverse();
-        let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
-            .map(math::normalize_plane);
+        let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix).map(math::normalize_plane);
 
-        let draw_commands = create_draw_commands(context, "first_forward_depth_prepass_commands".into(), assets, scene,
+        let draw_commands = create_draw_commands(
+            context,
+            "first_forward_depth_prepass_commands".into(),
+            assets,
+            scene,
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
@@ -223,7 +250,7 @@ impl ForwardRenderer {
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                 debug_print: false,
             },
-            None
+            None,
         );
 
         let depth_prepass_pipeline = context.create_raster_pipeline(
@@ -244,48 +271,59 @@ impl ForwardRenderer {
                 .multisample_state(graphics::MultisampleState {
                     sample_count: settings.msaa,
                     alpha_to_coverage: true,
-                })
+                }),
         );
 
         // RGB: world normals for SSAO
         // A: alpha-to-coverage for matching depth in color pass for masked geometry
-        let normal_buffer = context.create_transient_image("forward_normal_buffer", graphics::ImageDesc {
-            ty: graphics::ImageType::Single2D,
-            format: vk::Format::R8G8B8A8_UNORM,
-            dimensions: [screen_extent.width, screen_extent.height, 1],
-            mip_levels: 1,
-            samples: settings.msaa,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            aspect: vk::ImageAspectFlags::COLOR,
-            ..Default::default()
-        });
-
-        let normal_resolve_buffer = settings.msaa.is_some().then(|| context.create_transient_image(
-            "forward_normal_buffer_resolve",
+        let normal_buffer = context.create_transient_image(
+            "forward_normal_buffer",
             graphics::ImageDesc {
                 ty: graphics::ImageType::Single2D,
                 format: vk::Format::R8G8B8A8_UNORM,
                 dimensions: [screen_extent.width, screen_extent.height, 1],
                 mip_levels: 1,
-                samples: graphics::MultisampleCount::None,
+                samples: settings.msaa,
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
                 aspect: vk::ImageAspectFlags::COLOR,
                 ..Default::default()
-            }
-        ));
+            },
+        );
 
-        context.add_pass("first_forward_depth_prepass")
+        let normal_resolve_buffer = settings.msaa.is_some().then(|| {
+            context.create_transient_image(
+                "forward_normal_buffer_resolve",
+                graphics::ImageDesc {
+                    ty: graphics::ImageType::Single2D,
+                    format: vk::Format::R8G8B8A8_UNORM,
+                    dimensions: [screen_extent.width, screen_extent.height, 1],
+                    mip_levels: 1,
+                    samples: graphics::MultisampleCount::None,
+                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    ..Default::default()
+                },
+            )
+        });
+
+        context
+            .add_pass("first_forward_depth_prepass")
             .with_dependency(normal_buffer, graphics::AccessKind::ColorAttachmentWrite)
             .with_dependencies(normal_resolve_buffer.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
-            .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
-            .with_dependencies(target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
+            .with_dependency(
+                target_attachments.depth_target,
+                graphics::AccessKind::DepthAttachmentWrite,
+            )
+            .with_dependencies(
+                target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)),
+            )
             .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
             .render(move |cmd, graph| {
                 let normal_buffer = graph.get_image(normal_buffer);
                 let normal_resolve_buffer = normal_resolve_buffer.map(|h| graph.get_image(h));
                 let depth_target = graph.get_image(target_attachments.depth_target);
                 let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
-                
+
                 let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
                 let index_buffer = graph.get_buffer(assets.index_buffer);
                 let entity_buffer = graph.get_buffer(scene.entity_buffer);
@@ -315,10 +353,7 @@ impl ForwardRenderer {
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::CLEAR)
                     .clear_value(vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 0.0,
-                            stencil: 0,
-                        },
+                        depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
                     })
                     .store_op(vk::AttachmentStoreOp::STORE);
 
@@ -328,25 +363,25 @@ impl ForwardRenderer {
                         .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                         .resolve_mode(vk::ResolveModeFlags::MIN);
                 }
-    
+
                 let rendering_info = vk::RenderingInfo::builder()
                     .render_area(depth_target.full_rect())
                     .layer_count(1)
                     .color_attachments(std::slice::from_ref(&color_attachment))
                     .depth_attachment(&depth_attachment);
-    
+
                 cmd.begin_rendering(&rendering_info);
-                
+
                 cmd.bind_raster_pipeline(depth_prepass_pipeline);
                 cmd.bind_index_buffer(&index_buffer, 0);
-    
+
                 cmd.build_constants()
                     .mat4(&camera_view_projection_matrix)
                     .buffer(vertex_buffer)
                     .buffer(entity_buffer)
                     .buffer(draw_commands_buffer)
                     .buffer(materials_buffer);
-    
+
                 cmd.draw_indexed_indirect_count(
                     draw_commands_buffer,
                     4,
@@ -355,48 +390,62 @@ impl ForwardRenderer {
                     MAX_DRAW_COUNT as u32,
                     std::mem::size_of::<GpuMeshDrawCommand>() as u32,
                 );
-    
+
                 cmd.end_rendering();
             });
 
         if !camera_frozen {
-            self.depth_pyramid.update(context, target_attachments.depth_resolve
-                .unwrap_or(target_attachments.depth_target));
+            self.depth_pyramid.update(
+                context,
+                target_attachments.depth_resolve.unwrap_or(target_attachments.depth_target),
+            );
         }
 
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
-        let draw_commands = create_draw_commands(context, "second_forward_depth_prepass_commands".into(), assets, scene,
+        let draw_commands = create_draw_commands(
+            context,
+            "second_forward_depth_prepass_commands".into(),
+            assets,
+            scene,
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
-                occlusion_culling: occlusion_culling.then_some(OcclusionCullInfo::VisibilityWrite {
-                    visibility_buffer,
-                    depth_pyramid,
-                    // noskip_alphamode: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
-                    noskip_alphamode: AlphaModeFlags::empty(),
-                    aspect_ratio: frozen_camera.aspect_ratio,
-                    projection: frozen_camera.projection,
-                    shadow_volume_culling: None,
-                }).unwrap_or_default(),
+                occlusion_culling: occlusion_culling
+                    .then_some(OcclusionCullInfo::VisibilityWrite {
+                        visibility_buffer,
+                        depth_pyramid,
+                        // noskip_alphamode: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+                        noskip_alphamode: AlphaModeFlags::empty(),
+                        aspect_ratio: frozen_camera.aspect_ratio,
+                        projection: frozen_camera.projection,
+                        shadow_volume_culling: None,
+                    })
+                    .unwrap_or_default(),
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                 debug_print: false,
             },
             Some(draw_commands),
         );
 
-        context.add_pass("second_forward_depth_prepass")
+        context
+            .add_pass("second_forward_depth_prepass")
             .with_dependency(normal_buffer, graphics::AccessKind::ColorAttachmentWrite)
             .with_dependencies(normal_resolve_buffer.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
-            .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
-            .with_dependencies(target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
+            .with_dependency(
+                target_attachments.depth_target,
+                graphics::AccessKind::DepthAttachmentWrite,
+            )
+            .with_dependencies(
+                target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)),
+            )
             .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
             .render(move |cmd, graph| {
                 let normal_buffer = graph.get_image(normal_buffer);
                 let normal_resolve_buffer = normal_resolve_buffer.map(|h| graph.get_image(h));
                 let depth_target = graph.get_image(target_attachments.depth_target);
                 let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
-                
+
                 let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
                 let index_buffer = graph.get_buffer(assets.index_buffer);
                 let entity_buffer = graph.get_buffer(scene.entity_buffer);
@@ -426,10 +475,7 @@ impl ForwardRenderer {
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::LOAD)
                     .clear_value(vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 0.0,
-                            stencil: 0,
-                        },
+                        depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
                     })
                     .store_op(vk::AttachmentStoreOp::STORE);
 
@@ -439,25 +485,25 @@ impl ForwardRenderer {
                         .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                         .resolve_mode(vk::ResolveModeFlags::MIN);
                 }
-    
+
                 let rendering_info = vk::RenderingInfo::builder()
                     .render_area(depth_target.full_rect())
                     .layer_count(1)
                     .color_attachments(std::slice::from_ref(&color_attachment))
                     .depth_attachment(&depth_attachment);
-    
+
                 cmd.begin_rendering(&rendering_info);
-                
+
                 cmd.bind_raster_pipeline(depth_prepass_pipeline);
                 cmd.bind_index_buffer(&index_buffer, 0);
-    
+
                 cmd.build_constants()
                     .mat4(&camera_view_projection_matrix)
                     .buffer(vertex_buffer)
                     .buffer(entity_buffer)
                     .buffer(draw_commands_buffer)
                     .buffer(materials_buffer);
-    
+
                 cmd.draw_indexed_indirect_count(
                     draw_commands_buffer,
                     4,
@@ -466,10 +512,10 @@ impl ForwardRenderer {
                     MAX_DRAW_COUNT as u32,
                     std::mem::size_of::<GpuMeshDrawCommand>() as u32,
                 );
-    
+
                 cmd.end_rendering();
             });
-        
+
         self.normal_buffer = normal_resolve_buffer.unwrap_or(normal_buffer);
     }
 
@@ -477,7 +523,7 @@ impl ForwardRenderer {
         &mut self,
         context: &mut graphics::Context,
         settings: &Settings,
-        
+
         assets: AssetGraphData,
         scene: SceneGraphData,
 
@@ -485,7 +531,7 @@ impl ForwardRenderer {
         directional_light: DirectionalLightGraphData,
 
         target_attachments: &TargetAttachments,
-        
+
         camera: &Camera,
         frozen_camera: &Camera,
     ) {
@@ -504,15 +550,17 @@ impl ForwardRenderer {
         let camera_projection_matrix = camera.projection.compute_matrix(aspect_ratio);
         let camera_view_projection_matrix = camera_projection_matrix * camera_view_matrix;
         let skybox_view_projection_matrix =
-            camera.projection.compute_matrix(aspect_ratio) *
-            Mat4::from_quat(camera.transform.orientation).inverse();
+            camera.projection.compute_matrix(aspect_ratio) * Mat4::from_quat(camera.transform.orientation).inverse();
 
-        let frame_data = context.transient_storage_data("per_frame_data", bytemuck::bytes_of(&ForwardFrameData {
-            view_projection: camera_view_projection_matrix,
-            view: camera_view_matrix,
-            view_pos: camera.transform.position,
-            render_mode: render_mode as u32,
-        }));
+        let frame_data = context.transient_storage_data(
+            "per_frame_data",
+            bytemuck::bytes_of(&ForwardFrameData {
+                view_projection: camera_view_projection_matrix,
+                view: camera_view_matrix,
+                view_pos: camera.transform.position,
+                render_mode: render_mode as u32,
+            }),
+        );
 
         let environment_map = environment_map.map(|e| e.import_to_graph(context));
 
@@ -529,15 +577,18 @@ impl ForwardRenderer {
                     graphics::AccessKind::None
                 },
                 ..Default::default()
-            }
+            },
         );
 
         let projection_matrix = frozen_camera.compute_projection_matrix();
         let view_matrix = frozen_camera.transform.compute_matrix().inverse();
-        let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix)
-            .map(math::normalize_plane);
+        let frustum_planes = math::frustum_planes_from_matrix(&projection_matrix).map(math::normalize_plane);
 
-        let draw_commands = create_draw_commands(context, "forward_draw_commands".into(), assets, scene,
+        let draw_commands = create_draw_commands(
+            context,
+            "forward_draw_commands".into(),
+            assets,
+            scene,
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
@@ -555,20 +606,14 @@ impl ForwardRenderer {
             "forward_color_pass",
             render_mode,
             settings,
-
             assets,
             scene,
-
             skybox_view_projection_matrix,
-            
             frame_data,
-            
             target_attachments,
             draw_commands,
-            
             environment_map,
             directional_light,
-            
             brdf_integration_map,
             jitter_texture,
         );
@@ -581,7 +626,7 @@ fn forward_pass(
     render_mode: RenderMode,
 
     settings: &Settings,
-        
+
     assets: AssetGraphData,
     scene: SceneGraphData,
 
@@ -591,7 +636,7 @@ fn forward_pass(
 
     target_attachments: TargetAttachments,
     draw_commands: graphics::GraphBufferHandle,
-        
+
     environment_map: Option<GraphEnvironmentMap>,
     directional_light: DirectionalLightGraphData,
 
@@ -616,8 +661,8 @@ fn forward_pass(
             }))
             .multisample_state(graphics::MultisampleState {
                 sample_count: settings.msaa,
-                alpha_to_coverage: true
-            })
+                alpha_to_coverage: true,
+            }),
     );
 
     let overdraw_pipeline = context.create_raster_pipeline(
@@ -645,10 +690,10 @@ fn forward_pass(
             }))
             .multisample_state(graphics::MultisampleState {
                 sample_count: settings.msaa,
-                alpha_to_coverage: false
-            })
+                alpha_to_coverage: false,
+            }),
     );
-    
+
     let skybox_pipeline = context.create_raster_pipeline(
         "skybox_pipeline",
         &graphics::RasterPipelineDesc::builder()
@@ -671,17 +716,23 @@ fn forward_pass(
             }))
             .multisample_state(graphics::MultisampleState {
                 sample_count: settings.msaa,
-                alpha_to_coverage: false
-            })
+                alpha_to_coverage: false,
+            }),
     );
 
     let mut pass_builder = context.add_pass(pass_name);
 
     pass_builder = pass_builder
         .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
-        .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
+        .with_dependency(
+            target_attachments.depth_target,
+            graphics::AccessKind::DepthAttachmentWrite,
+        )
         .with_dependencies(target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
-        .with_dependency(target_attachments.color_target, graphics::AccessKind::ColorAttachmentWrite)
+        .with_dependency(
+            target_attachments.color_target,
+            graphics::AccessKind::ColorAttachmentWrite,
+        )
         .with_dependencies(target_attachments.color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
         .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)));
 
@@ -693,11 +744,11 @@ fn forward_pass(
 
         let brdf_integration_map = graph.get_image(brdf_integration_map);
         let jitter_texture = graph.get_image(jitter_texture);
-        
+
         let environment_map = environment_map.map(|e| e.get(graph));
 
         let per_frame_data = graph.get_buffer(frame_data);
-        
+
         let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
         let index_buffer = graph.get_buffer(assets.index_buffer);
         let materials_buffer = graph.get_buffer(assets.materials_buffer);
@@ -715,14 +766,18 @@ fn forward_pass(
             } else {
                 vk::AttachmentLoadOp::CLEAR
             })
-            .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [1.0, 0.0, 1.0, 0.0] } })
+            .clear_value(vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [1.0, 0.0, 1.0, 0.0],
+                },
+            })
             .store_op(vk::AttachmentStoreOp::STORE);
 
         if let Some(color_resolve) = color_resolve {
             color_attachment = color_attachment
-            .resolve_image_view(color_resolve.view)
-            .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .resolve_mode(vk::ResolveModeFlags::AVERAGE);
+                .resolve_image_view(color_resolve.view)
+                .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .resolve_mode(vk::ResolveModeFlags::AVERAGE);
         }
 
         let mut depth_attachment = vk::RenderingAttachmentInfo::builder()
@@ -730,10 +785,7 @@ fn forward_pass(
             .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::LOAD)
             .clear_value(vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 0.0,
-                    stencil: 0,
-                },
+                depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
             })
             .store_op(vk::AttachmentStoreOp::STORE);
 
@@ -751,27 +803,26 @@ fn forward_pass(
             .depth_attachment(&depth_attachment);
 
         cmd.begin_rendering(&rendering_info);
-        
+
         let draw_skybox = render_mode != RenderMode::Overdraw;
         if let Some(environment_map) = (draw_skybox).then_some(environment_map).flatten() {
             cmd.bind_raster_pipeline(skybox_pipeline);
 
-            cmd.build_constants()
-                .mat4(&skybox_view_projection_matrix)
-                .sampled_image(environment_map.skybox);
+            cmd.build_constants().mat4(&skybox_view_projection_matrix).sampled_image(environment_map.skybox);
 
             cmd.draw(0..36, 0..1);
         }
 
         cmd.bind_index_buffer(&index_buffer, 0);
-        
+
         if render_mode == RenderMode::Overdraw {
             cmd.bind_raster_pipeline(overdraw_pipeline)
         } else {
             cmd.bind_raster_pipeline(forward_pipeline);
         }
 
-        let mut push_constants = cmd.build_constants()
+        let mut push_constants = cmd
+            .build_constants()
             .buffer(per_frame_data)
             .buffer(vertex_buffer)
             .buffer(entity_buffer)
@@ -782,18 +833,13 @@ fn forward_pass(
             .buffer(light_buffer);
 
         if let Some(environment_map) = &environment_map {
-            push_constants = push_constants
-                .sampled_image(environment_map.irradiance)
-                .sampled_image(environment_map.prefiltered)
+            push_constants =
+                push_constants.sampled_image(environment_map.irradiance).sampled_image(environment_map.prefiltered)
         } else {
-            push_constants = push_constants
-                .uint(u32::MAX)
-                .uint(u32::MAX)
+            push_constants = push_constants.uint(u32::MAX).uint(u32::MAX)
         };
 
-        push_constants = push_constants
-            .sampled_image(brdf_integration_map)
-            .sampled_image(jitter_texture);
+        push_constants = push_constants.sampled_image(brdf_integration_map).sampled_image(jitter_texture);
 
         drop(push_constants);
 
@@ -812,7 +858,7 @@ fn forward_pass(
 
 fn gen_offset_texture_data(window_size: usize, filter_size: usize) -> Vec<f32> {
     use std::f32::consts::PI;
-    
+
     let mut data = Vec::with_capacity(window_size * window_size * filter_size * 2);
 
     let mut rng = rand::thread_rng();
@@ -826,7 +872,7 @@ fn gen_offset_texture_data(window_size: usize, filter_size: usize) -> Vec<f32> {
 
                     let x = (u as f32 + 0.5 + dist.sample(&mut rng)) / filter_size as f32;
                     let y = (v as f32 + 0.5 + dist.sample(&mut rng)) / filter_size as f32;
-                    
+
                     data.push(y.sqrt() * f32::cos(2.0 * PI * x));
                     data.push(y.sqrt() * f32::sin(2.0 * PI * x));
                 }
@@ -837,28 +883,37 @@ fn gen_offset_texture_data(window_size: usize, filter_size: usize) -> Vec<f32> {
     data
 }
 
-fn create_jittered_offset_texture(context: &mut graphics::Context, window_size: usize, filter_size: usize) -> graphics::Image {
+fn create_jittered_offset_texture(
+    context: &mut graphics::Context,
+    window_size: usize,
+    filter_size: usize,
+) -> graphics::Image {
     let data = gen_offset_texture_data(window_size, filter_size);
     let num_filter_samples = filter_size * filter_size;
-    
-    let image = context.create_image("jittered_offset_texture", &graphics::ImageDesc {
-        ty: graphics::ImageType::Single3D,
-        format: vk::Format::R32G32B32A32_SFLOAT,
-        dimensions: [num_filter_samples as u32 / 2, window_size as u32, window_size as u32],
-        mip_levels: 1,
-        samples: graphics::MultisampleCount::None,
-        usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-        aspect: vk::ImageAspectFlags::COLOR,
-        subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-        default_sampler: Some(graphics::SamplerKind::NearestRepeat),
-    });
+
+    let image = context.create_image(
+        "jittered_offset_texture",
+        &graphics::ImageDesc {
+            ty: graphics::ImageType::Single3D,
+            format: vk::Format::R32G32B32A32_SFLOAT,
+            dimensions: [num_filter_samples as u32 / 2, window_size as u32, window_size as u32],
+            mip_levels: 1,
+            samples: graphics::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            aspect: vk::ImageAspectFlags::COLOR,
+            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+            default_sampler: Some(graphics::SamplerKind::NearestRepeat),
+        },
+    );
 
     context.immediate_write_image(
-        &image, 0, 0..1,
+        &image,
+        0,
+        0..1,
         graphics::AccessKind::None,
         Some(graphics::AccessKind::FragmentShaderRead),
         bytemuck::cast_slice(data.as_slice()),
-        None
+        None,
     );
 
     image

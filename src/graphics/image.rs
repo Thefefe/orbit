@@ -1,8 +1,15 @@
-use std::{ops::{Range, RangeBounds}, borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    ops::{Range, RangeBounds},
+    sync::Arc,
+};
 
 use crate::graphics;
 use ash::vk;
-use gpu_allocator::{MemoryLocation, vulkan::{AllocationCreateDesc, AllocationScheme}};
+use gpu_allocator::{
+    vulkan::{AllocationCreateDesc, AllocationScheme},
+    MemoryLocation,
+};
 use graphics::AccessKind;
 
 #[derive(Debug, Clone, Copy)]
@@ -25,10 +32,11 @@ impl ImageView {
     pub fn sampled_index(&self) -> Option<graphics::DescriptorIndex> {
         self._descriptor_flags.contains(ImageDescriptorFlags::SAMPLED).then_some(self._descriptor_index)
     }
-    
+
     #[inline(always)]
     pub fn storage_index(&self) -> Option<graphics::DescriptorIndex> {
-        self._descriptor_flags.contains(ImageDescriptorFlags::STORAGE)
+        self._descriptor_flags
+            .contains(ImageDescriptorFlags::STORAGE)
             .then_some(graphics::strip_sampler(self._descriptor_index))
     }
 
@@ -63,7 +71,10 @@ impl ImageView {
     pub fn full_rect(&self) -> vk::Rect2D {
         vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D { width: self.extent.width, height: self.extent.height },
+            extent: vk::Extent2D {
+                width: self.extent.width,
+                height: self.extent.height,
+            },
         }
     }
 
@@ -81,7 +92,7 @@ impl ImageView {
     pub fn subresource_range(
         &self,
         mip_levels: impl RangeBounds<u32>,
-        layers: impl RangeBounds<u32>
+        layers: impl RangeBounds<u32>,
     ) -> vk::ImageSubresourceRange {
         let (base_array_layer, layer_count) =
             crate::utils::range_bounds_to_base_count(layers, 0, self.subresource_range.layer_count);
@@ -95,7 +106,6 @@ impl ImageView {
             level_count,
         }
     }
-
 
     #[inline(always)]
     pub fn subresource_layers(&self, mip_level: u32, layers: impl RangeBounds<u32>) -> vk::ImageSubresourceLayers {
@@ -119,7 +129,8 @@ pub struct SubresourceView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ImageType {
     Single1D,
-    #[default] Single2D,
+    #[default]
+    Single2D,
     Single3D,
     Array1D(u32),
     Array2D(u32),
@@ -131,70 +142,69 @@ pub enum ImageType {
 impl ImageType {
     fn vk_image_flags(self) -> vk::ImageCreateFlags {
         match self {
-            ImageType::Single1D     => vk::ImageCreateFlags::empty(),
-            ImageType::Single2D     => vk::ImageCreateFlags::empty(),
-            ImageType::Single3D     => vk::ImageCreateFlags::empty(),
-            ImageType::Array1D(_)   => vk::ImageCreateFlags::empty(),
-            ImageType::Array2D(_)   => vk::ImageCreateFlags::empty(),
-            ImageType::Array3D(_)   => vk::ImageCreateFlags::empty(),
-            ImageType::Cube         => vk::ImageCreateFlags::CUBE_COMPATIBLE,
+            ImageType::Single1D => vk::ImageCreateFlags::empty(),
+            ImageType::Single2D => vk::ImageCreateFlags::empty(),
+            ImageType::Single3D => vk::ImageCreateFlags::empty(),
+            ImageType::Array1D(_) => vk::ImageCreateFlags::empty(),
+            ImageType::Array2D(_) => vk::ImageCreateFlags::empty(),
+            ImageType::Array3D(_) => vk::ImageCreateFlags::empty(),
+            ImageType::Cube => vk::ImageCreateFlags::CUBE_COMPATIBLE,
             ImageType::CubeArray(_) => vk::ImageCreateFlags::empty(),
         }
     }
 
     fn vk_image_type(self) -> vk::ImageType {
         match self {
-            ImageType::Single1D     => vk::ImageType::TYPE_1D,
-            ImageType::Single2D     => vk::ImageType::TYPE_2D,
-            ImageType::Single3D     => vk::ImageType::TYPE_3D,
-            ImageType::Array1D(_)   => vk::ImageType::TYPE_1D,
-            ImageType::Array2D(_)   => vk::ImageType::TYPE_2D,
-            ImageType::Array3D(_)   => vk::ImageType::TYPE_3D,
-            ImageType::Cube         => vk::ImageType::TYPE_2D,
+            ImageType::Single1D => vk::ImageType::TYPE_1D,
+            ImageType::Single2D => vk::ImageType::TYPE_2D,
+            ImageType::Single3D => vk::ImageType::TYPE_3D,
+            ImageType::Array1D(_) => vk::ImageType::TYPE_1D,
+            ImageType::Array2D(_) => vk::ImageType::TYPE_2D,
+            ImageType::Array3D(_) => vk::ImageType::TYPE_3D,
+            ImageType::Cube => vk::ImageType::TYPE_2D,
             ImageType::CubeArray(_) => vk::ImageType::TYPE_2D,
         }
     }
 
     fn full_vk_view_image_type(self) -> vk::ImageViewType {
         match self {
-            ImageType::Single1D     => vk::ImageViewType::TYPE_1D,
-            ImageType::Single2D     => vk::ImageViewType::TYPE_2D,
-            ImageType::Single3D     => vk::ImageViewType::TYPE_3D,
-            ImageType::Array1D(_)   => vk::ImageViewType::TYPE_1D,
-            ImageType::Array2D(_)   => vk::ImageViewType::TYPE_2D,
-            ImageType::Array3D(_)   => vk::ImageViewType::TYPE_3D,
-            ImageType::Cube         => vk::ImageViewType::CUBE,
+            ImageType::Single1D => vk::ImageViewType::TYPE_1D,
+            ImageType::Single2D => vk::ImageViewType::TYPE_2D,
+            ImageType::Single3D => vk::ImageViewType::TYPE_3D,
+            ImageType::Array1D(_) => vk::ImageViewType::TYPE_1D,
+            ImageType::Array2D(_) => vk::ImageViewType::TYPE_2D,
+            ImageType::Array3D(_) => vk::ImageViewType::TYPE_3D,
+            ImageType::Cube => vk::ImageViewType::CUBE,
             ImageType::CubeArray(_) => vk::ImageViewType::CUBE_ARRAY,
         }
     }
 
     fn layer_vk_view_image_type(self) -> vk::ImageViewType {
         match self {
-            ImageType::Single1D     => vk::ImageViewType::TYPE_1D,
-            ImageType::Single2D     => vk::ImageViewType::TYPE_2D,
-            ImageType::Single3D     => vk::ImageViewType::TYPE_3D,
-            ImageType::Array1D(_)   => vk::ImageViewType::TYPE_1D,
-            ImageType::Array2D(_)   => vk::ImageViewType::TYPE_2D,
-            ImageType::Array3D(_)   => vk::ImageViewType::TYPE_3D,
-            ImageType::Cube         => vk::ImageViewType::TYPE_2D,
+            ImageType::Single1D => vk::ImageViewType::TYPE_1D,
+            ImageType::Single2D => vk::ImageViewType::TYPE_2D,
+            ImageType::Single3D => vk::ImageViewType::TYPE_3D,
+            ImageType::Array1D(_) => vk::ImageViewType::TYPE_1D,
+            ImageType::Array2D(_) => vk::ImageViewType::TYPE_2D,
+            ImageType::Array3D(_) => vk::ImageViewType::TYPE_3D,
+            ImageType::Cube => vk::ImageViewType::TYPE_2D,
             ImageType::CubeArray(_) => vk::ImageViewType::TYPE_2D_ARRAY,
         }
     }
 
     pub fn layer_count(self) -> u32 {
         match self {
-            ImageType::Single2D         => 1,
-            ImageType::Single1D         => 1,
-            ImageType::Single3D         => 1,
-            ImageType::Array1D(count)   => count,
-            ImageType::Array2D(count)   => count,
-            ImageType::Array3D(count)   => count,
-            ImageType::Cube             => 6,
+            ImageType::Single2D => 1,
+            ImageType::Single1D => 1,
+            ImageType::Single3D => 1,
+            ImageType::Array1D(count) => count,
+            ImageType::Array2D(count) => count,
+            ImageType::Array3D(count) => count,
+            ImageType::Cube => 6,
             ImageType::CubeArray(count) => 6 * count,
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageDescriptorFlags(u32);
@@ -206,7 +216,7 @@ impl ImageDescriptorFlags {
     pub const STORAGE: Self = Self(0b01);
 }
 
-/// Describes how to create additional image views for the subresources 
+/// Describes how to create additional image views for the subresources
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ImageSubresourceViewDesc {
     /// How many mip levels should have their own image view.
@@ -215,7 +225,7 @@ pub struct ImageSubresourceViewDesc {
     /// What extra descriptor indices should the additional image views have.
     pub mip_descriptors: ImageDescriptorFlags,
 
-    // How many mip levels should have additional image views for their layers. 
+    // How many mip levels should have additional image views for their layers.
     pub layer_mip_count: u32,
     /// How many layers should have their own image view in the first `layer_mip_granularity`
     /// number of levels.
@@ -317,28 +327,27 @@ impl ImageRaw {
             .format(desc.format)
             .subresource_range(subresource_range);
 
-        let view = unsafe {
-            device.raw.create_image_view(&image_view_create_info, None).unwrap()
-        };
+        let view = unsafe { device.raw.create_image_view(&image_view_create_info, None).unwrap() };
         device.set_debug_name(view, &format!("{}_full_view", name));
 
         let mut descriptor_flags = ImageDescriptorFlags::empty();
-        let full_descriptor_index = if desc.usage.intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE) {
-            let index = preallocated_descriptor_index.unwrap_or_else(|| device.alloc_descriptor_index());
+        let full_descriptor_index =
+            if desc.usage.intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE) {
+                let index = preallocated_descriptor_index.unwrap_or_else(|| device.alloc_descriptor_index());
 
-            if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
-                device.write_sampled_image(index, view);
-                descriptor_flags |= ImageDescriptorFlags::SAMPLED;
+                if desc.usage.contains(vk::ImageUsageFlags::SAMPLED) {
+                    device.write_sampled_image(index, view);
+                    descriptor_flags |= ImageDescriptorFlags::SAMPLED;
+                };
+
+                if desc.usage.contains(vk::ImageUsageFlags::STORAGE) {
+                    device.write_storage_image(index, view);
+                    descriptor_flags |= ImageDescriptorFlags::STORAGE;
+                }
+                Some(index)
+            } else {
+                None
             };
-    
-            if desc.usage.contains(vk::ImageUsageFlags::STORAGE) {
-                device.write_storage_image(index, view);
-                descriptor_flags |= ImageDescriptorFlags::STORAGE;
-            }
-            Some(index)
-        } else {
-            None
-        };
 
         let mut subresource_count = 0;
 
@@ -347,9 +356,8 @@ impl ImageRaw {
         }
 
         if layer_count > 1 {
-            subresource_count +=
-                desc.subresource_desc.layer_mip_count.min(desc.mip_levels) *
-                desc.subresource_desc.layer_count.min(layer_count)
+            subresource_count += desc.subresource_desc.layer_mip_count.min(desc.mip_levels)
+                * desc.subresource_desc.layer_count.min(layer_count)
         }
 
         let mut subresource_views = Vec::with_capacity(subresource_count as usize);
@@ -376,14 +384,14 @@ impl ImageRaw {
                 let subresource_descriptor_index = if !desc.subresource_desc.mip_descriptors.is_empty() {
                     let subresource_descriptor_index = device.alloc_descriptor_index();
 
-                    if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::SAMPLED) |
-                       desc.usage.contains(vk::ImageUsageFlags::SAMPLED)
+                    if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::SAMPLED)
+                        | desc.usage.contains(vk::ImageUsageFlags::SAMPLED)
                     {
                         device.write_sampled_image(subresource_descriptor_index, view);
                     }
 
-                    if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::STORAGE) |
-                       desc.usage.contains(vk::ImageUsageFlags::STORAGE)
+                    if desc.subresource_desc.mip_descriptors.contains(ImageDescriptorFlags::STORAGE)
+                        | desc.usage.contains(vk::ImageUsageFlags::STORAGE)
                     {
                         device.write_storage_image(subresource_descriptor_index, view);
                     }
@@ -393,7 +401,10 @@ impl ImageRaw {
                     None
                 };
 
-                subresource_views.push(SubresourceView { view, descriptor_index: subresource_descriptor_index });
+                subresource_views.push(SubresourceView {
+                    view,
+                    descriptor_index: subresource_descriptor_index,
+                });
             }
         }
 
@@ -407,27 +418,27 @@ impl ImageRaw {
                         base_array_layer: layer,
                         layer_count: 1,
                     };
-    
+
                     let image_view_create_info = vk::ImageViewCreateInfo::builder()
                         .image(handle)
                         .view_type(desc.ty.layer_vk_view_image_type())
                         .format(desc.format)
                         .subresource_range(subresource_range);
-    
+
                     let view = unsafe { device.raw.create_image_view(&image_view_create_info, None).unwrap() };
                     device.set_debug_name(view, &format!("{name}_level_{mip_level}_layer_{layer}"));
-    
+
                     let subresource_descriptor_index = if !desc.subresource_desc.layer_descrptors.is_empty() {
                         let subresource_descriptor_index = device.alloc_descriptor_index();
-    
-                        if desc.subresource_desc.layer_descrptors.contains(ImageDescriptorFlags::SAMPLED) |
-                           desc.usage.contains(vk::ImageUsageFlags::SAMPLED)
+
+                        if desc.subresource_desc.layer_descrptors.contains(ImageDescriptorFlags::SAMPLED)
+                            | desc.usage.contains(vk::ImageUsageFlags::SAMPLED)
                         {
                             device.write_sampled_image(subresource_descriptor_index, view);
                         }
-    
-                        if desc.subresource_desc.layer_descrptors.contains(ImageDescriptorFlags::STORAGE) |
-                           desc.usage.contains(vk::ImageUsageFlags::STORAGE)
+
+                        if desc.subresource_desc.layer_descrptors.contains(ImageDescriptorFlags::STORAGE)
+                            | desc.usage.contains(vk::ImageUsageFlags::STORAGE)
                         {
                             device.write_storage_image(subresource_descriptor_index, view);
                         }
@@ -437,14 +448,17 @@ impl ImageRaw {
                         None
                     };
 
-                    subresource_views.push(SubresourceView { view, descriptor_index: subresource_descriptor_index });
+                    subresource_views.push(SubresourceView {
+                        view,
+                        descriptor_index: subresource_descriptor_index,
+                    });
                 }
             }
         }
 
         let _descriptor_index = graphics::descriptor_index_with_sampler(
             full_descriptor_index.unwrap_or(0),
-            desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)
+            desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp),
         );
 
         ImageRaw {
@@ -512,7 +526,7 @@ impl ImageRaw {
         let [width, height, depth] = self.desc.dimensions.map(|x| u32::max(x >> mip_level as u32, 1));
         let _descriptor_index = graphics::descriptor_index_with_sampler(
             descriptor_index.unwrap_or(0),
-            self.desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)
+            self.desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp),
         );
 
         Some(ImageView {
@@ -533,10 +547,9 @@ impl ImageRaw {
     }
 
     pub fn layer_view(&self, mip_level: u32, layer: u32) -> Option<ImageView> {
-        if mip_level >= self.desc.subresource_desc.layer_mip_count.min(self.desc.mip_levels) ||
-           layer >= self.desc.subresource_desc.layer_count.min(self.desc.ty.layer_count())
+        if mip_level >= self.desc.subresource_desc.layer_mip_count.min(self.desc.mip_levels)
+            || layer >= self.desc.subresource_desc.layer_count.min(self.desc.ty.layer_count())
         {
-            
             return None;
         }
 
@@ -549,7 +562,7 @@ impl ImageRaw {
         let [width, height, depth] = self.desc.dimensions.map(|x| u32::max(x >> mip_level as u32, 1));
         let _descriptor_index = graphics::descriptor_index_with_sampler(
             descriptor_index.unwrap_or(0),
-            self.desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp)
+            self.desc.default_sampler.unwrap_or(graphics::SamplerKind::LinearClamp),
         );
 
         Some(ImageView {
@@ -618,7 +631,10 @@ impl std::fmt::Debug for Image {
 impl graphics::Context {
     pub fn create_image(&self, name: impl Into<Cow<'static, str>>, desc: &ImageDesc) -> Image {
         let image = ImageRaw::create_impl(&self.device, name.into(), desc, None);
-        Image { _image: Some(Arc::new(image)), _device: self.device.clone() }
+        Image {
+            _image: Some(Arc::new(image)),
+            _device: self.device.clone(),
+        }
     }
 
     pub fn immediate_write_image(
@@ -629,32 +645,48 @@ impl graphics::Context {
         prev_access: AccessKind,
         target_access: Option<AccessKind>,
         bytes: &[u8],
-        subregion: Option<(vk::Offset3D, vk::Extent3D)>
+        subregion: Option<(vk::Offset3D, vk::Extent3D)>,
     ) {
         puffin::profile_function!();
 
-        let scratch_buffer = self.create_buffer_init("scratch_buffer", &graphics::BufferDesc {
-            size: bytes.len(),
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
-            memory_location: MemoryLocation::CpuToGpu,
-        }, bytes);
+        let scratch_buffer = self.create_buffer_init(
+            "scratch_buffer",
+            &graphics::BufferDesc {
+                size: bytes.len(),
+                usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                memory_location: MemoryLocation::CpuToGpu,
+            },
+            bytes,
+        );
 
         let (image_offset, image_extent) = subregion.unwrap_or((vk::Offset3D::default(), image.extent));
-        
-        self.record_and_submit(|cmd| {
-            cmd.barrier(&[], &[graphics::image_barrier(image, prev_access, AccessKind::TransferWrite)], &[]);
 
-            cmd.copy_buffer_to_image(&scratch_buffer, &image, &[vk::BufferImageCopy {
-                buffer_offset: 0,
-                buffer_row_length: 0,
-                buffer_image_height: 0,
-                image_subresource: image.subresource_layers(mip_level, layers),
-                image_offset,
-                image_extent,
-            }]);
+        self.record_and_submit(|cmd| {
+            cmd.barrier(
+                &[],
+                &[graphics::image_barrier(image, prev_access, AccessKind::TransferWrite)],
+                &[],
+            );
+
+            cmd.copy_buffer_to_image(
+                &scratch_buffer,
+                &image,
+                &[vk::BufferImageCopy {
+                    buffer_offset: 0,
+                    buffer_row_length: 0,
+                    buffer_image_height: 0,
+                    image_subresource: image.subresource_layers(mip_level, layers),
+                    image_offset,
+                    image_extent,
+                }],
+            );
 
             if let Some(target_access) = target_access {
-                cmd.barrier(&[], &[graphics::image_barrier(image, AccessKind::TransferWrite, target_access)], &[]);
+                cmd.barrier(
+                    &[],
+                    &[graphics::image_barrier(image, AccessKind::TransferWrite, target_access)],
+                    &[],
+                );
             }
         });
 

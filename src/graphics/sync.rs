@@ -1,4 +1,4 @@
-use std::{ops::RangeBounds, borrow::Cow};
+use std::{borrow::Cow, ops::RangeBounds};
 
 use crate::graphics;
 use ash::vk;
@@ -152,7 +152,6 @@ impl AccessKind {
             
         }
     }
-
 }
 
 #[inline]
@@ -232,9 +231,9 @@ pub fn extend_memory_barrier(barrier: &mut vk::MemoryBarrier2, src_access: Acces
 }
 
 pub fn is_memory_barrier_not_useless(barrier: &vk::MemoryBarrier2) -> bool {
-    barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE ||
-    barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE ||
-    barrier.src_access_mask | barrier.dst_access_mask != vk::AccessFlags2::NONE
+    barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE
+        || barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE
+        || barrier.src_access_mask | barrier.dst_access_mask != vk::AccessFlags2::NONE
 }
 
 #[derive(Clone)]
@@ -252,7 +251,7 @@ impl std::fmt::Debug for Semaphore {
 impl graphics::Device {
     pub fn create_semaphore(&self, name: impl Into<Cow<'static, str>>) -> graphics::Semaphore {
         let name = name.into();
-        let handle =  unsafe { self.raw.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap() };
+        let handle = unsafe { self.raw.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap() };
         self.set_debug_name(handle, &name);
         graphics::Semaphore { name, handle }
     }

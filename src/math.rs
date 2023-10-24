@@ -2,18 +2,17 @@ use std::f32::consts::PI;
 
 use glam::{mat2, Vec4Swizzles};
 #[allow(unused_imports)]
-use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4, Quat, Mat4};
+use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 pub const NDC_BOUNDS: [Vec4; 8] = [
-    vec4(-1.0, -1.0, 0.0,  1.0),
-    vec4( 1.0, -1.0, 0.0,  1.0),
-    vec4( 1.0,  1.0, 0.0,  1.0),
-    vec4(-1.0,  1.0, 0.0,  1.0),
-    
-    vec4(-1.0, -1.0, 1.0,  1.0),
-    vec4( 1.0, -1.0, 1.0,  1.0),
-    vec4( 1.0,  1.0, 1.0,  1.0),
-    vec4(-1.0,  1.0, 1.0,  1.0),
+    vec4(-1.0, -1.0, 0.0, 1.0),
+    vec4(1.0, -1.0, 0.0, 1.0),
+    vec4(1.0, 1.0, 0.0, 1.0),
+    vec4(-1.0, 1.0, 0.0, 1.0),
+    vec4(-1.0, -1.0, 1.0, 1.0),
+    vec4(1.0, -1.0, 1.0, 1.0),
+    vec4(1.0, 1.0, 1.0, 1.0),
+    vec4(-1.0, 1.0, 1.0, 1.0),
 ];
 
 pub fn lerp_element_wise(x: Vec4, y: Vec4, a: Vec4) -> Vec4 {
@@ -23,7 +22,7 @@ pub fn lerp_element_wise(x: Vec4, y: Vec4, a: Vec4) -> Vec4 {
 pub fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
     let uniform = near + (far - near) * ratio;
     let log = near * (far / near).powf(ratio);
-    
+
     log * lambda + (1.0 - lambda) * uniform
 }
 
@@ -31,7 +30,7 @@ pub fn frustum_split(near: f32, far: f32, lambda: f32, ratio: f32) -> f32 {
 pub fn frustum_planes_from_matrix(matrix: &Mat4) -> [Vec4; 6] {
     let matrix_t = matrix.transpose();
     let mut planes = [matrix_t.col(3); 6];
-    
+
     planes[0] += matrix_t.col(0);
     planes[1] -= matrix_t.col(0);
     planes[2] += matrix_t.col(1);
@@ -92,14 +91,14 @@ pub fn perspective_corners(fovy: f32, aspect_ratio: f32, near: f32, far: f32) ->
     let yf = far * tan_half_v;
 
     [
-        vec4(-xn, -yn, -near,  1.0),
-        vec4( xn, -yn, -near,  1.0),
-        vec4( xn,  yn, -near,  1.0),
-        vec4(-xn,  yn, -near,  1.0),
-        vec4(-xf, -yf, -far,   1.0),
-        vec4( xf, -yf, -far,   1.0),
-        vec4( xf,  yf, -far,   1.0),
-        vec4(-xf,  yf, -far,   1.0),
+        vec4(-xn, -yn, -near, 1.0),
+        vec4(xn, -yn, -near, 1.0),
+        vec4(xn, yn, -near, 1.0),
+        vec4(-xn, yn, -near, 1.0),
+        vec4(-xf, -yf, -far, 1.0),
+        vec4(xf, -yf, -far, 1.0),
+        vec4(xf, yf, -far, 1.0),
+        vec4(-xf, yf, -far, 1.0),
     ]
 }
 
@@ -110,20 +109,25 @@ pub fn project_sphere_clip_space(sphere: Vec4, znear: f32, p00: f32, p11: f32) -
     let r = sphere.w;
 
     if c.z < r + znear {
-        return None
+        return None;
     };
 
-    let cx:   Vec2 = -c.xz();
-    let vx:   Vec2 = vec2(f32::sqrt(Vec2::dot(cx, cx) - r * r), r);
+    let cx: Vec2 = -c.xz();
+    let vx: Vec2 = vec2(f32::sqrt(Vec2::dot(cx, cx) - r * r), r);
     let minx: Vec2 = mat2(vec2(vx.x, vx.y), vec2(-vx.y, vx.x)) * cx;
     let maxx: Vec2 = mat2(vec2(vx.x, -vx.y), vec2(vx.y, vx.x)) * cx;
 
-    let cy:   Vec2 = -c.yz();
-    let vy:   Vec2 = vec2(f32::sqrt(Vec2::dot(cy, cy) - r * r), r);
+    let cy: Vec2 = -c.yz();
+    let vy: Vec2 = vec2(f32::sqrt(Vec2::dot(cy, cy) - r * r), r);
     let miny: Vec2 = mat2(vec2(vy.x, vy.y), vec2(-vy.y, vy.x)) * cy;
     let maxy: Vec2 = mat2(vec2(vy.x, -vy.y), vec2(vy.y, vy.x)) * cy;
 
-    let aabb = vec4(minx.x / minx.y * p00, miny.x / miny.y * p11, maxx.x / maxx.y * p00, maxy.x / maxy.y * p11);
+    let aabb = vec4(
+        minx.x / minx.y * p00,
+        miny.x / miny.y * p11,
+        maxx.x / maxx.y * p00,
+        maxy.x / maxy.y * p11,
+    );
     // *aabb = aabb.xwzy() * vec4(0.5, -0.5, 0.5, -0.5) + Vec4::splat(0.5); // clip space -> uv space
 
     return Some(aabb);
@@ -150,7 +154,7 @@ pub fn octahedron_normal_encode(mut n: Vec3) -> Vec2 {
 
 pub fn octahedron_normal_decode(f: Vec2) -> Vec3 {
     let mut n = vec3(f.x, f.y, 1.0 - f.x.abs() - f.y.abs());
-    let t = f32::max(-n.z , 0.0);
+    let t = f32::max(-n.z, 0.0);
     n += Vec3::select(n.cmpge(Vec3::ZERO), vec3(-t, -t, 0.0), vec3(t, t, 0.0));
     return n.normalize();
 }
@@ -172,7 +176,7 @@ pub fn rotational_tangent_encode(normal: Vec3A, tangent: Vec3A) -> f32 {
 
     let alpha = f32::atan2(
         tangent.cross(reference_tangent).dot(normal),
-        tangent.dot(reference_tangent)
+        tangent.dot(reference_tangent),
     );
 
     // let tangent0 = reference_tangent * alpha.cos() - normal.cross(reference_tangent) * alpha.sin();
@@ -205,8 +209,8 @@ pub fn unpack_normal_tangent_bitangent(packed: [i8; 4]) -> (Vec3, Vec4) {
 
 #[cfg(test)]
 mod tests {
-    use glam::*;
     use crate::math::*;
+    use glam::*;
 
     use super::octahedron_normal_decode;
 
@@ -227,29 +231,29 @@ mod tests {
         fn encode_decode(v: Vec3) -> Vec3 {
             octahedron_normal_decode(octahedron_normal_encode(v))
         }
-        
+
         let normals = [
-            vec3( 1.0,  0.0,  0.0),
-            vec3( 0.0,  1.0,  0.0),
-            vec3( 0.0,  0.0,  1.0),
-            vec3(-1.0,  0.0,  0.0),
-            vec3( 0.0, -1.0,  0.0),
-            vec3( 0.0,  0.0, -1.0),
-            vec3(-1.0,  0.0,  0.0),
-            vec3( 0.0, -1.0,  0.0),
-            vec3( 0.0,  0.0, -1.0),
-            vec3( 1.0,  1.0,  0.0).normalize(),
-            vec3( 0.0,  1.0,  1.0).normalize(),
-            vec3( 1.0,  0.0,  1.0).normalize(),
-            vec3(-1.0,  1.0,  0.0).normalize(),
-            vec3( 0.0, -1.0,  1.0).normalize(),
-            vec3( 1.0,  0.0, -1.0).normalize(),
-            vec3( 321.0,  12.0,  543.0).normalize(),
-            vec3( 432.0,  23.0,  43.0).normalize(),
-            vec3( -431.0,  -20.0,  21.0).normalize(),
-            vec3(-1.0,  21.0,  -30.0).normalize(),
-            vec3( -30.0, -1.0,  1.0).normalize(),
-            vec3( 1.0,  10.0, -1.0).normalize(),
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 1.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            vec3(-1.0, 0.0, 0.0),
+            vec3(0.0, -1.0, 0.0),
+            vec3(0.0, 0.0, -1.0),
+            vec3(-1.0, 0.0, 0.0),
+            vec3(0.0, -1.0, 0.0),
+            vec3(0.0, 0.0, -1.0),
+            vec3(1.0, 1.0, 0.0).normalize(),
+            vec3(0.0, 1.0, 1.0).normalize(),
+            vec3(1.0, 0.0, 1.0).normalize(),
+            vec3(-1.0, 1.0, 0.0).normalize(),
+            vec3(0.0, -1.0, 1.0).normalize(),
+            vec3(1.0, 0.0, -1.0).normalize(),
+            vec3(321.0, 12.0, 543.0).normalize(),
+            vec3(432.0, 23.0, 43.0).normalize(),
+            vec3(-431.0, -20.0, 21.0).normalize(),
+            vec3(-1.0, 21.0, -30.0).normalize(),
+            vec3(-30.0, -1.0, 1.0).normalize(),
+            vec3(1.0, 10.0, -1.0).normalize(),
         ];
 
         for normal in normals {
@@ -264,27 +268,27 @@ mod tests {
         }
 
         let normals = [
-            vec3( 1.0,  0.0,  0.0),
-            vec3( 0.0,  1.0,  0.0),
-            vec3( 0.0,  0.0,  1.0),
-            vec3(-1.0,  0.0,  0.0),
-            vec3( 0.0, -1.0,  0.0),
-            vec3( 0.0,  0.0, -1.0),
-            vec3(-1.0,  0.0,  0.0),
-            vec3( 0.0, -1.0,  0.0),
-            vec3( 0.0,  0.0, -1.0),
-            vec3( 1.0,  1.0,  0.0).normalize(),
-            vec3( 0.0,  1.0,  1.0).normalize(),
-            vec3( 1.0,  0.0,  1.0).normalize(),
-            vec3(-1.0,  1.0,  0.0).normalize(),
-            vec3( 0.0, -1.0,  1.0).normalize(),
-            vec3( 1.0,  0.0, -1.0).normalize(),
-            vec3( 321.0,  12.0,  543.0).normalize(),
-            vec3( 432.0,  23.0,  43.0).normalize(),
-            vec3( -431.0,  -20.0,  21.0).normalize(),
-            vec3(-1.0,  21.0,  -30.0).normalize(),
-            vec3( -30.0, -1.0,  1.0).normalize(),
-            vec3( 1.0,  10.0, -1.0).normalize(),
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 1.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            vec3(-1.0, 0.0, 0.0),
+            vec3(0.0, -1.0, 0.0),
+            vec3(0.0, 0.0, -1.0),
+            vec3(-1.0, 0.0, 0.0),
+            vec3(0.0, -1.0, 0.0),
+            vec3(0.0, 0.0, -1.0),
+            vec3(1.0, 1.0, 0.0).normalize(),
+            vec3(0.0, 1.0, 1.0).normalize(),
+            vec3(1.0, 0.0, 1.0).normalize(),
+            vec3(-1.0, 1.0, 0.0).normalize(),
+            vec3(0.0, -1.0, 1.0).normalize(),
+            vec3(1.0, 0.0, -1.0).normalize(),
+            vec3(321.0, 12.0, 543.0).normalize(),
+            vec3(432.0, 23.0, 43.0).normalize(),
+            vec3(-431.0, -20.0, 21.0).normalize(),
+            vec3(-1.0, 21.0, -30.0).normalize(),
+            vec3(-30.0, -1.0, 1.0).normalize(),
+            vec3(1.0, 10.0, -1.0).normalize(),
         ];
 
         for normal in normals {

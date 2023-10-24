@@ -1,9 +1,9 @@
-use std::{collections::HashMap, ops::Range, borrow::Cow};
 use std::hint::black_box;
+use std::{borrow::Cow, collections::HashMap, ops::Range};
 
 use ash::vk;
 
-use crate::{graphics, collections::arena};
+use crate::{collections::arena, graphics};
 
 use super::ReadWriteKind;
 pub type GraphResourceIndex = usize;
@@ -109,7 +109,7 @@ pub struct RenderGraph {
     pub resources: Vec<GraphResourceData>,
     pub passes: arena::Arena<PassData>,
     dependencies: Vec<DependencyData>,
-    
+
     pub import_cache: HashMap<graphics::AnyResourceHandle, GraphResourceIndex>,
 }
 
@@ -151,7 +151,7 @@ impl RenderGraph {
         resource_data.versions = vec![GraphResourceVersion {
             last_access: resource_data.initial_access,
             source_pass: None,
-            read_by: vec![]
+            read_by: vec![],
         }];
 
         self.resources.push(resource_data);
@@ -194,8 +194,7 @@ impl RenderGraph {
 
         let resource = &self.resources[resource_handle];
         let needs_layout_transition =
-            resource.kind() == graphics::ResourceKind::Image &&
-            resource.curent_layout() != access.image_layout();
+            resource.kind() == graphics::ResourceKind::Image && resource.curent_layout() != access.image_layout();
 
         if access.read_write_kind() == graphics::ReadWriteKind::Write || needs_layout_transition {
             self.resources[resource_handle].versions.push(GraphResourceVersion {
@@ -257,7 +256,7 @@ impl TransientResourceCache {
             if self.resources_nodes.get(index).map_or(false, |n| &n.resource.desc() == desc) {
                 self.name_lookup.remove(name);
                 let found_node = self.resources_nodes.remove(index).unwrap();
-                
+
                 if let Some(prev_node_index) = found_node.prev_node {
                     self.resources_nodes[prev_node_index].next_node = found_node.next_node;
                 } else {
@@ -267,22 +266,22 @@ impl TransientResourceCache {
                         self.descriptor_lookup.remove(desc);
                     }
                 }
-                
+
                 if let Some(next_node_index) = found_node.next_node {
                     self.resources_nodes[next_node_index].prev_node = found_node.prev_node;
                 }
-    
+
                 return Some((found_node.resource, false));
             }
         };
-        
+
         let descriptor_lookup_index = self.descriptor_lookup.get_mut(desc)?;
         let found_node = self.resources_nodes.remove(*descriptor_lookup_index).unwrap();
 
         if let Some(prev_node_index) = found_node.prev_node {
             self.resources_nodes[prev_node_index].next_node = found_node.next_node;
         }
-        
+
         if let Some(next_node_index) = found_node.next_node {
             *descriptor_lookup_index = next_node_index;
             self.resources_nodes[next_node_index].prev_node = found_node.prev_node;
@@ -349,9 +348,7 @@ impl From<PassData> for CompiledPassData {
 
 impl std::fmt::Debug for CompiledPassData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CompiledPassData")
-            .field("name", &self.name)
-            .finish()
+        f.debug_struct("CompiledPassData").field("name", &self.name).finish()
     }
 }
 
@@ -383,7 +380,7 @@ pub struct BatchRef<'a> {
 impl CompiledRenderGraph {
     pub fn iter_batches(&self) -> impl Iterator<Item = BatchRef> {
         self.batches.iter().map(|batch_data| BatchRef {
-            wait_semaphores: &self.semaphores[batch_data.wait_semaphore_range.clone()], 
+            wait_semaphores: &self.semaphores[batch_data.wait_semaphore_range.clone()],
             begin_dependencies: &self.dependencies[batch_data.begin_dependency_range.clone()],
             passes: &self.passes[batch_data.pass_range.clone()],
             finish_dependencies: &self.dependencies[batch_data.finish_dependency_range.clone()],
@@ -393,7 +390,7 @@ impl CompiledRenderGraph {
 
     pub fn get_batch_ref(&self, batch_data: &BatchData) -> BatchRef {
         BatchRef {
-            wait_semaphores: &self.semaphores[batch_data.wait_semaphore_range.clone()], 
+            wait_semaphores: &self.semaphores[batch_data.wait_semaphore_range.clone()],
             begin_dependencies: &self.dependencies[batch_data.begin_dependency_range.clone()],
             passes: &self.passes[batch_data.pass_range.clone()],
             finish_dependencies: &self.dependencies[batch_data.finish_dependency_range.clone()],
@@ -419,8 +416,10 @@ impl CompiledRenderGraph {
     pub fn get_buffer(&self, handle: graphics::GraphHandle<graphics::BufferRaw>) -> &graphics::BufferRaw {
         match self.resources[handle.resource_index].resource.as_ref() {
             graphics::AnyResourceRef::Buffer(buffer) => buffer,
-            graphics::AnyResourceRef::Image(image)
-                => panic!("attempted to access image as buffer: {:?} [{}]", image.name, handle.resource_index),
+            graphics::AnyResourceRef::Image(image) => panic!(
+                "attempted to access image as buffer: {:?} [{}]",
+                image.name, handle.resource_index
+            ),
         }
     }
 
@@ -430,18 +429,16 @@ impl CompiledRenderGraph {
 
         match resource_ref {
             graphics::AnyResourceRef::Image(image) => image,
-            graphics::AnyResourceRef::Buffer(buffer)
-                => panic!("attempted to access buffer as image: {:?} [{}]", buffer.name, handle.resource_index),
+            graphics::AnyResourceRef::Buffer(buffer) => panic!(
+                "attempted to access buffer as image: {:?} [{}]",
+                buffer.name, handle.resource_index
+            ),
         }
     }
 }
 
 impl RenderGraph {
-    pub fn compile_and_flush(
-        &mut self,
-        device: &graphics::Device,
-        compiled: &mut CompiledRenderGraph,
-    ) {
+    pub fn compile_and_flush(&mut self, device: &graphics::Device, compiled: &mut CompiledRenderGraph) {
         puffin::profile_function!();
         compiled.clear();
 
@@ -473,7 +470,7 @@ impl RenderGraph {
                     compiled.dependencies.push(BatchDependency {
                         resource_index: dependency.resource_handle,
                         src_access,
-                        dst_access
+                        dst_access,
                     })
                 }
             }
@@ -485,7 +482,7 @@ impl RenderGraph {
             let finish_dependency_start = compiled.dependencies.len();
             for slot in pass_range.clone() {
                 let pass = sorted_passes.passes.remove_slot(slot as u32).unwrap();
-                
+
                 for &dependency in pass.dependencies.iter() {
                     let dependency = &self.dependencies[dependency];
                     let resource_data = &mut self.resources[dependency.resource_handle];
@@ -498,9 +495,9 @@ impl RenderGraph {
                             compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
                         }
 
-                        if resource_data.kind() == graphics::ResourceKind::Image &&
-                           resource_data.target_access != graphics::AccessKind::None &&
-                           dependency.access.image_layout() != resource_data.target_access.image_layout()
+                        if resource_data.kind() == graphics::ResourceKind::Image
+                            && resource_data.target_access != graphics::AccessKind::None
+                            && dependency.access.image_layout() != resource_data.target_access.image_layout()
                         {
                             compiled.dependencies.push(BatchDependency {
                                 resource_index: dependency.resource_handle,
@@ -527,20 +524,28 @@ impl RenderGraph {
 
         for resource_data in self.resources.drain(..) {
             match resource_data.source {
-                ResourceSource::Create { desc, cache, } => {
-                    let resource = cache.unwrap_or_else(|| graphics::AnyResource::create_owned(
-                        device,
-                        resource_data.name,
-                        &desc,
-                        resource_data.descriptor_index,
-                    ));
+                ResourceSource::Create { desc, cache } => {
+                    let resource = cache.unwrap_or_else(|| {
+                        graphics::AnyResource::create_owned(
+                            device,
+                            resource_data.name,
+                            &desc,
+                            resource_data.descriptor_index,
+                        )
+                    });
 
-                    compiled.resources.push(CompiledGraphResource { resource, owned_by_graph: true });
-                },
+                    compiled.resources.push(CompiledGraphResource {
+                        resource,
+                        owned_by_graph: true,
+                    });
+                }
                 ResourceSource::Import { resource } => {
-                    compiled.resources.push(CompiledGraphResource { resource, owned_by_graph: false });
-                },  
-            } 
+                    compiled.resources.push(CompiledGraphResource {
+                        resource,
+                        owned_by_graph: false,
+                    });
+                }
+            }
         }
 
         self.clear();
@@ -581,8 +586,9 @@ impl RenderGraph {
             let start = sorted_passes.passes.len();
 
             for &pass in remaining_passes.iter() {
-                if self.prev_passes(pass).all(|pass| remaining_passes
-                        .binary_search_by_key(&pass.slot, |index| index.slot).is_err())
+                if self
+                    .prev_passes(pass)
+                    .all(|pass| remaining_passes.binary_search_by_key(&pass.slot, |index| index.slot).is_err())
                 {
                     sorted_passes.passes.push(pass);
                 }
@@ -590,10 +596,9 @@ impl RenderGraph {
 
             let end = sorted_passes.passes.len();
 
-            remaining_passes.retain(|index| sorted_passes.passes[start..end]
-                .binary_search_by_key(&index.slot, |index| index.slot)
-                .is_err()
-            );
+            remaining_passes.retain(|index| {
+                sorted_passes.passes[start..end].binary_search_by_key(&index.slot, |index| index.slot).is_err()
+            });
 
             sorted_passes.ranges.push(start..end);
         }
@@ -621,7 +626,9 @@ impl RenderGraph {
                 let result = self.passes.get_slot(slot as u32);
                 slot += 1;
 
-                let Some((index, _)) = result else { continue; };
+                let Some((index, _)) = result else {
+                    continue;
+                };
                 occupied += 1;
 
                 if !self.prev_passes(index).any(|prev_index| self.passes.has_index(prev_index)) {
@@ -633,7 +640,7 @@ impl RenderGraph {
                 let pass_data = self.passes.remove(index).unwrap();
                 sorted_passes.passes.insert(pass_data);
             }
-            
+
             // temporary fix for infinite loop
             if remove_list.is_empty() {
                 log::debug!("POTENTIAL INFINITE LOOP: passes left:");
@@ -656,20 +663,25 @@ impl RenderGraph {
     fn prev_passes(&self, pass: GraphPassIndex) -> impl Iterator<Item = GraphPassIndex> + '_ {
         self.passes
             .get(pass)
-            .map(|pass| pass.dependencies.iter().map(|&dependency_handle| {
-                let dependency = &self.dependencies[dependency_handle];
-                let resource = &self.resources[dependency.resource_handle];
-                let resource_version = &resource.versions[dependency.resource_version];
+            .map(|pass| {
+                pass.dependencies
+                    .iter()
+                    .map(|&dependency_handle| {
+                        let dependency = &self.dependencies[dependency_handle];
+                        let resource = &self.resources[dependency.resource_handle];
+                        let resource_version = &resource.versions[dependency.resource_version];
 
-                let is_write = dependency.access.read_write_kind() == ReadWriteKind::Write;
+                        let is_write = dependency.access.read_write_kind() == ReadWriteKind::Write;
 
-                let prev_reads = is_write.then_some(resource_version.read_by.iter().clone()).into_iter().flatten().copied();
-                let source_pass = resource.source_pass(dependency.resource_version);
+                        let prev_reads =
+                            is_write.then_some(resource_version.read_by.iter().clone()).into_iter().flatten().copied();
+                        let source_pass = resource.source_pass(dependency.resource_version);
 
-                prev_reads.chain(source_pass)
-            }).flatten())
+                        prev_reads.chain(source_pass)
+                    })
+                    .flatten()
+            })
             .into_iter()
             .flatten()
-
     }
 }

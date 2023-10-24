@@ -240,11 +240,13 @@ impl Swapchain {
     ) -> Result<AcquiredImage, SwapchainOutOfDate> {
         puffin::profile_function!();
         self.recreate_if_needed(device);
-        
+
         while let Some(swapchain) = self.old.front() {
-            if swapchain.last_frame_index
+            if swapchain
+                .last_frame_index
                 .as_ref()
-                .map_or(false, |&index| frame_index > index + self.config.image_count as usize) {
+                .map_or(false, |&index| frame_index > index + self.config.image_count as usize)
+            {
                 break;
             }
             swapchain.destroy(&device);
@@ -304,7 +306,8 @@ impl Swapchain {
             .image_indices(std::slice::from_ref(&image.image_index));
 
         unsafe {
-            device.swapchain_fns
+            device
+                .swapchain_fns
                 .queue_present(device.get_queue(QueueType::Graphics).handle, &present_info)
                 .unwrap();
         }

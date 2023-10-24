@@ -1,15 +1,18 @@
-use std::{ptr::NonNull, borrow::Cow, sync::Arc};
+use std::{borrow::Cow, ptr::NonNull, sync::Arc};
 
-use ash::vk;
-use gpu_allocator::{vulkan::{AllocationScheme, AllocationCreateDesc}, MemoryLocation};
 use crate::graphics;
+use ash::vk;
+use gpu_allocator::{
+    vulkan::{AllocationCreateDesc, AllocationScheme},
+    MemoryLocation,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct BufferView {
     pub handle: vk::Buffer,
     pub device_address: u64,
     pub descriptor_index: Option<graphics::DescriptorIndex>,
-    pub size: u64
+    pub size: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -69,8 +72,7 @@ impl BufferRaw {
         }
 
         let descriptor_index = if desc.usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) {
-            let index = preallocated_descriptor_index
-                .unwrap_or_else(|| device.alloc_descriptor_index());
+            let index = preallocated_descriptor_index.unwrap_or_else(|| device.alloc_descriptor_index());
             device.write_storage_buffer_resource(index, handle);
             Some(index)
         } else {
@@ -139,12 +141,15 @@ impl std::fmt::Debug for Buffer {
 impl graphics::Context {
     pub fn create_buffer(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc) -> Buffer {
         let buffer = BufferRaw::create_impl(&self.device, name.into(), desc, None);
-        Buffer { _buffer: Some(Arc::new(buffer)), _device: self.device.clone() }
+        Buffer {
+            _buffer: Some(Arc::new(buffer)),
+            _device: self.device.clone(),
+        }
     }
 
     pub fn create_buffer_init(&self, name: impl Into<Cow<'static, str>>, desc: &BufferDesc, init: &[u8]) -> Buffer {
         let mut desc = *desc;
-        
+
         if desc.memory_location != MemoryLocation::CpuToGpu {
             desc.usage |= vk::BufferUsageFlags::TRANSFER_DST;
         }
@@ -152,12 +157,15 @@ impl graphics::Context {
         let buffer = BufferRaw::create_impl(&self.device, name.into(), &desc, None);
         self.immediate_write_buffer(&buffer, init, 0);
 
-        Buffer { _buffer: Some(Arc::new(buffer)), _device: self.device.clone() }
+        Buffer {
+            _buffer: Some(Arc::new(buffer)),
+            _device: self.device.clone(),
+        }
     }
 
     pub fn immediate_write_buffer(&self, buffer: &graphics::BufferRaw, data: &[u8], offset: usize) {
         puffin::profile_function!();
-        
+
         if data.is_empty() {
             return;
         }
@@ -176,7 +184,7 @@ impl graphics::Context {
                     usage: vk::BufferUsageFlags::TRANSFER_SRC,
                     memory_location: MemoryLocation::CpuToGpu,
                 },
-                None
+                None,
             );
 
             unsafe {
@@ -184,13 +192,15 @@ impl graphics::Context {
             }
 
             self.record_and_submit(|cmd| {
-                cmd.copy_buffer(&scratch_buffer, &buffer, &[
-                    vk::BufferCopy {
+                cmd.copy_buffer(
+                    &scratch_buffer,
+                    &buffer,
+                    &[vk::BufferCopy {
                         src_offset: 0,
                         dst_offset: offset as u64,
                         size: copy_size as u64,
-                    }
-                ]);
+                    }],
+                );
             });
 
             BufferRaw::destroy_impl(&self.device, &scratch_buffer);

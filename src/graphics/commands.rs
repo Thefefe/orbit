@@ -13,8 +13,8 @@ pub struct CommandPool {
 
 impl CommandPool {
     pub fn new(device: &graphics::Device, name: &str, queue_type: graphics::QueueType) -> Self {
-        let command_pool_create_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(device.get_queue(queue_type).family.index);
+        let command_pool_create_info =
+            vk::CommandPoolCreateInfo::builder().queue_family_index(device.get_queue(queue_type).family.index);
 
         let handle = unsafe { device.raw.create_command_pool(&command_pool_create_info, None).unwrap() };
 
@@ -124,7 +124,7 @@ impl CommandBuffer {
     pub fn record<'a>(
         &'a mut self,
         device: &'a graphics::Device,
-        flags: vk::CommandBufferUsageFlags
+        flags: vk::CommandBufferUsageFlags,
     ) -> CommandRecorder<'a> {
         let begin_info = vk::CommandBufferBeginInfo::builder().flags(flags);
 
@@ -156,9 +156,8 @@ impl<'a> CommandRecorder<'a> {
         if let Some(ref debug_utils) = self.device.debug_utils_fns {
             unsafe {
                 let cname = CString::new(name).unwrap();
-                let label = vk::DebugUtilsLabelEXT::builder()
-                    .label_name(cname.as_c_str())
-                    .color(color.unwrap_or([0.0; 4]));
+                let label =
+                    vk::DebugUtilsLabelEXT::builder().label_name(cname.as_c_str()).color(color.unwrap_or([0.0; 4]));
                 debug_utils.cmd_begin_debug_utils_label(self.buffer(), &label);
             }
         }
@@ -202,33 +201,13 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
-    pub fn fill_buffer(
-        &self,
-        buffer: &graphics::BufferView,
-        offset: u64,
-        size: u64,
-        data: u32,
-    ) {
-        unsafe {
-            self.device.raw.cmd_fill_buffer(
-                self.buffer(),
-                buffer.handle,
-                offset, size,
-                data,
-            )
-        }
+    pub fn fill_buffer(&self, buffer: &graphics::BufferView, offset: u64, size: u64, data: u32) {
+        unsafe { self.device.raw.cmd_fill_buffer(self.buffer(), buffer.handle, offset, size, data) }
     }
 
     #[inline(always)]
     pub fn copy_buffer(&self, src: &graphics::BufferView, dst: &graphics::BufferView, regions: &[vk::BufferCopy]) {
-        unsafe {
-            self.device.raw.cmd_copy_buffer(
-                self.buffer(),
-                src.handle,
-                dst.handle,
-                regions
-            )
-        }
+        unsafe { self.device.raw.cmd_copy_buffer(self.buffer(), src.handle, dst.handle, regions) }
     }
 
     #[inline(always)]
@@ -236,7 +215,7 @@ impl<'a> CommandRecorder<'a> {
         &self,
         src: &graphics::BufferView,
         dst: &graphics::ImageView,
-        regions: &[vk::BufferImageCopy]
+        regions: &[vk::BufferImageCopy],
     ) {
         unsafe {
             self.device.raw.cmd_copy_buffer_to_image(
@@ -244,7 +223,7 @@ impl<'a> CommandRecorder<'a> {
                 src.handle,
                 dst.handle,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                regions
+                regions,
             )
         }
     }
@@ -288,7 +267,7 @@ impl<'a> CommandRecorder<'a> {
                 dst_image.handle,
                 dst_layout,
                 regions,
-                filter
+                filter,
             );
         }
     }
@@ -321,16 +300,14 @@ impl<'a> CommandRecorder<'a> {
             self.device.raw.cmd_set_viewport(
                 self.buffer(),
                 0,
-                &[
-                    vk::Viewport {
-                        x: offset.x as f32,
-                        y: offset.y as f32 + extent.height as f32,
-                        width: extent.width as f32,
-                        height: -(extent.height as f32),
-                        min_depth: 0.0,
-                        max_depth: 1.0,
-                    }
-                ],
+                &[vk::Viewport {
+                    x: offset.x as f32,
+                    y: offset.y as f32 + extent.height as f32,
+                    width: extent.width as f32,
+                    height: -(extent.height as f32),
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }],
             );
 
             self.device.raw.cmd_set_scissor(self.buffer(), 0, std::slice::from_ref(&rendering_info.render_area));
@@ -359,16 +336,12 @@ impl<'a> CommandRecorder<'a> {
 
     #[inline(always)]
     pub fn set_depth_bias(&self, constant_factor: f32, clamp: f32, slope_factor: f32) {
-        unsafe {
-            self.device.raw.cmd_set_depth_bias(self.buffer(), constant_factor, clamp, slope_factor)
-        }
+        unsafe { self.device.raw.cmd_set_depth_bias(self.buffer(), constant_factor, clamp, slope_factor) }
     }
 
     #[inline(always)]
     pub fn set_depth_test_enable(&self, enable: bool) {
-        unsafe {
-            self.device.raw.cmd_set_depth_test_enable(self.buffer(), enable)
-        }
+        unsafe { self.device.raw.cmd_set_depth_test_enable(self.buffer(), enable) }
     }
 
     #[inline(always)]
@@ -387,9 +360,7 @@ impl<'a> CommandRecorder<'a> {
 
     #[inline(always)]
     pub fn bind_vertex_buffer(&self, binding: u32, buffer: &graphics::BufferView, offset: u64) {
-        unsafe {
-            self.device.raw.cmd_bind_vertex_buffers(self.buffer(), binding, &[buffer.handle], &[offset])
-        }
+        unsafe { self.device.raw.cmd_bind_vertex_buffers(self.buffer(), binding, &[buffer.handle], &[offset]) }
     }
 
     #[inline(always)]
@@ -401,7 +372,7 @@ impl<'a> CommandRecorder<'a> {
                 vk::ShaderStageFlags::ALL,
                 offset,
                 constansts,
-            )   
+            )
         }
     }
 
@@ -442,7 +413,7 @@ impl<'a> CommandRecorder<'a> {
         indirect_buffer: &graphics::BufferView,
         offset: vk::DeviceSize,
         draw_count: u32,
-        stride: u32
+        stride: u32,
     ) {
         unsafe {
             self.device.raw.cmd_draw_indexed_indirect(
@@ -450,7 +421,7 @@ impl<'a> CommandRecorder<'a> {
                 indirect_buffer.handle,
                 offset,
                 draw_count,
-                stride
+                stride,
             );
         }
     }
@@ -487,9 +458,7 @@ impl<'a> CommandRecorder<'a> {
 
     #[inline(always)]
     pub fn dispatch(&self, group_counts: [u32; 3]) {
-        unsafe {
-            self.device.raw.cmd_dispatch(self.buffer(), group_counts[0], group_counts[1], group_counts[2])
-        }
+        unsafe { self.device.raw.cmd_dispatch(self.buffer(), group_counts[0], group_counts[1], group_counts[2]) }
     }
 
     pub fn generate_mipmaps(
@@ -497,7 +466,7 @@ impl<'a> CommandRecorder<'a> {
         image: &graphics::ImageView,
         target_layers: Range<u32>,
         initial_access: graphics::AccessKind,
-        target_access: graphics::AccessKind
+        target_access: graphics::AccessKind,
     ) {
         let mip_levels = image.mip_level();
         let mut mip_width = image.width();
@@ -508,22 +477,26 @@ impl<'a> CommandRecorder<'a> {
             return;
         }
 
-        self.barrier(&[], &[  
-            graphics::image_subresource_barrier(
-                &image,
-                0..1,
-                target_layers.clone(),
-                initial_access,
-                graphics::AccessKind::TransferRead,
-            ),
-            graphics::image_subresource_barrier(
-                &image,
-                1..mip_levels,
-                target_layers.clone(),
-                initial_access,
-                graphics::AccessKind::TransferWrite,
-            ),
-        ], &[]);
+        self.barrier(
+            &[],
+            &[
+                graphics::image_subresource_barrier(
+                    &image,
+                    0..1,
+                    target_layers.clone(),
+                    initial_access,
+                    graphics::AccessKind::TransferRead,
+                ),
+                graphics::image_subresource_barrier(
+                    &image,
+                    1..mip_levels,
+                    target_layers.clone(),
+                    initial_access,
+                    graphics::AccessKind::TransferWrite,
+                ),
+            ],
+            &[],
+        );
 
         for (last_level, current_level) in (1..mip_levels).enumerate() {
             let last_level = last_level as u32;
@@ -533,13 +506,17 @@ impl<'a> CommandRecorder<'a> {
             let new_mip_height = if mip_height > 1 { mip_height / 2 } else { 1 };
 
             if last_level != 0 {
-                self.barrier(&[], &[graphics::image_subresource_barrier(
-                    &image,
-                    last_level..last_level + 1, 
-                    target_layers.clone(),
-                    graphics::AccessKind::TransferWrite,
-                    graphics::AccessKind::TransferRead,
-                )], &[]);
+                self.barrier(
+                    &[],
+                    &[graphics::image_subresource_barrier(
+                        &image,
+                        last_level..last_level + 1,
+                        target_layers.clone(),
+                        graphics::AccessKind::TransferWrite,
+                        graphics::AccessKind::TransferRead,
+                    )],
+                    &[],
+                );
             }
 
             let blit_region = vk::ImageBlit {
@@ -579,23 +556,27 @@ impl<'a> CommandRecorder<'a> {
                 mip_height /= 2
             };
         }
-        
-        self.barrier(&[], &[
-            graphics::image_subresource_barrier(
-                &image,
-                ..mip_levels - 1, 
-                target_layers.clone(),
-                graphics::AccessKind::TransferRead,
-                target_access,
-            ),
-            graphics::image_subresource_barrier(
-                &image,
-                mip_levels - 1..mip_levels, 
-                target_layers.clone(),
-                graphics::AccessKind::TransferWrite,
-                target_access,
-            ),
-        ], &[]);
+
+        self.barrier(
+            &[],
+            &[
+                graphics::image_subresource_barrier(
+                    &image,
+                    ..mip_levels - 1,
+                    target_layers.clone(),
+                    graphics::AccessKind::TransferRead,
+                    target_access,
+                ),
+                graphics::image_subresource_barrier(
+                    &image,
+                    mip_levels - 1..mip_levels,
+                    target_layers.clone(),
+                    graphics::AccessKind::TransferWrite,
+                    target_access,
+                ),
+            ],
+            &[],
+        );
     }
 }
 
@@ -691,21 +672,25 @@ impl<'a> PushConstantBuilder<'a> {
     pub fn mat4(self, val: &glam::Mat4) -> Self {
         self.push_bytes_with_align(bytemuck::bytes_of(val), std::mem::align_of_val(val))
     }
-    
+
     #[track_caller]
     #[inline(always)]
     pub fn sampled_image(self, image: &graphics::ImageView) -> Self {
-        let descriptor_index = image.sampled_index().
-            expect("image doesn't have sampled descriptor index");
-        self.push_bytes_with_align(bytemuck::bytes_of(&descriptor_index), std::mem::align_of_val(&descriptor_index))
+        let descriptor_index = image.sampled_index().expect("image doesn't have sampled descriptor index");
+        self.push_bytes_with_align(
+            bytemuck::bytes_of(&descriptor_index),
+            std::mem::align_of_val(&descriptor_index),
+        )
     }
 
     pub fn storage_image(self, image: &graphics::ImageView) -> Self {
-        let descriptor_index = image.storage_index()
-            .expect("image doesn't have storage descriptor index");
-        self.push_bytes_with_align(bytemuck::bytes_of(&descriptor_index), std::mem::align_of_val(&descriptor_index))
+        let descriptor_index = image.storage_index().expect("image doesn't have storage descriptor index");
+        self.push_bytes_with_align(
+            bytemuck::bytes_of(&descriptor_index),
+            std::mem::align_of_val(&descriptor_index),
+        )
     }
-    
+
     #[track_caller]
     #[inline(always)]
     pub fn buffer(self, buffer: &graphics::BufferView) -> Self {

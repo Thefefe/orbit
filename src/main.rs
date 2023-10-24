@@ -17,8 +17,8 @@ use winit::{
 use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 mod assets;
-mod input;
 mod graphics;
+mod input;
 mod scene;
 mod time;
 
@@ -39,13 +39,11 @@ use scene::{SceneData, Transform};
 use passes::{
     debug_renderer::DebugRenderer,
     env_map_loader::EnvironmentMap,
-    forward::{ForwardRenderer, RenderMode}, shadow_renderer::{ShadowSettings, ShadowRenderer},
+    forward::{ForwardRenderer, RenderMode},
+    shadow_renderer::{ShadowRenderer, ShadowSettings},
 };
 
-use crate::passes::{
-    post_process::render_post_process,
-    forward::TargetAttachments
-};
+use crate::passes::{forward::TargetAttachments, post_process::render_post_process};
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
@@ -210,11 +208,11 @@ impl Settings {
     pub fn edit(&mut self, device: &graphics::Device, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let present_mode_display = |p: vk::PresentModeKHR| match p {
-                vk::PresentModeKHR::FIFO         => "fifo",
+                vk::PresentModeKHR::FIFO => "fifo",
                 vk::PresentModeKHR::FIFO_RELAXED => "fifo_relaxed",
-                vk::PresentModeKHR::IMMEDIATE    => "immediate",
-                vk::PresentModeKHR::MAILBOX      => "mailbox",
-                _ => unimplemented!()
+                vk::PresentModeKHR::IMMEDIATE => "immediate",
+                vk::PresentModeKHR::MAILBOX => "mailbox",
+                _ => unimplemented!(),
             };
 
             ui.label("present_mode");
@@ -229,13 +227,11 @@ impl Settings {
 
         ui.horizontal(|ui| {
             ui.label("msaa");
-            egui::ComboBox::from_id_source("msaa")
-                .selected_text(format!("{}", self.msaa))
-                .show_ui(ui, |ui| {
-                    for sample_count in device.gpu.supported_multisample_counts() {
-                        ui.selectable_value(&mut self.msaa, sample_count, sample_count.to_string());
-                    }
-                });
+            egui::ComboBox::from_id_source("msaa").selected_text(format!("{}", self.msaa)).show_ui(ui, |ui| {
+                for sample_count in device.gpu.supported_multisample_counts() {
+                    ui.selectable_value(&mut self.msaa, sample_count, sample_count.to_string());
+                }
+            });
         });
 
         ui.heading("shadow_settings");
@@ -246,23 +242,43 @@ impl Settings {
     fn edit_shadow_debug_settings(
         &mut self,
         ui: &mut egui::Ui,
-        shadow_maps: [graphics::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT]
+        shadow_maps: [graphics::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT],
     ) {
-        
-        ui.checkbox(&mut self.shadow_debug_settings.frustum_culling, "shadow frustum culling");
-        ui.checkbox(&mut self.shadow_debug_settings.occlusion_culling, "shadow occlusion culling");
+        ui.checkbox(
+            &mut self.shadow_debug_settings.frustum_culling,
+            "shadow frustum culling",
+        );
+        ui.checkbox(
+            &mut self.shadow_debug_settings.occlusion_culling,
+            "shadow occlusion culling",
+        );
         let shadow_volume_culling_possible =
             self.shadow_debug_settings.occlusion_culling && self.camera_debug_settings.occlusion_culling;
-        ui.add_enabled(shadow_volume_culling_possible, egui::Checkbox::new(
-            &mut self.shadow_debug_settings.shadow_volume_culling,
-            "shadow volume culling"
-        ));
-        
-        ui.checkbox(&mut self.shadow_debug_settings.show_cascade_view_frustum, "show cascade view frustum");
-        ui.checkbox(&mut self.shadow_debug_settings.show_cascade_light_frustum, "show cascade light frustum");
-        ui.checkbox(&mut self.shadow_debug_settings.show_cascade_light_frustum_planes, "show cascade light frustum planes");
-        ui.checkbox(&mut self.shadow_debug_settings.show_cascade_screen_space_aabb, "show cascade screen space aabb");
-        
+        ui.add_enabled(
+            shadow_volume_culling_possible,
+            egui::Checkbox::new(
+                &mut self.shadow_debug_settings.shadow_volume_culling,
+                "shadow volume culling",
+            ),
+        );
+
+        ui.checkbox(
+            &mut self.shadow_debug_settings.show_cascade_view_frustum,
+            "show cascade view frustum",
+        );
+        ui.checkbox(
+            &mut self.shadow_debug_settings.show_cascade_light_frustum,
+            "show cascade light frustum",
+        );
+        ui.checkbox(
+            &mut self.shadow_debug_settings.show_cascade_light_frustum_planes,
+            "show cascade light frustum planes",
+        );
+        ui.checkbox(
+            &mut self.shadow_debug_settings.show_cascade_screen_space_aabb,
+            "show cascade screen space aabb",
+        );
+
         ui.horizontal(|ui| {
             ui.label("selected_cascade");
             ui.add(egui::Slider::new(
@@ -271,7 +287,10 @@ impl Settings {
             ));
         });
 
-        ui.image(shadow_maps[self.shadow_debug_settings.selected_cascade], egui::Vec2::new(250.0, 250.0));
+        ui.image(
+            shadow_maps[self.shadow_debug_settings.selected_cascade],
+            egui::Vec2::new(250.0, 250.0),
+        );
     }
 }
 
@@ -286,7 +305,7 @@ pub struct CameraDebugSettings {
     pub occlusion_culling: bool,
     pub show_frustum_planes: bool,
     pub show_screen_space_aabbs: bool,
-    
+
     pub show_depth_pyramid: bool,
     pub pyramid_display_far_depth: f32,
     pub depth_pyramid_level: u32,
@@ -295,19 +314,19 @@ pub struct CameraDebugSettings {
 impl Default for CameraDebugSettings {
     fn default() -> Self {
         Self {
-            render_mode:                   RenderMode::Shaded,
-            freeze_camera:                 false,
-            show_bounding_boxes:           false,
-            show_bounding_spheres:         false,
-        
-            frustum_culling:        true,
-            occlusion_culling:      true,
-            show_frustum_planes:    false,
+            render_mode: RenderMode::Shaded,
+            freeze_camera: false,
+            show_bounding_boxes: false,
+            show_bounding_spheres: false,
+
+            frustum_culling: true,
+            occlusion_culling: true,
+            show_frustum_planes: false,
             show_screen_space_aabbs: false,
-            
-            show_depth_pyramid:            false,
-            pyramid_display_far_depth:     0.01,
-            depth_pyramid_level:           0
+
+            show_depth_pyramid: false,
+            pyramid_display_far_depth: 0.01,
+            depth_pyramid_level: 0,
         }
     }
 }
@@ -322,15 +341,15 @@ impl CameraDebugSettings {
         ui.checkbox(&mut self.occlusion_culling, "camera occlusion culling");
         ui.checkbox(&mut self.show_frustum_planes, "show camera frustum planes");
         ui.checkbox(&mut self.show_screen_space_aabbs, "show camera screen space aabbs");
-    
+
         ui.checkbox(&mut self.show_depth_pyramid, "show depth pyramid");
         if self.show_depth_pyramid {
             ui.indent("depth_pyramid", |ui| {
                 ui.horizontal(|ui| {
                     ui.label("depth pyramid max depth");
-                    ui.add(egui::DragValue::new(&mut self.pyramid_display_far_depth)
-                        .speed(0.005)
-                        .clamp_range(0.005..=1.0));
+                    ui.add(
+                        egui::DragValue::new(&mut self.pyramid_display_far_depth).speed(0.005).clamp_range(0.005..=1.0),
+                    );
                 });
                 ui.horizontal(|ui| {
                     ui.label("depth pyramid level");
@@ -359,14 +378,14 @@ pub struct ShadowDebugSettings {
 impl Default for ShadowDebugSettings {
     fn default() -> Self {
         Self {
-            frustum_culling:             true,
-            occlusion_culling:           true,
-            shadow_volume_culling:              false,
-            show_cascade_view_frustum:          false,
-            show_cascade_light_frustum:         false,
-            show_cascade_light_frustum_planes:  false,
-            show_cascade_screen_space_aabb:     false,
-            selected_cascade:                   0,
+            frustum_culling: true,
+            occlusion_culling: true,
+            shadow_volume_culling: false,
+            show_cascade_view_frustum: false,
+            show_cascade_light_frustum: false,
+            show_cascade_light_frustum_planes: false,
+            show_cascade_screen_space_aabb: false,
+            selected_cascade: 0,
         }
     }
 }
@@ -415,7 +434,7 @@ impl App {
     fn new(
         context: &mut graphics::Context,
         gltf_path: Option<std::path::PathBuf>,
-        env_map_path: Option<std::path::PathBuf>
+        env_map_path: Option<std::path::PathBuf>,
     ) -> Self {
         let mut gpu_assets = GpuAssetStore::new(context);
         let mut scene = SceneData::new(context);
@@ -450,10 +469,10 @@ impl App {
         // let prefab = scene.entities.pop().unwrap();
         // let pos_range = 0.0..=32.0;
         // let rot_range = 0.0..=2.0 * PI;
-        
+
         // for _ in 0..2048 * 8 {
         //     let mut entity = prefab.clone();
-            
+
         //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));
         //     entity.transform.orientation = Quat::from_euler(
         //         glam::EulerRot::YXZ,
@@ -462,17 +481,15 @@ impl App {
         //         rng.gen_range(rot_range.clone()),
         //     );
 
-
         //     scene.add_entity(entity);
         // }
-        
+
         scene.update_instances(context);
         scene.update_submeshes(context, &gpu_assets);
         scene.update_lights(context);
         let environment_map = if let Some(env_map_path) = env_map_path {
             let equirectangular_environment_image = {
-                let (image_binary, image_format) =
-                    gltf_loader::load_image_data(&env_map_path).unwrap();
+                let (image_binary, image_format) = gltf_loader::load_image_data(&env_map_path).unwrap();
                 let image = gltf_loader::load_image(
                     context,
                     "environment_map".into(),
@@ -480,13 +497,14 @@ impl App {
                     image_format,
                     true,
                     true,
-                    graphics::SamplerKind::LinearRepeat
+                    graphics::SamplerKind::LinearRepeat,
                 );
 
                 image
             };
 
-            Some(EnvironmentMap::new(context,
+            Some(EnvironmentMap::new(
+                context,
                 "environment_map".into(),
                 1024,
                 &equirectangular_environment_image,
@@ -497,29 +515,35 @@ impl App {
 
         let screen_extent = context.swapchain.extent();
 
-        let main_color_image = context.create_image("main_color_image", &graphics::ImageDesc {
-            ty: graphics::ImageType::Single2D,
-            format: Self::COLOR_FORMAT,
-            dimensions: [screen_extent.width, screen_extent.height, 1],
-            mip_levels: 1,
-            samples: graphics::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            aspect: vk::ImageAspectFlags::COLOR,
-            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-            ..Default::default()
-        });
+        let main_color_image = context.create_image(
+            "main_color_image",
+            &graphics::ImageDesc {
+                ty: graphics::ImageType::Single2D,
+                format: Self::COLOR_FORMAT,
+                dimensions: [screen_extent.width, screen_extent.height, 1],
+                mip_levels: 1,
+                samples: graphics::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+                ..Default::default()
+            },
+        );
 
-        let main_depth_image = context.create_image("main_depth_target", &graphics::ImageDesc {
-            ty: graphics::ImageType::Single2D,
-            format: Self::DEPTH_FORMAT,
-            dimensions: [screen_extent.width, screen_extent.height, 1],
-            mip_levels: 1,
-            samples: graphics::MultisampleCount::None,
-            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            aspect: vk::ImageAspectFlags::DEPTH,
-            subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-            ..Default::default()
-        });
+        let main_depth_image = context.create_image(
+            "main_depth_target",
+            &graphics::ImageDesc {
+                ty: graphics::ImageType::Single2D,
+                format: Self::DEPTH_FORMAT,
+                dimensions: [screen_extent.width, screen_extent.height, 1],
+                mip_levels: 1,
+                samples: graphics::MultisampleCount::None,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::DEPTH,
+                subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+                ..Default::default()
+            },
+        );
 
         let aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
@@ -575,13 +599,13 @@ impl App {
             light_intensitiy: 10.0,
 
             selected_entity_index: None,
-                
+
             open_scene_editor_open: false,
             open_graph_debugger: false,
             open_profiler: false,
             open_camera_debug_settings: false,
             open_settings: false,
-            open_shadow_debug_settings: false
+            open_shadow_debug_settings: false,
         }
     }
 
@@ -692,9 +716,10 @@ impl App {
                             ui.heading("Entities");
                             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                                 for (entity_index, entity) in self.scene.entities.iter_mut().enumerate() {
-                                    let header = entity.name.as_ref().map_or(format!("entity_{entity_index}"), |name| {
-                                        format!("entity_{entity_index} ({name})")
-                                    });
+                                    let header =
+                                        entity.name.as_ref().map_or(format!("entity_{entity_index}"), |name| {
+                                            format!("entity_{entity_index} ({name})")
+                                        });
                                     let is_entity_selected = Some(entity_index) == self.selected_entity_index;
                                     if ui.selectable_label(is_entity_selected, &header).clicked() {
                                         self.selected_entity_index = Some(entity_index);
@@ -702,24 +727,25 @@ impl App {
                                 }
                             });
                         });
-                    
+
                     ui.heading("Properties");
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                         if let Some(entity_index) = self.selected_entity_index {
                             let entity = &mut self.scene.entities[entity_index];
-                            
+
                             ui.heading("Transform");
                             drag_vec3(ui, "position", &mut entity.transform.position, 0.001);
-                            let (euler_x, euler_y, euler_z) = entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
+                            let (euler_x, euler_y, euler_z) =
+                                entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
                             let mut euler = vec3(euler_x, euler_y, euler_z);
                             drag_vec3(ui, "orientation", &mut euler, 0.05);
-                            entity.transform.orientation = Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
+                            entity.transform.orientation =
+                                Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
                             drag_vec3(ui, "scale", &mut entity.transform.scale, 0.001);
                         } else {
                             ui.label("no entity selected");
                         }
                     });
-
                 });
         }
 
@@ -785,7 +811,9 @@ impl App {
         let camera_view_projection_matrix = self.camera.compute_matrix();
 
         if self.settings.camera_debug_settings.freeze_camera {
-            let Projection::Perspective { fov, near_clip } = self.frozen_camera.projection else { todo!() };
+            let Projection::Perspective { fov, near_clip } = self.frozen_camera.projection else {
+                todo!()
+            };
             let far_clip = self.settings.shadow_settings.max_shadow_distance;
             let frustum_corner = math::perspective_corners(fov, self.frozen_camera.aspect_ratio, near_clip, far_clip)
                 .map(|corner| self.frozen_camera.transform.compute_matrix() * corner);
@@ -810,10 +838,13 @@ impl App {
                     ..main_color_resolve_image.desc
                 });
             } else {
-                let image = context.create_image("main_color_resolve_image", &graphics::ImageDesc {
-                    samples: graphics::MultisampleCount::None,
-                    ..self.main_color_image.desc
-                });
+                let image = context.create_image(
+                    "main_color_resolve_image",
+                    &graphics::ImageDesc {
+                        samples: graphics::MultisampleCount::None,
+                        ..self.main_color_image.desc
+                    },
+                );
                 self.main_color_resolve_image = Some(image);
             }
 
@@ -823,10 +854,13 @@ impl App {
                     ..main_depth_resolve_image.desc
                 });
             } else {
-                let image = context.create_image("main_depth_resolve_image", &graphics::ImageDesc {
-                    samples: graphics::MultisampleCount::None,
-                    ..self.main_depth_image.desc
-                });
+                let image = context.create_image(
+                    "main_depth_resolve_image",
+                    &graphics::ImageDesc {
+                        samples: graphics::MultisampleCount::None,
+                        ..self.main_depth_image.desc
+                    },
+                );
                 self.main_depth_resolve_image = Some(image);
             }
         } else {
@@ -839,28 +873,27 @@ impl App {
         let depth_target = context.import(&self.main_depth_image);
         let depth_resolve = self.main_depth_resolve_image.as_ref().map(|i| context.import(i));
 
-        let target_attachments =TargetAttachments {
+        let target_attachments = TargetAttachments {
             color_target,
             color_resolve: None,
             depth_target,
             depth_resolve,
         };
 
-        
-        egui::Window::new("camera debug settings").open(&mut self.open_camera_debug_settings).show(egui_ctx, |ui| {
-            self.settings.camera_debug_settings
-                .edit(ui, self.forward_renderer.depth_pyramid.pyramid.mip_level())
-        });
+        egui::Window::new("camera debug settings")
+            .open(&mut self.open_camera_debug_settings)
+            .show(egui_ctx, |ui| {
+                self.settings
+                    .camera_debug_settings
+                    .edit(ui, self.forward_renderer.depth_pyramid.pyramid.mip_level())
+            });
 
         self.forward_renderer.normal_depth_prepass(
             context,
             &self.settings,
-            
             assets,
             scene,
-
             &target_attachments,
-            
             &self.camera,
             &self.frozen_camera,
         );
@@ -884,22 +917,20 @@ impl App {
         self.forward_renderer.render(
             context,
             &self.settings,
-
             assets,
             scene,
-            
             self.environment_map.as_ref(),
             directional_light,
-
             &target_attachments,
-            
             &self.camera,
             &self.frozen_camera,
         );
 
-        egui::Window::new("shadow debug settings").open(&mut self.open_shadow_debug_settings).show(egui_ctx, |ui| {
-            self.settings.edit_shadow_debug_settings(ui, directional_light.shadow_maps);
-        });
+        egui::Window::new("shadow debug settings")
+            .open(&mut self.open_shadow_debug_settings)
+            .show(egui_ctx, |ui| {
+                self.settings.edit_shadow_debug_settings(ui, directional_light.shadow_maps);
+            });
 
         let show_bounding_boxes = self.settings.camera_debug_settings.show_bounding_boxes;
         let show_bounding_spheres = self.settings.camera_debug_settings.show_bounding_spheres;
@@ -934,37 +965,47 @@ impl App {
                             let bounding_sphere = self.gpu_assets.mesh_infos[submesh.mesh_handle].bounding_sphere;
                             let position_world = transform_matrix.transform_point3a(bounding_sphere.into());
                             let radius = bounding_sphere.w * entity.transform.scale.max_element();
-    
+
                             let p00 = projection_matrix.col(0)[0];
                             let p11 = projection_matrix.col(1)[1];
-    
+
                             let mut position_view = view_matrix.transform_point3a(position_world);
                             position_view.z = -position_view.z;
-    
+
                             let z_near = 0.01;
-    
-                            if let Some(aabb) = math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11) {
+
+                            if let Some(aabb) =
+                                math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11)
+                            {
                                 if show_bounding_spheres {
-                                    self.debug_renderer.draw_sphere(position_world.into(), radius, vec4(0.0, 1.0, 0.0, 1.0));
+                                    self.debug_renderer.draw_sphere(
+                                        position_world.into(),
+                                        radius,
+                                        vec4(0.0, 1.0, 0.0, 1.0),
+                                    );
                                 }
-                                
+
                                 if show_screen_space_aabbs {
                                     let depth = z_near / (position_view.z - radius);
-        
+
                                     let corners = [
                                         vec2(aabb.x, aabb.y),
                                         vec2(aabb.x, aabb.w),
                                         vec2(aabb.z, aabb.w),
                                         vec2(aabb.z, aabb.y),
-                                    ].map(|c| {
+                                    ]
+                                    .map(|c| {
                                         let v = screen_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
                                         v / v.w
                                     });
                                     self.debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                                 }
-
                             } else if show_bounding_spheres {
-                                self.debug_renderer.draw_sphere(position_world.into(), radius, vec4(1.0, 0.0, 0.0, 1.0));
+                                self.debug_renderer.draw_sphere(
+                                    position_world.into(),
+                                    radius,
+                                    vec4(1.0, 0.0, 0.0, 1.0),
+                                );
                             }
                         }
                     }
@@ -984,7 +1025,11 @@ impl App {
             let entity = &self.scene.entities[entity_index];
 
             if let Some(model) = entity.model {
-                self.debug_renderer.draw_model_wireframe(entity.transform.compute_matrix(), model, vec4(1.0, 0.0, 1.0, 1.0));
+                self.debug_renderer.draw_model_wireframe(
+                    entity.transform.compute_matrix(),
+                    model,
+                    vec4(1.0, 0.0, 1.0, 1.0),
+                );
             }
         }
 
@@ -1005,7 +1050,11 @@ impl App {
 
         render_post_process(
             context,
-            if let Some(resolved) = color_resolve_target { resolved } else { color_target },
+            if let Some(resolved) = color_resolve_target {
+                resolved
+            } else {
+                color_target
+            },
             self.camera_exposure,
             (show_depth_pyramid).then_some((depth_pyramid, depth_pyramid_level, pyramid_display_far_depth)),
             self.render_mode,

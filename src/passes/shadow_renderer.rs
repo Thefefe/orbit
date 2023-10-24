@@ -14,7 +14,7 @@ use crate::{
     Camera,
     Projection,
     MAX_DRAW_COUNT,
-    MAX_SHADOW_CASCADE_COUNT, ShadowDebugSettings,
+    MAX_SHADOW_CASCADE_COUNT, Settings,
 };
 
 use super::{draw_gen::{create_draw_commands, CullInfo, OcclusionCullInfo, DepthPyramid, AlphaModeFlags, ShadowVolumeCulling}, debug_renderer::DebugRenderer};
@@ -90,7 +90,7 @@ impl ShadowSettings {
             egui::ComboBox::from_id_source("shadow_resolution")
                 .selected_text(format!("{}", self.shadow_resolution))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.shadow_resolution, 512, "512");
+                    ui.selectable_value(&mut self.shadow_resolution, 512,  "512");
                     ui.selectable_value(&mut self.shadow_resolution, 1024, "1024");
                     ui.selectable_value(&mut self.shadow_resolution, 2048, "2048");
                     ui.selectable_value(&mut self.shadow_resolution, 4096, "4096");
@@ -305,13 +305,14 @@ impl ShadowRenderer {
         assets: &GpuAssetStore,
         scene: &SceneData,
         
-        debug_settings: &ShadowDebugSettings,
+        settings: &Settings,
         debug_renderer: &mut DebugRenderer,
     ) -> DirectionalLightGraphData {
         let imported_assets = assets.import_to_graph(context);
         let imported_scene = scene.import_to_graph(context);
 
-        let settings = self.settings;
+        let shadow_settings = self.settings;
+        let debug_settings = &settings.shadow_debug_settings;
 
         let light_direction = -direction.mul_vec3(vec3(0.0, 0.0, -1.0));
         let inv_light_direction = direction.inverse();
@@ -324,21 +325,21 @@ impl ShadowRenderer {
             color: light_color,
             intensity,
             direction: light_direction,
-            blend_seam: settings.split_blend_ratio,
+            blend_seam: shadow_settings.split_blend_ratio,
     
-            max_filter_radius: settings.max_filter_radius * 0.01,
-            min_filter_radius: settings.min_filter_radius * 0.01,
+            max_filter_radius: shadow_settings.max_filter_radius * 0.01,
+            min_filter_radius: shadow_settings.min_filter_radius * 0.01,
             normal_bias_scale: self.settings.depth_bias_normal_scale,
             oriented_bias: -self.settings.depth_bias_oriented,
         };
     
         let mut shadow_maps = [graphics::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];
         
-        let lambda = settings.cascade_split_lambda;
+        let lambda = shadow_settings.cascade_split_lambda;
     
         for cascade_index in 0..MAX_SHADOW_CASCADE_COUNT {
             let Projection::Perspective { fov, near_clip } = camera.projection else { todo!() };
-            let far_clip = settings.max_shadow_distance;
+            let far_clip = shadow_settings.max_shadow_distance;
             
             let near_split_ratio = cascade_index as f32 / MAX_SHADOW_CASCADE_COUNT as f32;
             let far_split_ratio = (cascade_index+1) as f32 / MAX_SHADOW_CASCADE_COUNT as f32;
@@ -391,7 +392,7 @@ impl ShadowRenderer {
                 offset
             };
     
-            let texel_size_vs = radius * 2.0 / settings.shadow_resolution as f32;
+            let texel_size_vs = radius * 2.0 / shadow_settings.shadow_resolution as f32;
             
             // modifications:
             //  - aligned to view space texel sizes
@@ -529,15 +530,27 @@ impl ShadowRenderer {
     
             let visibility_buffer = context.import(&self.shadow_map_visiblity_buffers[cascade_index]);
 
+            let frustum_culling = debug_settings.frustum_culling;
+            let occlusion_culling = debug_settings.occlusion_culling;
+            
+            let shadow_volume_culling_possible = occlusion_culling && settings.camera_debug_settings.occlusion_culling;
+            let shadow_volume_culling = shadow_volume_culling_possible && debug_settings.shadow_volume_culling;
+
             let draw_commands = create_draw_commands(
                 context,
                 format!("first_pass_{name}_{cascade_index}_draw_commands").into(),
                 imported_assets, imported_scene,
                 &CullInfo {
                     view_matrix: light_matrix,
-                    view_space_cull_planes: culling_planes,
-                    occlusion_culling: OcclusionCullInfo::VisibilityRead { visibility_buffer },
-                    alpha_mode_filter: AlphaModeFlags::OPAQUE,
+                    view_space_cull_planes: if frustum_culling { culling_planes } else { &[] },
+                    occlusion_culling: occlusion_culling
+                        .then_some(OcclusionCullInfo::VisibilityRead { visibility_buffer })
+                        .unwrap_or_default(),
+                    alpha_mode_filter: if occlusion_culling {
+                        AlphaModeFlags::OPAQUE
+                    } else {
+                        AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED
+                    },
                     debug_print: false,
                 },
                 None,
@@ -548,7 +561,7 @@ impl ShadowRenderer {
             let shadow_map = context.create_transient(shadow_map_name.clone(), graphics::ImageDesc {
                 ty: graphics::ImageType::Single2D,
                 format: vk::Format::D16_UNORM,
-                dimensions: [settings.shadow_resolution, settings.shadow_resolution, 1],
+                dimensions: [shadow_settings.shadow_resolution, shadow_settings.shadow_resolution, 1],
                 mip_levels: 1,
                 samples: graphics::MultisampleCount::None,
                 usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
@@ -563,57 +576,59 @@ impl ShadowRenderer {
                 shadow_map,
                 light_projection_matrix,
                 draw_commands,
-                true,
-                false,
+                true, // clear
+                !occlusion_culling, // fragment shader
                 imported_assets,
                 imported_scene,
             );
 
-            self.shadow_map_depth_pyramids[cascade_index].update(context, shadow_map);
-            let depth_pyramid = self.shadow_map_depth_pyramids[cascade_index].get_current(context);
-
-            let reprojection_matrix = camera_view_projection_matrix * light_projection_matrix.inverse();
-
-            let draw_commands = create_draw_commands(
-                context,
-                format!("second_pass_{shadow_map_name}_draw_commands").into(),
-                imported_assets, imported_scene,
-                &CullInfo {
-                    view_matrix: light_matrix,
-                    view_space_cull_planes: culling_planes,
-                    occlusion_culling: OcclusionCullInfo::VisibilityWrite {
-                        visibility_buffer,
-                        depth_pyramid,
-                        noskip_alphamode: AlphaModeFlags::MASKED,
-                        // noskip_alphamode: AlphaModeFlags::empty(),
-                        projection: Projection::Orthographic {
-                            half_width: radius,
-                            near_clip,
-                            far_clip,
+            if occlusion_culling {
+                self.shadow_map_depth_pyramids[cascade_index].update(context, shadow_map);
+                let depth_pyramid = self.shadow_map_depth_pyramids[cascade_index].get_current(context);
+    
+                let reprojection_matrix = camera_view_projection_matrix * light_projection_matrix.inverse();
+    
+                let draw_commands = create_draw_commands(
+                    context,
+                    format!("second_pass_{shadow_map_name}_draw_commands").into(),
+                    imported_assets, imported_scene,
+                    &CullInfo {
+                        view_matrix: light_matrix,
+                        view_space_cull_planes: if frustum_culling { culling_planes } else { &[] },
+                        occlusion_culling: OcclusionCullInfo::VisibilityWrite {
+                            visibility_buffer,
+                            depth_pyramid,
+                            noskip_alphamode: AlphaModeFlags::MASKED,
+                            // noskip_alphamode: AlphaModeFlags::empty(),
+                            projection: Projection::Orthographic {
+                                half_width: radius,
+                                near_clip,
+                                far_clip,
+                            },
+                            aspect_ratio: 1.0,
+                            shadow_volume_culling: shadow_volume_culling.then_some(ShadowVolumeCulling {
+                                reprojection_matrix,
+                                camera_depth_pyramid,
+                            })
                         },
-                        aspect_ratio: 1.0,
-                        shadow_volume_culling: Some(ShadowVolumeCulling {
-                            reprojection_matrix,
-                            camera_depth_pyramid,
-                        })
+                        alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+                        debug_print: debug_settings.selected_cascade == cascade_index,
                     },
-                    alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
-                    debug_print: debug_settings.selected_cascade == cascade_index,
-                },
-                None,
-            );
-                
-            self.render_shadow_map(
-                context,
-                format!("second_shadow_pass_for_{shadow_map_name}").into(),
-                shadow_map,
-                light_projection_matrix,
-                draw_commands,
-                false,
-                true,
-                imported_assets,
-                imported_scene,
-            );
+                    None,
+                );
+                    
+                self.render_shadow_map(
+                    context,
+                    format!("second_shadow_pass_for_{shadow_map_name}").into(),
+                    shadow_map,
+                    light_projection_matrix,
+                    draw_commands,
+                    false,
+                    true,
+                    imported_assets,
+                    imported_scene,
+                );
+            }
 
             directional_light_data.projection_matrices[cascade_index] = light_projection_matrix;
             directional_light_data.shadow_maps[cascade_index] = context

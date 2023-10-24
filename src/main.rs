@@ -188,6 +188,9 @@ pub struct Settings {
     pub present_mode: vk::PresentModeKHR,
     pub msaa: graphics::MultisampleCount,
     pub shadow_settings: ShadowSettings,
+
+    pub camera_debug_settings: CameraDebugSettings,
+    pub shadow_debug_settings: ShadowDebugSettings,
 }
 
 impl Default for Settings {
@@ -195,7 +198,10 @@ impl Default for Settings {
         Self {
             present_mode: vk::PresentModeKHR::IMMEDIATE,
             msaa: Default::default(),
-            shadow_settings: Default::default()
+            shadow_settings: Default::default(),
+
+            camera_debug_settings: Default::default(),
+            shadow_debug_settings: Default::default(),
         }
     }
 }
@@ -236,9 +242,113 @@ impl Settings {
 
         self.shadow_settings.edit(ui);
     }
+
+    fn edit_shadow_debug_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        shadow_maps: [graphics::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT]
+    ) {
+        
+        ui.checkbox(&mut self.shadow_debug_settings.frustum_culling, "shadow frustum culling");
+        ui.checkbox(&mut self.shadow_debug_settings.occlusion_culling, "shadow occlusion culling");
+        let shadow_volume_culling_possible =
+            self.shadow_debug_settings.occlusion_culling && self.camera_debug_settings.occlusion_culling;
+        ui.add_enabled(shadow_volume_culling_possible, egui::Checkbox::new(
+            &mut self.shadow_debug_settings.shadow_volume_culling,
+            "shadow volume culling"
+        ));
+        
+        ui.checkbox(&mut self.shadow_debug_settings.show_cascade_view_frustum, "show cascade view frustum");
+        ui.checkbox(&mut self.shadow_debug_settings.show_cascade_light_frustum, "show cascade light frustum");
+        ui.checkbox(&mut self.shadow_debug_settings.show_cascade_light_frustum_planes, "show cascade light frustum planes");
+        ui.checkbox(&mut self.shadow_debug_settings.show_cascade_screen_space_aabb, "show cascade screen space aabb");
+        
+        ui.horizontal(|ui| {
+            ui.label("selected_cascade");
+            ui.add(egui::Slider::new(
+                &mut self.shadow_debug_settings.selected_cascade,
+                0..=MAX_SHADOW_CASCADE_COUNT - 1,
+            ));
+        });
+
+        ui.image(shadow_maps[self.shadow_debug_settings.selected_cascade], egui::Vec2::new(250.0, 250.0));
+    }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CameraDebugSettings {
+    pub render_mode: RenderMode,
+    pub freeze_camera: bool,
+    pub show_bounding_boxes: bool,
+    pub show_bounding_spheres: bool,
+
+    pub frustum_culling: bool,
+    pub occlusion_culling: bool,
+    pub show_frustum_planes: bool,
+    pub show_screen_space_aabbs: bool,
+    
+    pub show_depth_pyramid: bool,
+    pub pyramid_display_far_depth: f32,
+    pub depth_pyramid_level: u32,
+}
+
+impl Default for CameraDebugSettings {
+    fn default() -> Self {
+        Self {
+            render_mode:                   RenderMode::Shaded,
+            freeze_camera:                 false,
+            show_bounding_boxes:           false,
+            show_bounding_spheres:         false,
+        
+            frustum_culling:        true,
+            occlusion_culling:      true,
+            show_frustum_planes:    false,
+            show_screen_space_aabbs: false,
+            
+            show_depth_pyramid:            false,
+            pyramid_display_far_depth:     0.01,
+            depth_pyramid_level:           0
+        }
+    }
+}
+
+impl CameraDebugSettings {
+    fn edit(&mut self, ui: &mut egui::Ui, pyramid_max_mip_level: u32) {
+        ui.checkbox(&mut self.freeze_camera, "freeze camera");
+        ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
+        ui.checkbox(&mut self.show_bounding_spheres, "show bounding spheres");
+
+        ui.checkbox(&mut self.frustum_culling, "camera frustum culling");
+        ui.checkbox(&mut self.occlusion_culling, "camera occlusion culling");
+        ui.checkbox(&mut self.show_frustum_planes, "show camera frustum planes");
+        ui.checkbox(&mut self.show_screen_space_aabbs, "show camera screen space aabbs");
+    
+        ui.checkbox(&mut self.show_depth_pyramid, "show depth pyramid");
+        if self.show_depth_pyramid {
+            ui.indent("depth_pyramid", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("depth pyramid max depth");
+                    ui.add(egui::DragValue::new(&mut self.pyramid_display_far_depth)
+                        .speed(0.005)
+                        .clamp_range(0.005..=1.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("depth pyramid level");
+                    ui.add(egui::Slider::new(
+                        &mut self.depth_pyramid_level,
+                        0..=pyramid_max_mip_level,
+                    ));
+                });
+            });
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct ShadowDebugSettings {
+    pub frustum_culling: bool,
+    pub occlusion_culling: bool,
+    pub shadow_volume_culling: bool,
     pub selected_cascade: usize,
     pub show_cascade_view_frustum: bool,
     pub show_cascade_light_frustum: bool,
@@ -246,19 +356,18 @@ pub struct ShadowDebugSettings {
     pub show_cascade_screen_space_aabb: bool,
 }
 
-impl ShadowDebugSettings {
-    fn edit(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("selected_cascade");
-            ui.add(egui::Slider::new(
-                &mut self.selected_cascade,
-                0..=MAX_SHADOW_CASCADE_COUNT - 1,
-            ));
-        });
-        ui.checkbox(&mut self.show_cascade_view_frustum, "show cascade view frustum");
-        ui.checkbox(&mut self.show_cascade_light_frustum, "show cascade light frustum");
-        ui.checkbox(&mut self.show_cascade_light_frustum_planes, "show cascade light frustum planes");
-        ui.checkbox(&mut self.show_cascade_screen_space_aabb, "show cascade screen space aabb");
+impl Default for ShadowDebugSettings {
+    fn default() -> Self {
+        Self {
+            frustum_culling:             true,
+            occlusion_culling:           true,
+            shadow_volume_culling:              false,
+            show_cascade_view_frustum:          false,
+            show_cascade_light_frustum:         false,
+            show_cascade_light_frustum_planes:  false,
+            show_cascade_screen_space_aabb:     false,
+            selected_cascade:                   0,
+        }
     }
 }
 
@@ -289,29 +398,14 @@ struct App {
     light_color: Vec3,
     light_intensitiy: f32,
 
-    freeze_camera: bool,
-    shadow_debug_settings: ShadowDebugSettings,
-
-    enable_frustum_culling: bool,
-    enable_occlusion_culling: bool,
-
-    show_frustum_planes: bool,
-    show_bounding_boxes: bool,
-    show_bounding_spheres: bool,
-    show_screen_aabb: bool,
-
-    show_depth_pyramid: bool,
-    pyramid_display_far_depth: f32,
-    depth_pyramid_level: u32,
-
     selected_entity_index: Option<usize>,
 
     open_scene_editor_open: bool,
     open_graph_debugger: bool,
     open_profiler: bool,
-    open_camera_light_editor: bool,
+    open_camera_debug_settings: bool,
     open_settings: bool,
-    open_culling_debugger: bool,
+    open_shadow_debug_settings: bool,
 }
 
 impl App {
@@ -480,35 +574,14 @@ impl App {
             light_color: Vec3::splat(1.0),
             light_intensitiy: 10.0,
 
-            freeze_camera: false,
-            shadow_debug_settings: ShadowDebugSettings {
-                selected_cascade: 0,
-                show_cascade_view_frustum: false,
-                show_cascade_light_frustum: false,
-                show_cascade_light_frustum_planes: false,
-                show_cascade_screen_space_aabb: false,
-            },
-
-            enable_frustum_culling: true,
-            enable_occlusion_culling: true,
-
-            show_frustum_planes: false,
-            show_bounding_boxes: false,
-            show_bounding_spheres: false,
-            show_screen_aabb: false,
-            
-            show_depth_pyramid: false,
-            pyramid_display_far_depth: 0.01,
-            depth_pyramid_level: 0,
-
             selected_entity_index: None,
                 
             open_scene_editor_open: false,
             open_graph_debugger: false,
             open_profiler: false,
-            open_camera_light_editor: false,
+            open_camera_debug_settings: false,
             open_settings: false,
-            open_culling_debugger: false
+            open_shadow_debug_settings: false
         }
     }
 
@@ -553,13 +626,13 @@ impl App {
             self.open_profiler = !self.open_profiler;
         }
         if input.key_pressed(KeyCode::F4) {
-            self.open_camera_light_editor = !self.open_camera_light_editor;
-        }
-        if input.key_pressed(KeyCode::F5) {
             self.open_settings = !self.open_settings;
         }
+        if input.key_pressed(KeyCode::F5) {
+            self.open_camera_debug_settings = !self.open_camera_debug_settings;
+        }
         if input.key_pressed(KeyCode::F6) {
-            self.open_culling_debugger = !self.open_culling_debugger;
+            self.open_shadow_debug_settings = !self.open_shadow_debug_settings;
         }
 
         fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
@@ -665,33 +738,6 @@ impl App {
             self.shadow_renderer.update_settings(&self.settings.shadow_settings);
         }
 
-        if self.open_culling_debugger {
-            egui::Window::new("culling debuger").open(&mut self.open_culling_debugger).show(egui_ctx, |ui| {
-                ui.checkbox(&mut self.enable_frustum_culling, "enable frustum culling");
-                ui.checkbox(&mut self.enable_occlusion_culling, "enable occlusion culling");
-                ui.checkbox(&mut self.show_frustum_planes, "show frustum planes");
-                ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
-                ui.checkbox(&mut self.show_bounding_spheres, "show bounding spheres");
-                ui.checkbox(&mut self.show_screen_aabb, "show screen aabb");
-                ui.checkbox(&mut self.show_depth_pyramid, "show depth pyramid");
-                if self.show_depth_pyramid {
-                    ui.indent("depth_pyramid", |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("depth pyramid max depth");
-                            ui.add(egui::DragValue::new(&mut self.pyramid_display_far_depth).speed(0.005).clamp_range(0.0..=1.0));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("depth pyramid level");
-                            ui.add(egui::Slider::new(
-                                &mut self.depth_pyramid_level,
-                                0..=self.forward_renderer.depth_pyramid.pyramid.mip_level(),
-                            ));
-                        });
-                    });
-                }
-            });
-        }
-
         context.swapchain.set_present_mode(self.settings.present_mode);
 
         const RENDER_MODES: &[KeyCode] = &[
@@ -732,13 +778,13 @@ impl App {
         let screen_extent = context.swapchain_extent();
         self.camera.aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
-        if !self.freeze_camera {
+        if !self.settings.camera_debug_settings.freeze_camera {
             self.frozen_camera = self.camera;
         }
 
         let camera_view_projection_matrix = self.camera.compute_matrix();
 
-        if self.freeze_camera {
+        if self.settings.camera_debug_settings.freeze_camera {
             let Projection::Perspective { fov, near_clip } = self.frozen_camera.projection else { todo!() };
             let far_clip = self.settings.shadow_settings.max_shadow_distance;
             let frustum_corner = math::perspective_corners(fov, self.frozen_camera.aspect_ratio, near_clip, far_clip)
@@ -800,17 +846,18 @@ impl App {
             depth_resolve,
         };
 
+        
+        egui::Window::new("camera debug settings").open(&mut self.open_camera_debug_settings).show(egui_ctx, |ui| {
+            self.settings.camera_debug_settings
+                .edit(ui, self.forward_renderer.depth_pyramid.pyramid.mip_level())
+        });
+
         self.forward_renderer.normal_depth_prepass(
             context,
             &self.settings,
             
             assets,
             scene,
-
-            self.freeze_camera,
-        
-            self.enable_frustum_culling,
-            self.enable_occlusion_culling,
 
             &target_attachments,
             
@@ -830,7 +877,7 @@ impl App {
             camera_depth_pyramid,
             &self.gpu_assets,
             &self.scene,
-            &self.shadow_debug_settings,
+            &self.settings,
             &mut self.debug_renderer,
         );
 
@@ -840,9 +887,6 @@ impl App {
 
             assets,
             scene,
-
-            self.enable_frustum_culling,
-            self.enable_occlusion_culling,
             
             self.environment_map.as_ref(),
             directional_light,
@@ -851,37 +895,17 @@ impl App {
             
             &self.camera,
             &self.frozen_camera,
-            self.render_mode,
         );
 
-        egui::Window::new("camera_and_lighting")
-            .open(&mut self.open_camera_light_editor)
-            .show(egui_ctx, |ui| {
-                ui.checkbox(&mut self.freeze_camera, "freeze camera");
+        egui::Window::new("shadow debug settings").open(&mut self.open_shadow_debug_settings).show(egui_ctx, |ui| {
+            self.settings.edit_shadow_debug_settings(ui, directional_light.shadow_maps);
+        });
 
-                ui.horizontal(|ui| {
-                    ui.label("camera_exposure");
-                    ui.add(egui::DragValue::new(&mut self.camera_exposure).speed(0.05).clamp_range(0.1..=20.0));
-                });
+        let show_bounding_boxes = self.settings.camera_debug_settings.show_bounding_boxes;
+        let show_bounding_spheres = self.settings.camera_debug_settings.show_bounding_spheres;
+        let show_screen_space_aabbs = self.settings.camera_debug_settings.show_screen_space_aabbs;
 
-                ui.horizontal(|ui| {
-                    ui.label("light_color");
-                    let mut array = self.light_color.to_array();
-                    ui.color_edit_button_rgb(&mut array);
-                    self.light_color = Vec3::from_array(array);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("light_intensitiy");
-                    ui.add(egui::DragValue::new(&mut self.light_intensitiy).speed(0.4));
-                });
-
-                self.shadow_debug_settings.edit(ui);
-
-                ui.image(directional_light.shadow_maps[self.shadow_debug_settings.selected_cascade], egui::Vec2::new(250.0, 250.0),
-                );
-            });
-
-        if self.show_bounding_boxes || self.show_bounding_spheres || self.show_screen_aabb {
+        if show_bounding_boxes || show_bounding_spheres || show_screen_space_aabbs {
             let view_matrix = self.frozen_camera.transform.compute_matrix().inverse();
             let projection_matrix = self.frozen_camera.compute_projection_matrix();
             let screen_to_world_matrix = self.frozen_camera.compute_matrix().inverse();
@@ -890,7 +914,7 @@ impl App {
                 if let Some(model) = entity.model {
                     let transform_matrix = entity.transform.compute_matrix();
                     for submesh in self.gpu_assets.models[model].submeshes.iter() {
-                        if self.show_bounding_boxes {
+                        if show_bounding_boxes {
                             let aabb = self.gpu_assets.mesh_infos[submesh.mesh_handle].aabb;
                             let corners = [
                                 vec3a(0.0, 0.0, 0.0),
@@ -906,7 +930,7 @@ impl App {
                             self.debug_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                         }
 
-                        if self.show_bounding_spheres || self.show_screen_aabb {
+                        if show_bounding_spheres || show_screen_space_aabbs {
                             let bounding_sphere = self.gpu_assets.mesh_infos[submesh.mesh_handle].bounding_sphere;
                             let position_world = transform_matrix.transform_point3a(bounding_sphere.into());
                             let radius = bounding_sphere.w * entity.transform.scale.max_element();
@@ -920,11 +944,11 @@ impl App {
                             let z_near = 0.01;
     
                             if let Some(aabb) = math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11) {
-                                if self.show_bounding_spheres {
+                                if show_bounding_spheres {
                                     self.debug_renderer.draw_sphere(position_world.into(), radius, vec4(0.0, 1.0, 0.0, 1.0));
                                 }
                                 
-                                if self.show_screen_aabb {
+                                if show_screen_space_aabbs {
                                     let depth = z_near / (position_view.z - radius);
         
                                     let corners = [
@@ -939,7 +963,7 @@ impl App {
                                     self.debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                                 }
 
-                            } else if self.show_bounding_spheres {
+                            } else if show_bounding_spheres {
                                 self.debug_renderer.draw_sphere(position_world.into(), radius, vec4(1.0, 0.0, 0.0, 1.0));
                             }
                         }
@@ -948,7 +972,7 @@ impl App {
             }
         }
 
-        if self.show_frustum_planes {
+        if self.settings.camera_debug_settings.show_frustum_planes {
             let planes = math::frustum_planes_from_matrix(&self.frozen_camera.compute_matrix());
 
             for plane in planes {
@@ -974,13 +998,16 @@ impl App {
             camera_view_projection_matrix,
         );
 
+        let show_depth_pyramid = self.settings.camera_debug_settings.show_depth_pyramid;
+        let depth_pyramid_level = self.settings.camera_debug_settings.depth_pyramid_level;
+        let pyramid_display_far_depth = self.settings.camera_debug_settings.pyramid_display_far_depth;
         let depth_pyramid = self.forward_renderer.depth_pyramid.get_current(context);
 
         render_post_process(
             context,
             if let Some(resolved) = color_resolve_target { resolved } else { color_target },
             self.camera_exposure,
-            (self.show_depth_pyramid).then_some((depth_pyramid, self.depth_pyramid_level, self.pyramid_display_far_depth)),
+            (show_depth_pyramid).then_some((depth_pyramid, depth_pyramid_level, pyramid_display_far_depth)),
             self.render_mode,
         );
     }

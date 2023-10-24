@@ -219,18 +219,20 @@ void main() {
 					}
 				}
 
-				reprojected_aabb = clamp(reprojected_aabb, -1.0, 1.0) * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f);
+				if (closest_reprojected_depth > 0.0) {
+					reprojected_aabb = clamp(reprojected_aabb, -1.0, 1.0) * vec4(0.5f, 0.5f, 0.5f, 0.5f) + vec4(0.5f);
 
-				vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.secondary_depth_pyramid), 0);
-				float width = (aabb.z - aabb.x) * pyramid_size.x;
-				float height = (aabb.w - aabb.y) * pyramid_size.y;
+					vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.secondary_depth_pyramid), 0);
+					float width = (aabb.z - aabb.x) * pyramid_size.x;
+					float height = (aabb.w - aabb.y) * pyramid_size.y;
 
-				float sampled_depth = textureLod(
-					sampler2D(GetTexture2D(cull_info.secondary_depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
-					(aabb.xy + aabb.zw) * 0.5,
-					log2(max(width, height))
-				).x;
-				visible = closest_reprojected_depth >= sampled_depth;
+					float sampled_depth = textureLod(
+						sampler2D(GetTexture2D(cull_info.secondary_depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
+						(aabb.xy + aabb.zw) * 0.5,
+						log2(max(width, height))
+					).x;
+					visible = closest_reprojected_depth >= sampled_depth;
+				}
 			}
 		}
 

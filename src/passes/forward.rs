@@ -171,16 +171,16 @@ impl ForwardRenderer {
         assets: AssetGraphData,
         scene: SceneGraphData,
 
-        camera_frozen: bool,
-        frustum_culling: bool,
-        occlusion_culling: bool,
-
         target_attachments: &TargetAttachments,
         
         camera: &Camera,
         frozen_camera: &Camera,
     ) {
         puffin::profile_function!();
+        
+        let frustum_culling = settings.camera_debug_settings.frustum_culling;
+        let occlusion_culling = settings.camera_debug_settings.occlusion_culling;
+        let camera_frozen = settings.camera_debug_settings.freeze_camera;
 
         let target_attachments = target_attachments.clone();
 
@@ -481,9 +481,6 @@ impl ForwardRenderer {
         assets: AssetGraphData,
         scene: SceneGraphData,
 
-        frustum_culling: bool,
-        occlusion_culling: bool,
-
         environment_map: Option<&EnvironmentMap>,
         directional_light: DirectionalLightGraphData,
 
@@ -491,9 +488,12 @@ impl ForwardRenderer {
         
         camera: &Camera,
         frozen_camera: &Camera,
-        render_mode: RenderMode,
     ) {
         puffin::profile_function!();
+
+        let render_mode = settings.camera_debug_settings.render_mode;
+        let frustum_culling = settings.camera_debug_settings.frustum_culling;
+        let occlusion_culling = settings.camera_debug_settings.occlusion_culling;
 
         let target_attachments = target_attachments.clone();
 

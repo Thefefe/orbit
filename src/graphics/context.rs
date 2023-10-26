@@ -115,10 +115,10 @@ impl TransferQueue {
         self.staging_buffer_offset += data.len();
     }
 
-    fn submit(&mut self, device: &graphics::Device, semaphore: Option<vk::Semaphore>) {
+    fn submit(&mut self, device: &graphics::Device, semaphore: Option<vk::Semaphore>) -> bool {
         puffin::profile_function!();
 
-        if self.buffer_copies.is_empty() { return; }
+        if self.buffer_copies.is_empty() { return false; }
         unsafe {
             puffin::profile_scope!("wait_for_trasnfer_fence");
             device.raw.wait_for_fences(&[self.fence], false, u64::MAX).unwrap();
@@ -144,6 +144,8 @@ impl TransferQueue {
 
         device.queue_submit(QueueType::AsyncTransfer, &[submit_info], self.fence);
         self.staging_buffer_offset = 0;
+
+        true
     }
 }
 
@@ -672,7 +674,7 @@ impl Context {
         let graphics::AnyResourceRef::Buffer(buffer) = cache.as_ref() else {
             unreachable!()
         };
-        
+
         self.transfer_queue.get_mut().queue_write_buffer(&buffer, 0, data);
         self.graph.dont_wait_semaphores.remove(&self.frames[self.frame_index].transfer_finished_semaphore.handle);
         self.frames[self.frame_index].uses_async_transfer = true;
@@ -692,7 +694,8 @@ impl Context {
             target_queue: None,
             initial_access: graphics::AccessKind::None,
             target_access: graphics::AccessKind::None,
-            wait_semaphore: Some(self.frames[self.frame_index].transfer_finished_semaphore.clone()),
+            // wait_semaphore: Some(self.frames[self.frame_index].transfer_finished_semaphore.clone()),
+            wait_semaphore: None,
             finish_semaphore: None,
             versions: vec![],
         });
@@ -792,10 +795,9 @@ impl Context {
         };
         let frame = &mut self.frames[self.frame_index];
 
-        if frame.uses_async_transfer {
-            frame.uses_async_transfer = false;
-            self.transfer_queue.get_mut().submit(&self.device, Some(frame.transfer_finished_semaphore.handle));
-        }
+        frame.uses_async_transfer = false;
+        let transfer_submited = self.transfer_queue.get_mut()
+            .submit(&self.device, Some(frame.transfer_finished_semaphore.handle));
 
         frame.graph_debug_info.clear();
 
@@ -834,6 +836,9 @@ impl Context {
                     |command_pool, (batch_index, (batch_data, batch_debug_info))| {
                         let batch_ref = frame.compiled_graph.get_batch_ref(&batch_data);
 
+                        let transfer_semaphore = (transfer_submited && batch_index == 0)
+                            .then_some(frame.transfer_finished_semaphore.handle);
+
                         let command_index = record_batch(
                             &self.device,
                             &frame.compiled_graph,
@@ -842,6 +847,7 @@ impl Context {
                             batch_index,
                             batch_ref,
                             batch_debug_info,
+                            transfer_semaphore,
                         );
 
                         (rayon::current_thread_index().unwrap(), command_index)
@@ -891,6 +897,7 @@ fn record_batch(
     batch_index: usize,
     batch_ref: graph::BatchRef,
     batch_debug_info: &mut GraphBatchDebugInfo,
+    additional_semaphore: Option<vk::Semaphore>,
 ) -> usize {
     puffin::profile_scope!("batch_record", format!("{batch_index}"));
 
@@ -926,6 +933,10 @@ fn record_batch(
     }
 
     let cmd_buffer = command_pool.begin_new(device);
+
+    if let Some(semaphore) = additional_semaphore {
+        cmd_buffer.wait_semaphore(semaphore, vk::PipelineStageFlags2::TOP_OF_PIPE);
+    }
 
     for (semaphore, stage) in batch_ref.wait_semaphores {
         cmd_buffer.wait_semaphore(semaphore.handle, *stage);

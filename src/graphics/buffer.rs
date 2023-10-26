@@ -53,7 +53,12 @@ impl BufferRaw {
         let create_info = vk::BufferCreateInfo::builder()
             .size(desc.size as u64)
             .usage(desc.usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            .sharing_mode(if device.queue_family_count > 1 {
+                vk::SharingMode::CONCURRENT
+            } else {
+                vk::SharingMode::EXCLUSIVE
+            })
+            .queue_family_indices(device.queue_family_indices());
 
         let handle = unsafe { device.raw.create_buffer(&create_info, None).unwrap() };
 
@@ -155,7 +160,7 @@ impl graphics::Context {
         }
 
         let buffer = BufferRaw::create_impl(&self.device, name.into(), &desc, None);
-        self.immediate_write_buffer(&buffer, init, 0);
+        self.immediate_write_buffer(&buffer, 0, init);
 
         Buffer {
             _buffer: Some(Arc::new(buffer)),
@@ -163,7 +168,7 @@ impl graphics::Context {
         }
     }
 
-    pub fn immediate_write_buffer(&self, buffer: &graphics::BufferRaw, data: &[u8], offset: usize) {
+    pub fn immediate_write_buffer(&self, buffer: &graphics::BufferRaw, offset: usize, data: &[u8]) {
         puffin::profile_function!();
 
         if data.is_empty() {
@@ -193,8 +198,8 @@ impl graphics::Context {
 
             self.record_and_submit(|cmd| {
                 cmd.copy_buffer(
-                    &scratch_buffer,
-                    &buffer,
+                    scratch_buffer.handle,
+                    buffer.handle,
                     &[vk::BufferCopy {
                         src_offset: 0,
                         dst_offset: offset as u64,

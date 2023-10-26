@@ -126,15 +126,15 @@ impl EguiRenderer {
 
                 context.immediate_write_buffer(
                     &self.vertex_buffer,
-                    vertices,
                     Self::PER_FRAME_VERTEX_BYTE_SIZE * context.frame_index()
                         + vertex_cursor as usize * std::mem::size_of::<egui::epaint::Vertex>(),
+                    vertices,
                 );
                 context.immediate_write_buffer(
                     &self.index_buffer,
-                    bytemuck::cast_slice(&mesh.indices),
                     Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index()
                         + index_cursor as usize * std::mem::size_of::<u32>(),
+                    bytemuck::cast_slice(&mesh.indices),
                 );
 
                 vertex_cursor += mesh.vertices.len() as u32;

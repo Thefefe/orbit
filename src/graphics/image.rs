@@ -669,8 +669,8 @@ impl graphics::Context {
             );
 
             cmd.copy_buffer_to_image(
-                &scratch_buffer,
-                &image,
+                scratch_buffer.handle,
+                image.handle,
                 &[vk::BufferImageCopy {
                     buffer_offset: 0,
                     buffer_row_length: 0,

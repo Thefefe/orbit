@@ -210,7 +210,6 @@ pub fn unpack_normal_tangent_bitangent(packed: [i8; 4]) -> (Vec3, Vec4) {
 #[cfg(test)]
 mod tests {
     use crate::math::*;
-    use glam::*;
 
     use super::octahedron_normal_decode;
 

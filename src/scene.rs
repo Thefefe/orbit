@@ -5,7 +5,7 @@ use gpu_allocator::MemoryLocation;
 
 use crate::{
     assets::{GpuAssetStore, ModelHandle},
-    graphics,
+    graphics::{self, FRAME_COUNT},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -127,23 +127,18 @@ pub struct SceneGraphData {
 const MAX_INSTANCE_COUNT: usize = 1_000_000;
 const MAX_LIGHT_COUNT: usize = 2_000;
 
-pub struct SceneData {
-    pub entities: Vec<EntityData>,
-    pub entity_data_buffer: graphics::Buffer,
-
-    pub submesh_data: Vec<GpuSubmeshData>,
-    pub submesh_buffer: graphics::Buffer,
-
-    pub lights: Vec<LightData>,
-    pub light_data_buffer: graphics::Buffer,
+struct Buffers {
+    entity_data_buffer: graphics::Buffer,
+    submesh_buffer: graphics::Buffer,
+    light_data_buffer: graphics::Buffer,
 }
 
-impl SceneData {
-    pub fn new(context: &graphics::Context) -> Self {
+impl Buffers {
+    fn new(context: &graphics::Context) -> Self {
         let entity_data_buffer = context.create_buffer(
             "scene_instance_buffer",
             &graphics::BufferDesc {
-                size: MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityData>(),
+                size: INSTANCE_BUFFER_SIZE * FRAME_COUNT,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: MemoryLocation::GpuOnly,
             },
@@ -152,7 +147,7 @@ impl SceneData {
         let submesh_buffer = context.create_buffer(
             "submesh_buffer",
             &graphics::BufferDesc {
-                size: MAX_INSTANCE_COUNT * std::mem::size_of::<GpuSubmeshData>(),
+                size: SUBMESH_BUFFER_SIZE * FRAME_COUNT,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: MemoryLocation::GpuOnly,
             },
@@ -161,21 +156,40 @@ impl SceneData {
         let light_data_buffer = context.create_buffer(
             "light_data_buffer",
             &graphics::BufferDesc {
-                size: MAX_LIGHT_COUNT * std::mem::size_of::<GpuPointLight>(),
+                size: LIGHT_DATA_BUFFER_SIZE * FRAME_COUNT,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: MemoryLocation::GpuOnly,
             },
         );
 
         Self {
-            entities: Vec::new(),
             entity_data_buffer,
-
-            submesh_data: Vec::new(),
             submesh_buffer,
-
-            lights: Vec::new(),
             light_data_buffer,
+        }
+    }
+}
+
+pub struct SceneData {
+    pub entities: Vec<EntityData>,
+    pub submesh_data: Vec<GpuSubmeshData>,
+    pub lights: Vec<LightData>,
+    frames: [Buffers; FRAME_COUNT],
+}
+
+const INSTANCE_BUFFER_SIZE: usize = MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityData>();
+const SUBMESH_BUFFER_SIZE: usize = MAX_INSTANCE_COUNT * std::mem::size_of::<GpuSubmeshData>() + 4;
+const LIGHT_DATA_BUFFER_SIZE: usize = MAX_LIGHT_COUNT * std::mem::size_of::<GpuPointLight>();
+
+impl SceneData {
+    pub fn new(context: &graphics::Context) -> Self {
+        let frames = std::array::from_fn(|_| Buffers::new(context));
+
+        Self {
+            entities: Vec::new(),
+            submesh_data: Vec::new(),
+            lights: Vec::new(),
+            frames
         }
     }
 
@@ -194,7 +208,11 @@ impl SceneData {
     pub fn update_instances(&self, context: &graphics::Context) {
         puffin::profile_function!();
         let entity_datas: Vec<_> = self.entities.iter().map(EntityData::compute_gpu_data).collect();
-        context.immediate_write_buffer(&self.entity_data_buffer, bytemuck::cast_slice(&entity_datas), 0);
+        context.queue_write_buffer(
+            &self.frames[context.frame_index()].entity_data_buffer,
+            0,
+            bytemuck::cast_slice(&entity_datas),
+        );
     }
 
     pub fn update_submeshes(&mut self, context: &graphics::Context, assets: &GpuAssetStore) {
@@ -215,9 +233,16 @@ impl SceneData {
 
         let count = self.submesh_data.len() as u32;
 
-        context.immediate_write_buffer(&self.submesh_buffer, bytemuck::bytes_of(&count), 0);
-
-        context.immediate_write_buffer(&self.submesh_buffer, bytemuck::cast_slice(&self.submesh_data), 4);
+        context.queue_write_buffer(
+            &self.frames[context.frame_index()].submesh_buffer,
+            0,
+            bytemuck::bytes_of(&count),
+        );
+        context.queue_write_buffer(
+            &self.frames[context.frame_index()].submesh_buffer,
+            4,
+            bytemuck::cast_slice(&self.submesh_data),
+        );
     }
 
     pub fn update_lights(&self, context: &graphics::Context) {
@@ -232,16 +257,20 @@ impl SceneData {
             })
             .collect();
 
-        context.immediate_write_buffer(&self.light_data_buffer, bytemuck::cast_slice(light_datas.as_slice()), 0);
+        context.queue_write_buffer(
+            &self.frames[context.frame_index()].light_data_buffer,
+            0,
+            bytemuck::cast_slice(light_datas.as_slice()),
+        );
     }
 
     pub fn import_to_graph(&self, context: &mut graphics::Context) -> SceneGraphData {
         SceneGraphData {
             submesh_count: self.submesh_data.len(),
-            submesh_buffer: context.import(&self.submesh_buffer),
-            entity_buffer: context.import(&self.entity_data_buffer),
+            submesh_buffer: context.import(&self.frames[context.frame_index()].submesh_buffer),
+            entity_buffer: context.import(&self.frames[context.frame_index()].entity_data_buffer),
             light_count: self.lights.len(),
-            light_data_buffer: context.import(&self.light_data_buffer),
+            light_data_buffer: context.import(&self.frames[context.frame_index()].light_data_buffer),
         }
     }
 }

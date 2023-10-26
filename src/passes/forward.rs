@@ -724,15 +724,11 @@ fn forward_pass(
 
     pass_builder = pass_builder
         .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
-        .with_dependency(
-            target_attachments.depth_target,
-            graphics::AccessKind::DepthAttachmentWrite,
-        )
+        .with_dependency(frame_data, graphics::AccessKind::VertexShaderRead)
+        .with_dependency(directional_light.buffer, graphics::AccessKind::VertexShaderRead)
+        .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
         .with_dependencies(target_attachments.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
-        .with_dependency(
-            target_attachments.color_target,
-            graphics::AccessKind::ColorAttachmentWrite,
-        )
+        .with_dependency(target_attachments.color_target, graphics::AccessKind::ColorAttachmentWrite)
         .with_dependencies(target_attachments.color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
         .with_dependencies(directional_light.shadow_maps.map(|h| (h, graphics::AccessKind::FragmentShaderRead)));
 

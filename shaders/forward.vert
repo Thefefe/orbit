@@ -2,6 +2,7 @@
 
 #include "include/common.glsl"
 #include "include/types.glsl"
+#include "include/functions.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
     uint per_frame_buffer;
@@ -25,33 +26,6 @@ layout(location = 0) out VertexOutput {
     vec4 tangent;
     flat uint material_index;
 } vout;
-
-// https://graphics.pixar.com/library/OrthonormalB/paper.pdf
-vec3 reference_orthonormal_vector(vec3 v) {
-    float signum = v.z >= 0.0 ? 1.0 : -1.0;
-    float a = -1.0 / (signum + v.z);
-    float b = v.x * v.y * a;
-    return vec3(b, signum + v.y * v.y * a, -v.y);
-}
-
-vec3 octahedron_decode(vec2 f) {
-    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
-    float t = max(-n.z , 0.0);
-    n.xy += mix(vec2(t), vec2(-t), greaterThanEqual(n.xy, vec2(0.0)));
-    return normalize(n);
-}
-
-void unpack_normal_tangent(i8vec4 packed, out vec3 n, out vec4 t) {
-    vec4 unpacked = vec4(packed) / 127.0;
-    
-    n = octahedron_decode(unpacked.xy);
-
-    vec3 reference_tangent = reference_orthonormal_vector(n);
-    float tangent_alpha = unpacked.z * PI;
-    
-    vec3 tangent = reference_tangent * cos(tangent_alpha) + cross(reference_tangent, n) * sin(tangent_alpha);
-    t = vec4(normalize(tangent), unpacked.w);
-}
 
 void main() {
     MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex];

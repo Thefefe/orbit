@@ -2,6 +2,7 @@
 
 #include "include/common.glsl"
 #include "include/types.glsl"
+#include "include/functions.glsl"
 
 layout(location = 0) out vec4 out_color;
 

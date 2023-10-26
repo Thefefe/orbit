@@ -1,5 +1,4 @@
-use std::hint::black_box;
-use std::{borrow::Cow, collections::HashMap, ops::Range};
+use std::{borrow::Cow, collections::{HashMap, HashSet}, ops::Range};
 
 use ash::vk;
 
@@ -39,6 +38,8 @@ pub struct GraphResourceData {
 
     pub initial_access: graphics::AccessKind,
     pub target_access: graphics::AccessKind,
+    pub initial_queue: Option<graphics::QueueType>,
+    pub target_queue: Option<graphics::QueueType>,
     pub wait_semaphore: Option<graphics::Semaphore>,
     pub finish_semaphore: Option<graphics::Semaphore>,
 
@@ -100,6 +101,8 @@ struct DependencyData {
 pub struct GraphResourceImportDesc {
     pub initial_access: graphics::AccessKind,
     pub target_access: graphics::AccessKind,
+    pub initial_queue: Option<graphics::QueueType>,
+    pub target_queue: Option<graphics::QueueType>,
     pub wait_semaphore: Option<graphics::Semaphore>,
     pub finish_semaphore: Option<graphics::Semaphore>,
 }
@@ -111,6 +114,8 @@ pub struct RenderGraph {
     dependencies: Vec<DependencyData>,
 
     pub import_cache: HashMap<graphics::AnyResourceHandle, GraphResourceIndex>,
+    pub dont_wait_semaphores: HashSet<vk::Semaphore>,
+    pub dont_signal_semaphores: HashSet<vk::Semaphore>,
 }
 
 impl RenderGraph {
@@ -120,6 +125,8 @@ impl RenderGraph {
             passes: arena::Arena::new(),
             dependencies: Vec::new(),
             import_cache: HashMap::new(),
+            dont_wait_semaphores: HashSet::new(),
+            dont_signal_semaphores: HashSet::new(),
         }
     }
 
@@ -128,6 +135,8 @@ impl RenderGraph {
         self.passes.clear();
         self.dependencies.clear();
         self.import_cache.clear();
+        self.dont_wait_semaphores.clear();
+        self.dont_signal_semaphores.clear();
     }
 
     pub fn add_resource(&mut self, mut resource_data: GraphResourceData) -> GraphResourceIndex {
@@ -183,12 +192,6 @@ impl RenderGraph {
             resource_handle,
             resource_version,
         });
-
-        let resource_name: &str = self.resources[resource_handle].name.as_ref();
-
-        if resource_name == "forward_draw_commands" {
-            let _ = black_box(10);
-        }
 
         self.passes[pass_handle].dependencies.push(dependency);
 
@@ -458,8 +461,9 @@ impl RenderGraph {
 
                     if dependency.resource_version == 0 {
                         if let Some(semaphore) = resource_data.wait_semaphore.take() {
-                            // TODO: if the first access is multiple reads this may get duplicated
-                            compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
+                            if self.dont_wait_semaphores.insert(semaphore.handle) {
+                                compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
+                            }
                         }
                     }
 
@@ -492,7 +496,9 @@ impl RenderGraph {
                         && dependency.resource_version == resource_data.current_version() - 1
                     {
                         if let Some(semaphore) = resource_data.finish_semaphore.take() {
-                            compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
+                            if self.dont_signal_semaphores.insert(semaphore.handle) {
+                                compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
+                            }
                         }
 
                         if resource_data.kind() == graphics::ResourceKind::Image

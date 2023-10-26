@@ -252,7 +252,6 @@ float pcf_poisson(uint shadow_map, vec4 clip_pos, float world_size) {
             sample_pos,
             clip_pos.z
         );
-
         sum += dot(gathered_samples, vec4(1.0));
     }
 

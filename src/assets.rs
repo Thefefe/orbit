@@ -262,13 +262,13 @@ impl GpuAssetStore {
 
         context.immediate_write_buffer(
             &self.vertex_buffer,
-            vertex_bytes,
             vertex_range.start * std::mem::size_of::<GpuMeshVertex>(),
+            vertex_bytes,
         );
         context.immediate_write_buffer(
             &self.index_buffer,
-            index_bytes,
             index_range.start * std::mem::size_of::<u32>(),
+            index_bytes,
         );
 
         let mesh_block = MeshInfo {
@@ -288,10 +288,10 @@ impl GpuAssetStore {
             aabb: mesh.aabb.into(),
             bounding_sphere: mesh.bounding_sphere.to_array(),
         };
-        context.immediate_write_buffer(
+        context.queue_write_buffer(
             &self.mesh_info_buffer,
-            bytemuck::bytes_of(&mesh_info),
             std::mem::size_of::<GpuMeshInfo>() * mesh_index.slot() as usize,
+            bytemuck::bytes_of(&mesh_info),
         );
 
         mesh_index
@@ -349,10 +349,10 @@ impl GpuAssetStore {
             _padding: [0; 3],
         };
 
-        context.immediate_write_buffer(
+        context.queue_write_buffer(
             &self.material_buffer,
-            bytemuck::bytes_of(&gpu_data),
             index.slot_index() * std::mem::size_of::<GpuMaterialData>(),
+            bytemuck::bytes_of(&gpu_data),
         );
 
         index

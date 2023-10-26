@@ -5,7 +5,7 @@ use glam::{vec3, Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    assets::GpuAssetStore, collections::arena::Index, graphics, math, scene::GpuMeshDrawCommand, App, Settings,
+    assets::GpuAssetStore, collections::arena::Index, graphics, math, scene::GpuMeshDrawCommand, App, Settings, Camera,
 };
 
 #[repr(C)]
@@ -409,7 +409,7 @@ impl DebugRenderer {
         target_image: graphics::GraphImageHandle,
         resolve_image: Option<graphics::GraphImageHandle>,
         depth_image: graphics::GraphImageHandle,
-        view_projection: Mat4,
+        camera: &Camera,
     ) {
         // for now the msaa resolve always happens here so we always need this pass
         // if self.line_vertices.is_empty() && self.mesh_draw_commands.is_empty() { return; }
@@ -428,21 +428,22 @@ impl DebugRenderer {
             }
         }
 
-        context.immediate_write_buffer(
+        context.queue_write_buffer(
             &self.line_vertex_buffer,
-            bytemuck::cast_slice(&self.line_vertices),
             Self::MAX_VERTEX_COUNT * size_of::<GpuDebugLineVertex>() * context.frame_index(),
+            bytemuck::cast_slice(&self.line_vertices),
         );
-        context.immediate_write_buffer(
+        context.queue_write_buffer(
             &self.mesh_instance_buffer,
-            bytemuck::cast_slice(&self.mesh_instances),
             Self::MAX_MESH_INSTANCE_COUNT * size_of::<GpuDebugMeshInstance>() * context.frame_index(),
+            bytemuck::cast_slice(&self.mesh_instances),
         );
-        context.immediate_write_buffer(
+        context.queue_write_buffer(
             &self.mesh_draw_commands_buffer,
-            bytemuck::cast_slice(&self.mesh_expanded_draw_commands),
             Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuMeshDrawCommand>() * context.frame_index(),
+            bytemuck::cast_slice(&self.mesh_expanded_draw_commands),
         );
+        context.submit_pending();
 
         let line_vertex_buffer = context.import(&self.line_vertex_buffer);
         let line_vertex_offset = context.frame_index() * Self::MAX_VERTEX_COUNT;
@@ -510,6 +511,8 @@ impl DebugRenderer {
                 }),
         );
 
+        let view_projection_matrix = camera.compute_matrix();
+
         let assets = assets.import_to_graph(context);
 
         context
@@ -556,7 +559,7 @@ impl DebugRenderer {
 
                     // back
                     cmd.build_constants()
-                        .mat4(&view_projection)
+                        .mat4(&view_projection_matrix)
                         .float(0.1)
                         .buffer(&line_buffer)
                         .uint(line_vertex_offset as u32);
@@ -565,7 +568,7 @@ impl DebugRenderer {
 
                     // front
                     cmd.build_constants()
-                        .mat4(&view_projection)
+                        .mat4(&view_projection_matrix)
                         .float(1.0)
                         .buffer(&line_buffer)
                         .uint(line_vertex_offset as u32);
@@ -585,22 +588,22 @@ impl DebugRenderer {
                     cmd.bind_index_buffer(index_buffer, 0);
 
                     // back
-                    cmd.build_constants()
-                        .mat4(&view_projection)
-                        .buffer(vertex_buffer)
-                        .buffer(instance_buffer)
-                        .float(0.1);
-                    cmd.set_depth_test_enable(false);
-                    cmd.draw_indexed_indirect(
-                        draw_commands_buffer,
-                        0,
-                        mesh_draw_commands_count as u32,
-                        size_of::<GpuMeshDrawCommand>() as u32,
-                    );
+                    // cmd.build_constants()
+                    //     .mat4(&view_projection)
+                    //     .buffer(vertex_buffer)
+                    //     .buffer(instance_buffer)
+                    //     .float(0.1);
+                    // cmd.set_depth_test_enable(false);
+                    // cmd.draw_indexed_indirect(
+                    //     draw_commands_buffer,
+                    //     0,
+                    //     mesh_draw_commands_count as u32,
+                    //     size_of::<GpuMeshDrawCommand>() as u32,
+                    // );
 
                     // front
                     cmd.build_constants()
-                        .mat4(&view_projection)
+                        .mat4(&view_projection_matrix)
                         .buffer(vertex_buffer)
                         .buffer(instance_buffer)
                         .float(1.0);

@@ -176,6 +176,10 @@ impl Camera {
         proj * view
     }
 
+    pub fn compute_view_matrix(&self) -> Mat4 {
+        self.transform.compute_matrix().inverse()
+    }
+
     pub fn compute_projection_matrix(&self) -> Mat4 {
         self.projection.compute_matrix(self.aspect_ratio)
     }
@@ -733,12 +737,11 @@ impl App {
 
                             ui.heading("Transform");
                             drag_vec3(ui, "position", &mut entity.transform.position, 0.001);
-                            let (euler_x, euler_y, euler_z) =
-                                entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
-                            let mut euler = vec3(euler_x, euler_y, euler_z);
-                            drag_vec3(ui, "orientation", &mut euler, 0.05);
-                            entity.transform.orientation =
-                                Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
+                            // let (euler_x, euler_y, euler_z) =
+                            //     entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
+                            // let mut euler = vec3(euler_x, euler_y, euler_z);
+                            // drag_vec3(ui, "orientation", &mut euler, 0.05);
+                            // entity.transform.orientation = Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
                             drag_vec3(ui, "scale", &mut entity.transform.scale, 0.001);
                         } else {
                             ui.label("no entity selected");
@@ -796,6 +799,13 @@ impl App {
     fn render(&mut self, context: &mut graphics::Context, egui_ctx: &egui::Context) {
         puffin::profile_function!();
 
+        let selected_entity_position = self.selected_entity_index
+            .map(|entity_index| self.scene.entities[entity_index].transform.position);
+
+        self.scene.update_instances(context);
+        self.scene.update_lights(context);
+        self.scene.update_submeshes(context, &self.gpu_assets);
+
         let assets = self.gpu_assets.import_to_graph(context);
         let scene = self.scene.import_to_graph(context);
 
@@ -805,8 +815,6 @@ impl App {
         if !self.settings.camera_debug_settings.freeze_camera {
             self.frozen_camera = self.camera;
         }
-
-        let camera_view_projection_matrix = self.camera.compute_matrix();
 
         if self.settings.camera_debug_settings.freeze_camera {
             let Projection::Perspective { fov, near_clip } = self.frozen_camera.projection else {
@@ -1023,6 +1031,8 @@ impl App {
             let entity = &self.scene.entities[entity_index];
 
             if let Some(model) = entity.model {
+                assert!(selected_entity_position.unwrap() == entity.transform.position);
+
                 self.debug_renderer.draw_model_wireframe(
                     entity.transform.compute_matrix(),
                     model,
@@ -1038,7 +1048,7 @@ impl App {
             color_target,
             color_resolve_target,
             depth_target,
-            camera_view_projection_matrix,
+            &self.camera,
         );
 
         let show_depth_pyramid = self.settings.camera_debug_settings.show_depth_pyramid;

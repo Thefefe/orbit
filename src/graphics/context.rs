@@ -29,7 +29,9 @@ pub struct Frame {
     in_flight_fence: vk::Fence,
     image_available_semaphore: graphics::Semaphore,
     render_finished_semaphore: graphics::Semaphore,
-    // command_pool: graphics::CommandPool,
+    transfer_finished_semaphore: graphics::Semaphore,
+    uses_async_transfer: bool,
+
     command_pools: Vec<Mutex<graphics::CommandPool>>,
     global_buffer: graphics::BufferRaw,
 
@@ -42,6 +44,107 @@ pub struct Frame {
 struct RecordSubmitStuff {
     command_pool: graphics::CommandPool,
     fence: vk::Fence,
+}
+
+struct BufferCopy {
+    dst_buffer: vk::Buffer,
+    region: vk::BufferCopy,
+}
+
+struct TransferQueue {
+    command_pool: graphics::CommandPool,
+    fence: vk::Fence,
+    staging_buffer: graphics::BufferRaw,
+    staging_buffer_offset: usize,
+    buffer_copies: Vec<BufferCopy>,
+}
+
+impl TransferQueue {
+    const STAGING_BUFFER_SIZE: usize = 64 * 1024 * 1024;
+    fn new(device: &graphics::Device) -> Self {
+        let command_pool = graphics::CommandPool::new(device, "trasfer_command_pool", QueueType::AsyncTransfer);
+        let fence = device.create_fence("transfer_queue_fence", true);
+        let staging_buffer = graphics::BufferRaw::create_impl(
+            device,
+            "transfer_queue_staging_buffer".into(),
+            &graphics::BufferDesc {
+                size: Self::STAGING_BUFFER_SIZE,
+                usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
+            },
+            None
+        );
+
+        Self {
+            command_pool,
+            fence,
+            staging_buffer,
+            staging_buffer_offset: 0,
+            buffer_copies: Vec::new(),
+        }
+    }
+
+    fn destroy(&self, device: &graphics::Device) {
+        self.command_pool.destroy(device);
+        unsafe {
+            device.raw.destroy_fence(self.fence, None);
+        }
+        graphics::BufferRaw::destroy_impl(device, &self.staging_buffer);
+    }
+
+    fn queue_write_buffer(&mut self, buffer: &graphics::BufferView, offset: usize, data: &[u8]) {
+        if data.len() == 0 { return; }
+        puffin::profile_function!();
+
+        let buffer_copy = BufferCopy {
+            dst_buffer: buffer.handle,
+            region: vk::BufferCopy {
+                src_offset: self.staging_buffer_offset as u64,
+                dst_offset: offset as u64,
+                size: data.len() as u64,
+            },
+        };
+        self.buffer_copies.push(buffer_copy);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.staging_buffer.mapped_ptr.unwrap().as_ptr().add(self.staging_buffer_offset),
+                data.len()
+            );
+        }
+        self.staging_buffer_offset += data.len();
+    }
+
+    fn submit(&mut self, device: &graphics::Device, semaphore: Option<vk::Semaphore>) {
+        puffin::profile_function!();
+
+        if self.buffer_copies.is_empty() { return; }
+        unsafe {
+            puffin::profile_scope!("wait_for_trasnfer_fence");
+            device.raw.wait_for_fences(&[self.fence], false, u64::MAX).unwrap();
+        }
+        unsafe { device.raw.reset_fences(&[self.fence]).unwrap(); }
+        self.command_pool.reset(device);
+
+        let cmd = self.command_pool.begin_new(device);
+        if let Some(semaphore) = semaphore {
+            cmd.signal_semaphore(semaphore, vk::PipelineStageFlags2::TRANSFER);
+        }
+        let cmd = cmd.record(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        for buffer_copy in self.buffer_copies.drain(..) {
+            cmd.copy_buffer(
+                self.staging_buffer.handle,
+                buffer_copy.dst_buffer,
+                std::slice::from_ref(&buffer_copy.region)
+            );
+        }
+        drop(cmd);
+
+        let submit_info = self.command_pool.buffers()[0].submit_info();
+
+        device.queue_submit(QueueType::AsyncTransfer, &[submit_info], self.fence);
+        self.staging_buffer_offset = 0;
+    }
 }
 
 struct FrameContext {
@@ -69,6 +172,7 @@ pub struct Context {
 
     submit_infos: Vec<vk::SubmitInfo2>,
     record_submit_stuff: Mutex<RecordSubmitStuff>,
+    transfer_queue: Mutex<TransferQueue>,
 
     frame_context: Option<FrameContext>,
 }
@@ -106,6 +210,7 @@ impl Context {
             let in_flight_fence = device.create_fence("in_flight_fence", true);
             let image_available_semaphore = device.create_semaphore("image_available_semaphore");
             let render_finished_semaphore = device.create_semaphore("render_finished_semaphore");
+            let transfer_finished_semaphore = device.create_semaphore("transfer_finished_semaphore");
 
             // let command_pool = graphics::CommandPool::new(
             //     &device,
@@ -138,6 +243,9 @@ impl Context {
                 in_flight_fence,
                 image_available_semaphore,
                 render_finished_semaphore,
+                transfer_finished_semaphore,
+                uses_async_transfer: false,
+
                 // command_pool,
                 command_pools: (0..rayon::current_num_threads())
                     .map(|i| {
@@ -164,6 +272,8 @@ impl Context {
             Mutex::new(RecordSubmitStuff { command_pool, fence })
         };
 
+        let transfer_queue = Mutex::new(TransferQueue::new(&device));
+
         Self {
             window,
 
@@ -184,6 +294,7 @@ impl Context {
 
             submit_infos: Vec::new(),
             record_submit_stuff,
+            transfer_queue,
 
             frame_context: None,
         }
@@ -207,6 +318,15 @@ impl Context {
         }
     }
 
+    pub fn queue_write_buffer(&self, buffer: &graphics::BufferView, offset: usize, data: &[u8]) {
+        self.transfer_queue.lock().queue_write_buffer(buffer, offset, data);
+    }
+
+    pub fn submit_pending(&mut self) {
+        self.transfer_queue.get_mut().submit(&self.device, None);
+        self.graph.dont_wait_semaphores.insert(self.frames[self.frame_index].transfer_finished_semaphore.handle);
+    }
+
     pub fn window(&self) -> &Window {
         &self.window
     }
@@ -222,17 +342,20 @@ impl Drop for Context {
             self.device.raw.device_wait_idle().unwrap();
         }
 
-        let record_submit_stuff = self.record_submit_stuff.lock();
+        let record_submit_stuff = self.record_submit_stuff.get_mut();
         unsafe {
             self.device.raw.destroy_fence(record_submit_stuff.fence, None);
         }
         record_submit_stuff.command_pool.destroy(&self.device);
+
+        self.transfer_queue.get_mut().destroy(&self.device);
 
         for frame in self.frames.iter_mut() {
             unsafe {
                 self.device.raw.destroy_fence(frame.in_flight_fence, None);
                 self.device.raw.destroy_semaphore(frame.image_available_semaphore.handle, None);
                 self.device.raw.destroy_semaphore(frame.render_finished_semaphore.handle, None);
+                self.device.raw.destroy_semaphore(frame.transfer_finished_semaphore.handle, None);
 
                 self.device.raw.destroy_query_pool(frame.timestamp_query_pool, None);
             }
@@ -350,6 +473,9 @@ impl Context {
 
             initial_access: graphics::AccessKind::None,
             target_access: graphics::AccessKind::Present,
+            initial_queue: Some(QueueType::Graphics),
+            target_queue: None,
+            
             wait_semaphore: Some(frame.image_available_semaphore.clone()),
             finish_semaphore: Some(frame.render_finished_semaphore.clone()),
             versions: vec![],
@@ -478,6 +604,8 @@ impl Context {
 
             initial_access: graphics::AccessKind::None,
             target_access: graphics::AccessKind::None,
+            initial_queue: Some(QueueType::Graphics),
+            target_queue: Some(QueueType::Graphics),
             wait_semaphore: None,
             finish_semaphore: None,
             versions: vec![],
@@ -505,6 +633,8 @@ impl Context {
 
             initial_access: desc.initial_access,
             target_access: desc.target_access,
+            initial_queue: desc.initial_queue,
+            target_queue: desc.target_queue,
             wait_semaphore: desc.wait_semaphore,
             finish_semaphore: desc.finish_semaphore,
             versions: vec![],
@@ -524,8 +654,8 @@ impl Context {
         let name: Cow<'static, str> = name.into();
         let buffer_desc = graphics::BufferDesc {
             size: data.len(),
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            memory_location: gpu_allocator::MemoryLocation::GpuOnly,
         };
         let desc = graphics::AnyResourceDesc::Buffer(buffer_desc);
         let (mut cache, cache_needs_rename) = self.transient_resource_cache.get(&name, &desc).unwrap_or_else(|| {
@@ -542,9 +672,11 @@ impl Context {
         let graphics::AnyResourceRef::Buffer(buffer) = cache.as_ref() else {
             unreachable!()
         };
-        unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), buffer.mapped_ptr.unwrap().as_ptr(), data.len());
-        }
+        
+        self.transfer_queue.get_mut().queue_write_buffer(&buffer, 0, data);
+        self.graph.dont_wait_semaphores.remove(&self.frames[self.frame_index].transfer_finished_semaphore.handle);
+        self.frames[self.frame_index].uses_async_transfer = true;
+
         let descriptor_index = buffer.descriptor_index;
 
         let resource_index = self.graph.add_resource(graph::GraphResourceData {
@@ -556,9 +688,11 @@ impl Context {
             },
             descriptor_index,
 
+            initial_queue: None,
+            target_queue: None,
             initial_access: graphics::AccessKind::None,
             target_access: graphics::AccessKind::None,
-            wait_semaphore: None,
+            wait_semaphore: Some(self.frames[self.frame_index].transfer_finished_semaphore.clone()),
             finish_semaphore: None,
             versions: vec![],
         });
@@ -599,6 +733,8 @@ impl Context {
 
             initial_access: graphics::AccessKind::None,
             target_access: graphics::AccessKind::None,
+            initial_queue: None,
+            target_queue: None,
             wait_semaphore: None,
             finish_semaphore: None,
             versions: vec![],
@@ -655,6 +791,11 @@ impl Context {
                 })
         };
         let frame = &mut self.frames[self.frame_index];
+
+        if frame.uses_async_transfer {
+            frame.uses_async_transfer = false;
+            self.transfer_queue.get_mut().submit(&self.device, Some(frame.transfer_finished_semaphore.handle));
+        }
 
         frame.graph_debug_info.clear();
 

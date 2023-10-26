@@ -265,6 +265,7 @@ pub fn create_draw_commands(
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
         // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
         .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
+        .with_dependency(cull_data, graphics::AccessKind::ComputeShaderRead)
         .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
         .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
         .with_dependencies(cull_info.occlusion_culling.secondary_depth_pyramid_dependency())

@@ -5,8 +5,9 @@ use std::ops::Range;
 use crate::graphics;
 
 pub struct CommandPool {
-    handle: vk::CommandPool,
     name: String,
+    handle: vk::CommandPool,
+    queue_type: graphics::QueueType,
     command_buffers: Vec<CommandBuffer>,
     used_buffers: usize,
 }
@@ -21,8 +22,9 @@ impl CommandPool {
         device.set_debug_name(handle, &format!("{name}_command_pool"));
 
         Self {
-            handle,
             name: name.to_owned(),
+            handle,
+            queue_type,
             command_buffers: Vec::new(),
             used_buffers: 0,
         }
@@ -64,6 +66,7 @@ impl CommandPool {
             device.set_debug_name(command_buffer, &format!("{}_command_buffer_#{index}", self.name));
 
             self.command_buffers.push(CommandBuffer {
+                queue_type: self.queue_type,
                 index_within_pool: index,
                 command_buffer_info: vk::CommandBufferSubmitInfo {
                     command_buffer,
@@ -88,6 +91,7 @@ impl CommandPool {
 
 #[derive(Debug)]
 pub struct CommandBuffer {
+    queue_type: graphics::QueueType,
     index_within_pool: usize,
     command_buffer_info: vk::CommandBufferSubmitInfo,
     pub wait_infos: Vec<vk::SemaphoreSubmitInfo>,
@@ -130,9 +134,13 @@ impl CommandBuffer {
 
         unsafe { device.raw.begin_command_buffer(self.handle(), &begin_info).unwrap() }
 
-        // temporary, this will be aware of the queue family it runs on
-        device.bind_descriptors(self.handle(), vk::PipelineBindPoint::COMPUTE);
-        device.bind_descriptors(self.handle(), vk::PipelineBindPoint::GRAPHICS);
+        if self.queue_type.supports_graphics() {
+            device.bind_descriptors(self.handle(), vk::PipelineBindPoint::GRAPHICS);
+        }
+        
+        if self.queue_type.supports_compute() {
+            device.bind_descriptors(self.handle(), vk::PipelineBindPoint::COMPUTE);
+        }
 
         CommandRecorder {
             device,
@@ -206,22 +214,22 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
-    pub fn copy_buffer(&self, src: &graphics::BufferView, dst: &graphics::BufferView, regions: &[vk::BufferCopy]) {
-        unsafe { self.device.raw.cmd_copy_buffer(self.buffer(), src.handle, dst.handle, regions) }
+    pub fn copy_buffer(&self, src_handle: vk::Buffer, dst_handle: vk::Buffer, regions: &[vk::BufferCopy]) {
+        unsafe { self.device.raw.cmd_copy_buffer(self.buffer(), src_handle, dst_handle, regions) }
     }
 
     #[inline(always)]
     pub fn copy_buffer_to_image(
         &self,
-        src: &graphics::BufferView,
-        dst: &graphics::ImageView,
+        src_handle: vk::Buffer,
+        dst_handle: vk::Image,
         regions: &[vk::BufferImageCopy],
     ) {
         unsafe {
             self.device.raw.cmd_copy_buffer_to_image(
                 self.buffer(),
-                src.handle,
-                dst.handle,
+                src_handle,
+                dst_handle,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 regions,
             )

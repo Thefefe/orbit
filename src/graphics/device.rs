@@ -69,8 +69,9 @@ impl InstanceMetadata {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum QueueType {
+    #[default]
     Graphics,
     AsyncCompute,
     AsyncTransfer,
@@ -91,6 +92,22 @@ impl QueueType {
         }
 
         None
+    }
+
+    #[inline]
+    pub fn supports_graphics(self) -> bool {
+        match self {
+            QueueType::Graphics => true,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    pub fn supports_compute(self) -> bool {
+        match self {
+            QueueType::AsyncTransfer => false,
+            _ => true,
+        }
     }
 }
 
@@ -341,6 +358,8 @@ pub struct Device {
     pub graphics_queue: Queue,
     pub async_compute_queue: Option<Queue>,
     pub async_transfer_queue: Option<Queue>,
+    pub queue_family_count: u32,
+    queue_family_indices: [u32; 3],
 
     allocator_stuff: Mutex<AllocatorStuff>,
 
@@ -626,6 +645,29 @@ impl Device {
         let async_compute_queue = async_compute_queue_family.map(get_queue);
         let async_transfer_queue = async_transfer_queue_family.map(get_queue);
 
+        set_debug_name(vk::Queue::TYPE, graphics_queue.handle.as_raw(), "grahics_queue");
+
+        if let Some(ref queue) = async_compute_queue {
+            set_debug_name(vk::Queue::TYPE, queue.handle.as_raw(), "compute_queue");
+        }
+
+        if let Some(ref queue) = async_compute_queue {
+            set_debug_name(vk::Queue::TYPE, queue.handle.as_raw(), "transfer_queue");
+        }
+
+        let mut queue_family_count: u32 = 1;
+        let mut queue_family_indices = [graphics_queue_family.index, 0, 0];
+
+        if let Some(queue_family) = async_compute_queue_family {
+            queue_family_indices[queue_family_count as usize] = queue_family.index;
+            queue_family_count += 1;
+        }
+
+        if let Some(queue_family) = async_transfer_queue_family {
+            queue_family_indices[queue_family_count as usize] = queue_family.index;
+            queue_family_count += 1;
+        }
+
         let swapchain_fns = khr::Swapchain::new(&instance, &device);
 
         let allocator_stuff = {
@@ -775,6 +817,8 @@ impl Device {
             graphics_queue,
             async_compute_queue,
             async_transfer_queue,
+            queue_family_count,
+            queue_family_indices,
 
             allocator_stuff,
 
@@ -793,21 +837,16 @@ impl Device {
     }
 
     #[inline]
-    pub fn try_get_queue(&self, ty: QueueType) -> Option<&Queue> {
-        match ty {
-            QueueType::Graphics => Some(&self.graphics_queue),
-            QueueType::AsyncCompute => self.async_compute_queue.as_ref(),
-            QueueType::AsyncTransfer => self.async_transfer_queue.as_ref(),
-        }
-    }
-
-    #[inline]
     pub fn get_queue(&self, ty: QueueType) -> &Queue {
         match ty {
             QueueType::Graphics => &self.graphics_queue,
             QueueType::AsyncCompute => self.async_compute_queue.as_ref().unwrap_or(&self.graphics_queue),
             QueueType::AsyncTransfer => self.async_transfer_queue.as_ref().unwrap_or(&self.graphics_queue),
         }
+    }
+
+    pub fn queue_family_indices(&self) -> &[u32] {
+        &self.queue_family_indices[0..self.queue_family_count as usize]
     }
 
     #[inline]

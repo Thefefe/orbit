@@ -421,6 +421,9 @@ struct App {
     light_intensitiy: f32,
 
     selected_entity_index: Option<usize>,
+    // helpers for stable euler rotation
+    selected_entity_euler_index: usize,
+    selected_entity_euler_coords: Vec3,
 
     open_scene_editor_open: bool,
     open_graph_debugger: bool,
@@ -601,6 +604,8 @@ impl App {
             light_intensitiy: 10.0,
 
             selected_entity_index: None,
+            selected_entity_euler_index: usize::MAX,
+            selected_entity_euler_coords: Vec3::ZERO,
 
             open_scene_editor_open: false,
             open_graph_debugger: false,
@@ -737,11 +742,23 @@ impl App {
 
                             ui.heading("Transform");
                             drag_vec3(ui, "position", &mut entity.transform.position, 0.001);
-                            // let (euler_x, euler_y, euler_z) =
-                            //     entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
-                            // let mut euler = vec3(euler_x, euler_y, euler_z);
-                            // drag_vec3(ui, "orientation", &mut euler, 0.05);
-                            // entity.transform.orientation = Quat::from_euler(glam::EulerRot::YXZ, euler.x, euler.y, euler.z);
+
+                            if self.selected_entity_euler_index != entity_index {
+                                const PIS_IN_180: f32 = 57.2957795130823208767981548141051703_f32;
+                                self.selected_entity_euler_index = entity_index;
+                                let (euler_x, euler_y, euler_z) = entity.transform.orientation
+                                    .to_euler(glam::EulerRot::YXZ);
+
+                                self.selected_entity_euler_coords = vec3(euler_y, euler_x, euler_z) * PIS_IN_180;
+                            }
+                            drag_vec3(ui, "orientation", &mut self.selected_entity_euler_coords, 0.5);
+                            let euler_radian = self.selected_entity_euler_coords * (PI / 180.0);
+                            entity.transform.orientation = Quat::from_euler(
+                                glam::EulerRot::YXZ,
+                                euler_radian.y,
+                                euler_radian.x,
+                                euler_radian.z
+                            );
                             drag_vec3(ui, "scale", &mut entity.transform.scale, 0.001);
                         } else {
                             ui.label("no entity selected");
@@ -1029,6 +1046,12 @@ impl App {
 
         if let Some(entity_index) = self.selected_entity_index {
             let entity = &self.scene.entities[entity_index];
+
+            let pos = entity.transform.position;
+
+            self.debug_renderer.draw_line(pos, pos + vec3(1.0, 0.0, 0.0), vec4(1.0, 0.0, 0.0, 1.0));
+            self.debug_renderer.draw_line(pos, pos + vec3(0.0, 1.0, 0.0), vec4(0.0, 1.0, 0.0, 1.0));
+            self.debug_renderer.draw_line(pos, pos + vec3(0.0, 0.0, 1.0), vec4(0.0, 0.0, 1.0, 1.0));
 
             if let Some(model) = entity.model {
                 assert!(selected_entity_position.unwrap() == entity.transform.position);

@@ -28,14 +28,13 @@ struct GpuDirectionalLight {
     color: Vec3,
     intensity: f32,
     direction: Vec3,
-    blend_seam: f32,
-
-    min_filter_radius: f32,
-    max_filter_radius: f32,
+    light_size: f32,
+    blocker_search_radius: f32,
 
     // TODO: move to somewhere global
     normal_bias_scale: f32,
     oriented_bias: f32,
+    _padding: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +46,8 @@ pub struct DirectionalLightGraphData {
 #[derive(Debug, Clone, Copy)]
 pub struct ShadowSettings {
     pub shadow_resolution: u32,
+    pub light_size: f32,
+    pub blocker_search_radius: f32,
 
     pub depth_bias_constant_factor: f32,
     pub depth_bias_slope_factor: f32,
@@ -56,16 +57,14 @@ pub struct ShadowSettings {
     // directional
     pub cascade_split_lambda: f32,
     pub max_shadow_distance: f32,
-    pub split_blend_ratio: f32,
-
-    pub min_filter_radius: f32,
-    pub max_filter_radius: f32,
 }
 
 impl Default for ShadowSettings {
     fn default() -> Self {
         Self {
             shadow_resolution: 2048,
+            light_size: 0.6,
+            blocker_search_radius: 0.3,
 
             depth_bias_constant_factor: 0.0,
             depth_bias_slope_factor: 2.0,
@@ -74,10 +73,6 @@ impl Default for ShadowSettings {
 
             cascade_split_lambda: 0.80,
             max_shadow_distance: 32.0,
-            split_blend_ratio: 0.5,
-
-            min_filter_radius: 0.6,
-            max_filter_radius: 2.0,
         }
     }
 }
@@ -94,6 +89,16 @@ impl ShadowSettings {
                     ui.selectable_value(&mut self.shadow_resolution, 2048, "2048");
                     ui.selectable_value(&mut self.shadow_resolution, 4096, "4096");
                 });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("light_size");
+            ui.add(egui::DragValue::new(&mut self.light_size).speed(0.01).clamp_range(0.0..=16.0));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("blocker_search_radius");
+            ui.add(egui::DragValue::new(&mut self.blocker_search_radius).speed(0.01).clamp_range(0.0..=16.0));
         });
 
         ui.horizontal(|ui| {
@@ -117,23 +122,8 @@ impl ShadowSettings {
         });
 
         ui.horizontal(|ui| {
-            ui.label("min_filter_radius");
-            ui.add(egui::DragValue::new(&mut self.min_filter_radius).speed(0.1).clamp_range(0.0..=32.0));
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("max_filter_radius");
-            ui.add(egui::DragValue::new(&mut self.max_filter_radius).speed(0.1).clamp_range(0.0..=32.0));
-        });
-
-        ui.horizontal(|ui| {
             ui.label("max_shadow_distance");
             ui.add(egui::DragValue::new(&mut self.max_shadow_distance).speed(0.5).clamp_range(0.0..=1000.0));
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("split_blend_ratio");
-            ui.add(egui::DragValue::new(&mut self.split_blend_ratio).speed(0.005).clamp_range(0.0..=1.0));
         });
 
         ui.horizontal(|ui| {
@@ -330,12 +320,11 @@ impl ShadowRenderer {
             color: light_color,
             intensity,
             direction: light_direction,
-            blend_seam: shadow_settings.split_blend_ratio,
-
-            max_filter_radius: shadow_settings.max_filter_radius * 0.01,
-            min_filter_radius: shadow_settings.min_filter_radius * 0.01,
+            light_size: self.settings.light_size,
+            blocker_search_radius: self.settings.blocker_search_radius,
             normal_bias_scale: self.settings.depth_bias_normal_scale,
             oriented_bias: -self.settings.depth_bias_oriented,
+            _padding: 0,
         };
 
         let mut shadow_maps = [graphics::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];

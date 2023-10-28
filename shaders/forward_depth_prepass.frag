@@ -24,6 +24,14 @@ layout(location = 0) out vec4 out_color;
 
 #define MIP_SCALE 0.25
 
+float calc_mip_level(vec2 texture_coord) {
+    vec2 dx = dFdx(texture_coord);
+    vec2 dy = dFdy(texture_coord);
+    float delta_max_sqr = max(dot(dx, dx), dot(dy, dy));
+    
+    return max(0.0, 0.5 * log2(delta_max_sqr));
+}
+
 void main() {
     out_color = vec4(vout.normal * 0.5 + 0.5, 1.0);
 

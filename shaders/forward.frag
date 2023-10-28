@@ -102,10 +102,8 @@ float interleaved_gradient_noise(vec2 seed) {
     return fract(magic.z * fract(dot(seed, magic.xy)));
 }
 
-float avg_blockers_depth_to_penumbra(float z_shadow_map_view, float avg_blockers_depth) {
-    float penumbra = (z_shadow_map_view - avg_blockers_depth) / avg_blockers_depth;
-    penumbra *= penumbra;
-    return clamp(80.0f * penumbra, 0.0, 1.0);
+float penumbra_size(float reciever_depth, float avg_blockers_depth) {
+    return (reciever_depth - avg_blockers_depth) / avg_blockers_depth;
 }
 
 #define PENUMBRA_SAMPLE_COUNT 16
@@ -120,80 +118,20 @@ vec2 vogel_disk_sample(int sampleIndex, int samplesCount, float phi) {
     return vec2(r * cos(theta), r * sin(theta));
 }
 
-void penumbra_vogel(uint shadow_map, float vogel_theta, vec3 light_space_pos, out uint blockers_count, out float avg_blockers_depth, float world_size) {
+void penumbra_poisson(
+    uint shadow_map,
+    float random_theta,
+    vec3 light_space_pos,
+    out uint blockers_count,
+    out float avg_blockers_depth,
+    float world_size_inv
+) {
     avg_blockers_depth = 0.0f;
     blockers_count = 0;
 
-    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    vec2 texel_size = vec2(1.0 / world_size);
-    float penumbra_filter_max_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
-
-    for(int i = 0; i < PENUMBRA_SAMPLE_COUNT; i ++) {
-        vec2 sample_uv = vogel_disk_sample(i, PENUMBRA_SAMPLE_COUNT, vogel_theta);
-        sample_uv = light_space_pos.xy + sample_uv * penumbra_filter_max_size * texel_size;
-
-        float sample_depth = texture(
-            sampler2D(GetTexture2D(shadow_map), GetSampler(SHADOW_DEPTH_SAMPLER)),
-            sample_uv
-        ).x;
-
-        if(sample_depth > light_space_pos.z) {
-            avg_blockers_depth += 1.0 - sample_depth;
-            blockers_count += 1;
-        }
-    }
-
-    avg_blockers_depth /= float(blockers_count);
-}
-
-float pcf_vogel(uint shadow_map, vec4 clip_pos, float world_size) {
-    clip_pos.xyz /= clip_pos.w;
-    clip_pos.y *= -1.0;
-    clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
-
-    float sum = 0.0;
-    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    vec2 texel_size = vec2(1.0 / world_size);
-    float random_theta = interleaved_gradient_noise(gl_FragCoord.xy) * 2 * PI;
-
-    uint blockers_count;
-    float avg_blockers_depth;
-    penumbra_vogel(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth, world_size);
-    
-    if (blockers_count == 0 && blockers_count == PENUMBRA_SAMPLE_COUNT) return blockers_count / PENUMBRA_SAMPLE_COUNT;
-
-    float penumbra_scale = avg_blockers_depth_to_penumbra(1.0 - clip_pos.z, avg_blockers_depth);
-
-    float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
-    float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
-    
-    float filter_radius = mix(min_filter_radius, max_filter_radius, penumbra_scale);
-
-    for (int i = 0; i < SHADOW_SAMPLE_COUNT; i += 1) {
-        vec2 offset = vogel_disk_sample(i, SHADOW_SAMPLE_COUNT, random_theta) * filter_radius * texel_size;
-        vec2 sample_pos = clip_pos.xy + offset;
-
-        vec4 gathered_samples = textureGather(
-            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-            sample_pos,
-            clip_pos.z
-        );
-
-        sum += dot(gathered_samples, vec4(1.0));
-    }
-
-    sum /= SHADOW_SAMPLE_COUNT * 4;
-
-    return sum;
-}
-
-void penumbra_poisson(uint shadow_map, float random_theta, vec3 light_space_pos, out uint blockers_count, out float avg_blockers_depth, float world_size) {
-    avg_blockers_depth = 0.0f;
-    blockers_count = 0;
-
-    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    vec2 texel_size = vec2(1.0 / world_size);
-    float penumbra_filter_max_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
+    float blocker_search_radius =
+        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.blocker_search_radius *
+        world_size_inv;
 
     float s = sin(random_theta);
     float c = cos(random_theta);
@@ -201,7 +139,7 @@ void penumbra_poisson(uint shadow_map, float random_theta, vec3 light_space_pos,
 
     for(int i = 0; i < PENUMBRA_SAMPLE_COUNT; i ++) {
         vec2 sample_uv = rot * poisson_offsets[i];
-        sample_uv = light_space_pos.xy + sample_uv * penumbra_filter_max_size * texel_size;
+        sample_uv = light_space_pos.xy + sample_uv * blocker_search_radius * world_size_inv;
 
         float sample_depth = texture(
             sampler2D(GetTexture2D(shadow_map), GetSampler(SHADOW_DEPTH_SAMPLER)),
@@ -223,29 +161,26 @@ float pcf_poisson(uint shadow_map, vec4 clip_pos, float world_size) {
     clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
 
     float sum = 0.0;
-    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    vec2 texel_size = vec2(1.0 / world_size);
+    float world_size_inv = 1.0 / world_size;
     float random_theta = interleaved_gradient_noise(gl_FragCoord.xy) * 2 * PI;
     float s = sin(random_theta);
     float c = cos(random_theta);
     mat2 rot = mat2(c, s, -s, c);
 
+    float light_size_uv = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.light_size * world_size_inv;
+
     uint blockers_count;
     float avg_blockers_depth;
-    penumbra_poisson(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth, world_size);
+    penumbra_poisson(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth, world_size_inv);
     
     if (blockers_count == 0 && blockers_count == PENUMBRA_SAMPLE_COUNT) return blockers_count / PENUMBRA_SAMPLE_COUNT;
 
-    float penumbra_scale = avg_blockers_depth_to_penumbra(1.0 - clip_pos.z, avg_blockers_depth);
-
-    float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
-    float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
-    
-    float filter_radius = mix(min_filter_radius, max_filter_radius, penumbra_scale);
+    float penumbra_scale = penumbra_size(1.0 - clip_pos.z, avg_blockers_depth) * light_size_uv;
+    float filter_radius = max(penumbra_scale * world_size_inv, 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0).x);
 
     for (int i = 0; i < SHADOW_SAMPLE_COUNT; i += 1) {
         vec2 offset = rot * poisson_offsets[i];
-        vec2 sample_pos = clip_pos.xy + offset * filter_radius * texel_size;
+        vec2 sample_pos = clip_pos.xy + offset * filter_radius;
 
         vec4 gathered_samples = textureGather(
             sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
@@ -258,68 +193,6 @@ float pcf_poisson(uint shadow_map, vec4 clip_pos, float world_size) {
     sum /= SHADOW_SAMPLE_COUNT * 4;
 
     return sum;
-}
-
-float pcf_branch(uint shadow_map, vec4 clip_pos, float world_size) {
-    clip_pos.xyz /= clip_pos.w;
-    clip_pos.y *= -1.0;
-    clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
-
-    ivec3 offset_coord;
-    vec3 jitter_size = textureSize(GetSampledTexture3D(jitter_texture_index), 0);
-    offset_coord.yz = ivec2(mod(gl_FragCoord.xy, jitter_size.yz));
-
-    float sum = 0.0;
-    
-    // vec2 texel_size = 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0);
-    vec2 texel_size = vec2(1.0 / world_size);
-
-    float max_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.max_filter_radius;
-    float min_filter_radius = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.min_filter_radius;
-    
-    float filter_radius = min_filter_radius;
-
-    for (int i = 0; i < 4; i++) {
-        offset_coord.x = i;
-        vec4 offsets = texelFetch(GetSampledTexture3D(jitter_texture_index), offset_coord, 0) * filter_radius;
-        
-        sum += texture(
-            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-            vec3(clip_pos.xy + offsets.xy * texel_size, clip_pos.z)
-        );
-
-        sum += texture(
-            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-            vec3(clip_pos.xy + offsets.zw * texel_size, clip_pos.z)
-        );
-    }
-
-    if (sum == 0.0 || sum == 8.0) {
-        float shadow = sum / 8.0;
-        float center = texture(
-            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-            vec3(clip_pos.xy, clip_pos.z)
-        );
-        
-        if (shadow == center) return shadow;
-    }
-
-    for (int i = 4; i < 32; i++) {
-        offset_coord.x = i;
-        vec4 offsets = texelFetch(GetSampledTexture3D(jitter_texture_index), offset_coord, 0) * filter_radius;
-        
-        sum += texture(
-            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-            vec3(clip_pos.xy + offsets.xy * texel_size,clip_pos.z)
-        );
-
-        sum += texture(
-            sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-            vec3(clip_pos.xy + offsets.zw * texel_size,clip_pos.z)
-        );
-    }
-
-    return sum / 64.0;
 }
 
 vec3 shadow_normal_offset(float n_dot_l, vec3 normal, uint shadow_map, float scale) {
@@ -395,6 +268,14 @@ float debug_light(vec3 normal, vec3 light_dir, float shadow) {
 }
 
 #define MIP_SCALE 0.25
+
+float calc_mip_level(vec2 texture_coord) {
+    vec2 dx = dFdx(texture_coord);
+    vec2 dy = dFdy(texture_coord);
+    float delta_max_sqr = max(dot(dx, dx), dot(dy, dy));
+    
+    return max(0.0, 0.5 * log2(delta_max_sqr));
+}
 
 void main() {
     uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).data.render_mode;
@@ -609,8 +490,9 @@ void main() {
             out_color.xyz = cascade_color * debug_light(vout.normal, light_direction, shadow);
         } break;
         case 2:
-            out_color = vec4(normal * 0.5 + 0.5, 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            // out_color = vec4(normal * 0.5 + 0.5, 1.0);
+            // out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            out_color = vec4(vec3(shadow), 1.0);
             break;
         case 3: 
             out_color = vec4(vec3(metallic), 1.0);

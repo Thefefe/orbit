@@ -16,12 +16,11 @@ struct DirectionalLightData {
     vec3 color;
     float intensitiy;
     vec3 direction;
-    float split_blend_ratio;
-
-    float min_filter_radius;
-    float max_filter_radius;
+    float light_size;
+    float blocker_search_radius;
     float normal_bias_scale;
     float oriented_bias;
+    uint _padding;
 };
 
 struct PerFrameData {

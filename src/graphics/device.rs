@@ -15,7 +15,7 @@ use std::{
 
 use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
-    AllocatorDebugSettings,
+    AllocatorDebugSettings, AllocationSizes,
 };
 
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
@@ -677,6 +677,7 @@ impl Device {
                 physical_device: gpu.handle,
                 debug_settings: AllocatorDebugSettings::default(),
                 buffer_device_address: true,
+                allocation_sizes: AllocationSizes::default(),
             })
             .expect("failed to create vulkan allocator");
 

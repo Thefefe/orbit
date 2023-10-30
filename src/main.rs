@@ -291,10 +291,10 @@ impl Settings {
             ));
         });
 
-        ui.image(
-            shadow_maps[self.shadow_debug_settings.selected_cascade],
-            egui::Vec2::new(250.0, 250.0),
-        );
+        ui.image(egui::ImageSource::Texture(egui::load::SizedTexture {
+            id: shadow_maps[self.shadow_debug_settings.selected_cascade].into(),
+            size: egui::Vec2::new(250.0, 250.0),
+        }));
     }
 }
 

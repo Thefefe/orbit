@@ -6,7 +6,7 @@ use gpu_allocator::MemoryLocation;
 use image::EncodableLayout;
 
 use crate::{
-    assets::{sep_vertex_merge, Aabb, GpuAssetStore, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle},
+    assets::{sep_vertex_merge, Aabb, GpuAssets, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle},
     graphics,
     scene::{EntityData, SceneData, Transform},
     utils::OptionDefaultIterator,
@@ -395,7 +395,7 @@ pub fn load_image(
 pub fn load_gltf(
     path: &Path,
     context: &graphics::Context,
-    asset_store: &mut GpuAssetStore,
+    asset_store: &mut GpuAssets,
     scene: &mut SceneData,
 ) -> gltf::Result<()> {
     let base_path = path.parent().unwrap_or(Path::new(""));
@@ -421,7 +421,7 @@ pub fn load_gltf(
     }
 
     let mut texture_lookup_table: HashMap<usize, TextureHandle> = HashMap::new();
-    let mut get_texture = |assets: &mut GpuAssetStore, gltf_texture: gltf::Texture, srgb: bool| -> TextureHandle {
+    let mut get_texture = |assets: &mut GpuAssets, gltf_texture: gltf::Texture, srgb: bool| -> TextureHandle {
         let index = gltf_texture.index();
         if let Some(texture_id) = texture_lookup_table.get(&index) {
             return *texture_id;
@@ -590,9 +590,9 @@ pub fn load_gltf(
         let transform = Transform::from_mat4(transform_matrix);
 
         let model = node.mesh().map(|gltf_mesh| model_lookup_table[gltf_mesh.index()]);
-        let name = node.name().map(|str| str.to_owned());
+        let name = node.name().map(|str| str.to_owned().into());
 
-        scene.add_entity(EntityData { name, transform, model });
+        scene.add_entity(EntityData { name, transform, model, light: None });
 
         for child in node.children() {
             add_gltf_node(scene, model_lookup_table, child, Some(&transform_matrix));

@@ -10,11 +10,11 @@ layout(push_constant, std430) uniform PushConstants {
     uint entity_buffer;
     uint draw_commands;
     uint materials_buffer;
-    uint directional_light_buffer;
     uint light_count;
     uint light_data_buffer;
-    uint irradiance_image_index;
-    uint prefiltered_env_map_index;
+    uint shadow_data_buffer;
+    uint shadow_settings_buffer;
+    uint selected_light;
     uint brdf_integration_map_index;
     uint jitter_texture_index;
 };

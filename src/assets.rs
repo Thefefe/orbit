@@ -179,7 +179,7 @@ pub struct AssetGraphData {
     pub materials_buffer: graphics::GraphBufferHandle,
 }
 
-pub struct GpuAssetStore {
+pub struct GpuAssets {
     pub vertex_buffer: graphics::Buffer,
     pub index_buffer: graphics::Buffer,
 
@@ -197,7 +197,7 @@ pub struct GpuAssetStore {
     pub material_indices: arena::Arena<MaterialData>,
 }
 
-impl GpuAssetStore {
+impl GpuAssets {
     pub fn new(context: &graphics::Context) -> Self {
         let vertex_buffer = context.create_buffer(
             "mesh_vertex_buffer",

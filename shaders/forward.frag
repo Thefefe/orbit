@@ -10,11 +10,11 @@ layout(push_constant, std430) uniform PushConstants {
     uint entity_buffer;
     uint draw_commands;
     uint materials_buffer;
-    uint directional_light_buffer;
     uint light_count;
     uint light_data_buffer;
-    uint irradiance_image_index;
-    uint prefiltered_env_map_index;
+    uint shadow_data_buffer;
+    uint shadow_settings_buffer;
+    uint selected_light;
     uint brdf_integration_map_index;
     uint jitter_texture_index;
 };
@@ -124,14 +124,14 @@ void penumbra_poisson(
     vec3 light_space_pos,
     out uint blockers_count,
     out float avg_blockers_depth,
-    float world_size_inv
+    float inv_world_size
 ) {
     avg_blockers_depth = 0.0f;
     blockers_count = 0;
 
     float blocker_search_radius =
-        GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.blocker_search_radius *
-        world_size_inv;
+        GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.blocker_search_radius *
+        inv_world_size;
 
     float s = sin(random_theta);
     float c = cos(random_theta);
@@ -139,7 +139,7 @@ void penumbra_poisson(
 
     for(int i = 0; i < PENUMBRA_SAMPLE_COUNT; i ++) {
         vec2 sample_uv = rot * poisson_offsets[i];
-        sample_uv = light_space_pos.xy + sample_uv * blocker_search_radius * world_size_inv;
+        sample_uv = light_space_pos.xy + sample_uv * blocker_search_radius * inv_world_size;
 
         float sample_depth = texture(
             sampler2D(GetTexture2D(shadow_map), GetSampler(SHADOW_DEPTH_SAMPLER)),
@@ -155,28 +155,27 @@ void penumbra_poisson(
     avg_blockers_depth /= float(blockers_count);
 }
 
-float pcf_poisson(uint shadow_map, vec4 clip_pos, float world_size) {
+float pcf_poisson(uint shadow_map, vec4 clip_pos, float inv_world_size, float light_size_uv) {
     clip_pos.xyz /= clip_pos.w;
     clip_pos.y *= -1.0;
     clip_pos.xy = (clip_pos.xy + 1.0) * 0.5;
 
     float sum = 0.0;
-    float world_size_inv = 1.0 / world_size;
     float random_theta = interleaved_gradient_noise(gl_FragCoord.xy) * 2 * PI;
     float s = sin(random_theta);
     float c = cos(random_theta);
     mat2 rot = mat2(c, s, -s, c);
 
-    float light_size_uv = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.light_size * world_size_inv;
+    // float light_size_uv = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.light_size * world_size_inv;
 
     uint blockers_count;
     float avg_blockers_depth;
-    penumbra_poisson(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth, world_size_inv);
+    penumbra_poisson(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth, inv_world_size);
     
     if (blockers_count == 0 && blockers_count == PENUMBRA_SAMPLE_COUNT) return blockers_count / PENUMBRA_SAMPLE_COUNT;
 
     float penumbra_scale = penumbra_size(1.0 - clip_pos.z, avg_blockers_depth) * light_size_uv;
-    float filter_radius = max(penumbra_scale * world_size_inv, 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0).x);
+    float filter_radius = max(penumbra_scale * inv_world_size, 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0).x);
 
     for (int i = 0; i < SHADOW_SAMPLE_COUNT; i += 1) {
         vec2 offset = rot * poisson_offsets[i];
@@ -360,139 +359,180 @@ void main() {
         return;
     }
 
-    uint cascade_index = 4;
-    vec4 cascade_map_coord = vec4(0.0);
-
-    for (uint i = 0; i < MAX_SHADOW_CASCADE_COUNT; i++) {
-        vec4 map_coords = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.projection_matrices[i] * vout.world_pos;
-        if (check_ndc_bounds(map_coords)) {
-            cascade_index = i;
-            cascade_map_coord = map_coords;
-            break;
-        }
-    }
-    
-    float shadow = 1.0;
-    if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
-        uint shadow_map = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.shadow_maps[cascade_index];
-
-        float n_dot_l = dot(normal, GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction);
-        float normal_bias_scale = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.normal_bias_scale;
-        
-        vec3 shadow_pos_world_space = vout.world_pos.xyz;
-
-        shadow_pos_world_space += shadow_normal_offset(n_dot_l, normal, shadow_map, normal_bias_scale);
-        
-        vec3 light_direction = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
-        float oriented_bias = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.oriented_bias;
-        shadow_pos_world_space += get_oriented_bias(normal, light_direction, oriented_bias, false) * light_direction;
-        
-        vec4 cascade_shadow_map_coords =
-            GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.projection_matrices[cascade_index] *
-            vec4(shadow_pos_world_space, 1.0);
-
-        float world_size = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.cascade_world_sizes[cascade_index];
-
-        // shadow = pcf_vogel(shadow_map, cascade_shadow_map_coords, world_size);
-        shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, world_size);
-        // shadow = pcf_branch(shadow_map, cascade_shadow_map_coords, world_size);
-        // shadow = texture(
-        //     sampler2DShadow(GetTexture2D(shadow_map), GetCompSampler(SHADOW_SAMPLER)),
-        //     cascade_shadow_map_coords.xyz
-        // );
-    }
-
     switch (render_mode) {
         case 0:
             vec3 view_direction = normalize(GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_pos - vout.world_pos.xyz);
             
-            vec3 Lo = vec3(0.0);
-            {
-                vec3 light_direction = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
-                vec3 light_color = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.color;
-                light_color *= GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.intensitiy;
-
-                Lo = calculate_light(
-                    view_direction,
-                    light_direction,
-                    light_color,
-                    1.0, // light_distance
-                    base_color.rgb,
-                    normal,
-                    metallic,
-                    roughness
-                ) * shadow;
-            }
-
+            vec3 light_sum = emissive;
 
             for (int i = 0; i < light_count; i++) {
-                LightData light = GetBuffer(LightBuffer, light_data_buffer).lights[i];
-                vec3 light_direction = light.position - vout.world_pos.xyz;
-                vec3 light_color = light.color * light.intensity;
+                vec3 light_color =
+                    GetBuffer(LightDataBuffer, light_data_buffer).lights[i].color *
+                    GetBuffer(LightDataBuffer, light_data_buffer).lights[i].intensity;
 
-                float light_distance = length(light_direction);
-                light_direction /= light_distance;
+                switch (GetBuffer(LightDataBuffer, light_data_buffer).lights[i].light_type) {
+                    case LIGHT_TYPE_SKY: {
+                        vec3 R = reflect(view_direction, normal);
+                        R.y *= -1.0;
+                        vec3 F_roughness = fresnel_schlick_roughness(
+                            max(dot(normal, view_direction), 0.0),
+                            mix(vec3(0.04), base_color.rgb, metallic),
+                            roughness
+                        );
 
-                Lo += calculate_light(
-                    view_direction,
-                    light_direction,
-                    light_color,
-                    light_distance,
-                    base_color.rgb,
-                    normal,
-                    metallic,
-                    roughness
-                );
+                        vec3 kS = F_roughness;
+                        vec3 kD = 1.0 - kS;
+                        kD *= 1.0 - metallic;	
+
+                        vec3 irradiance = texture(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[i].irradiance_map_index), normal).rgb;
+                        vec3 diffuse    = irradiance * base_color.rgb;
+
+                        float max_reflection_lod = textureQueryLevels(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[i].prefiltered_map_index)) - 1;
+                        float reflection_lod = roughness * max_reflection_lod;
+                        vec3 reflection_color = 
+                            textureLod(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[i].prefiltered_map_index), R, reflection_lod).rgb;
+                        vec2 env_brdf = texture(
+                            GetSampledTexture2D(brdf_integration_map_index),
+                            vec2(max(dot(normal, view_direction), 0.0), roughness)
+                        ).rg;
+                        vec3 specular = reflection_color * (kS * env_brdf.x + env_brdf.y);
+
+                        light_sum += (kD * diffuse + specular) * light_color * ao;
+                    } break;
+                    case LIGHT_TYPE_DIRECTIONAL: {
+                        uint shadow_index = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].shadow_data_index;
+                        float shadow = 1.0;
+                        if (shadow_index != TEXTURE_NONE) {
+                            uint cascade_index = 4;
+                            vec4 cascade_map_coord = vec4(0.0);
+
+
+                            for (uint i = 0; i < MAX_SHADOW_CASCADE_COUNT; i++) {
+                                vec4 map_coords = GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].light_projection_matrices[i] * vout.world_pos;
+                                if (check_ndc_bounds(map_coords)) {
+                                    cascade_index = i;
+                                    cascade_map_coord = map_coords;
+                                    break;
+                                }
+                            }
+                            
+                            if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
+                                uint shadow_map = GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_indices[cascade_index];
+
+                                float n_dot_l = dot(normal, GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction_or_position);
+                                float normal_bias_scale = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.normal_bias_scale;
+                                
+                                vec3 shadow_pos_world_space = vout.world_pos.xyz;
+
+                                shadow_pos_world_space += shadow_normal_offset(n_dot_l, normal, shadow_map, normal_bias_scale);
+                                
+                                vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction_or_position;
+                                float oriented_bias = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.oriented_bias;
+                                shadow_pos_world_space += get_oriented_bias(normal, light_direction, oriented_bias, false) * light_direction;
+                                
+                                vec4 cascade_shadow_map_coords =
+                                    GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].light_projection_matrices[cascade_index] *
+                                    vec4(shadow_pos_world_space, 1.0);
+
+                                float inv_world_size = 1.0 / GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_world_sizes[cascade_index];
+                                float uv_light_size = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].size * inv_world_size;
+
+                                shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, inv_world_size, uv_light_size);
+                            }
+                        }
+
+                        vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction_or_position;
+
+                        light_sum += calculate_light(
+                            view_direction,
+                            light_direction,
+                            light_color,
+                            1.0, // light_distance
+                            base_color.rgb,
+                            normal,
+                            metallic,
+                            roughness
+                        ) * shadow;
+                    } break;
+                    case LIGHT_TYPE_POINT: {
+                        vec3 light_direction = 
+                            GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction_or_position
+                            - vout.world_pos.xyz;
+
+                        float light_distance = length(light_direction);
+                        light_direction /= light_distance;
+
+                        light_sum += calculate_light(
+                            view_direction,
+                            light_direction,
+                            light_color,
+                            light_distance,
+                            base_color.rgb,
+                            normal,
+                            metallic,
+                            roughness
+                        );
+                    } break;
+                }
+
             }
 
-            vec3 R = reflect(view_direction, normal);
-            R.y *= -1.0;
-            vec3 F_roughness = fresnel_schlick_roughness(
-                max(dot(normal, view_direction), 0.0),
-                mix(vec3(0.04), base_color.rgb, metallic),
-                roughness
-            );
-
-            vec3 kS = F_roughness;
-            vec3 kD = 1.0 - kS;
-            kD *= 1.0 - metallic;	
-            
-            vec3 ambient = vec3(0.0);
-            if (prefiltered_env_map_index != TEXTURE_NONE && irradiance_image_index != TEXTURE_NONE) {
-                vec3 irradiance = texture(GetSampledTextureCube(irradiance_image_index), normal).rgb;
-                vec3 diffuse    = irradiance * base_color.rgb;
-
-                float max_reflection_lod = textureQueryLevels(GetSampledTextureCube(prefiltered_env_map_index)) - 1;
-                float reflection_lod = roughness * max_reflection_lod;
-                vec3 reflection_color = 
-                    textureLod(GetSampledTextureCube(prefiltered_env_map_index), R, reflection_lod).rgb;
-                vec2 env_brdf = texture(
-                    GetSampledTexture2D(brdf_integration_map_index),
-                    vec2(max(dot(normal, view_direction), 0.0), roughness)
-                ).rg;
-                vec3 specular = reflection_color * (kS * env_brdf.x + env_brdf.y);
-
-                ambient = (kD * diffuse + specular) * ao;
-            }
-
-            out_color.rgb = ambient + Lo + emissive;
+            out_color.rgb = light_sum;
             break;
         case 1: {
-            float shadow = max(shadow, 0.1);
+            if (selected_light == TEXTURE_NONE) {
+                out_color = vec4(vec3(0.25), 1.0);
+                return;
+            }
+            uint shadow_index = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].shadow_data_index;
+            float shadow = 1.0;
             vec3 cascade_color = vec3(0.25);
+            if (selected_light != TEXTURE_NONE) {
+                uint cascade_index = 4;
+                vec4 cascade_map_coord = vec4(0.0);
 
-            if (cascade_index < MAX_SHADOW_CASCADE_COUNT)
-                cascade_color = CASCADE_COLORS[cascade_index];
+                for (uint i = 0; i < MAX_SHADOW_CASCADE_COUNT; i++) {
+                    vec4 map_coords = GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].light_projection_matrices[i] * vout.world_pos;
+                    if (check_ndc_bounds(map_coords)) {
+                        cascade_index = i;
+                        cascade_map_coord = map_coords;
+                        break;
+                    }
+                }
+                
+                if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
+                    uint shadow_map = GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_indices[cascade_index];
+
+                    float n_dot_l = dot(normal, GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction_or_position);
+                    float normal_bias_scale = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.normal_bias_scale;
+                    
+                    vec3 shadow_pos_world_space = vout.world_pos.xyz;
+
+                    shadow_pos_world_space += shadow_normal_offset(n_dot_l, normal, shadow_map, normal_bias_scale);
+                    
+                    vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction_or_position;
+                    float oriented_bias = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.oriented_bias;
+                    shadow_pos_world_space += get_oriented_bias(normal, light_direction, oriented_bias, false) * light_direction;
+                    
+                    vec4 cascade_shadow_map_coords =
+                        GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].light_projection_matrices[cascade_index] *
+                        vec4(shadow_pos_world_space, 1.0);
+
+                    float inv_world_size = 1.0 / GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_world_sizes[cascade_index];
+                    float uv_light_size = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].size * inv_world_size;
+
+                    shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, inv_world_size, uv_light_size);
+                }
+
+                if (cascade_index < MAX_SHADOW_CASCADE_COUNT) cascade_color = CASCADE_COLORS[cascade_index];
+            }
             
-            vec3 light_direction = GetBuffer(DirectionalLightBuffer, directional_light_buffer).data.direction;
-
-            // out_color = vec4(cascade_color * base_color.rgb * shadow, 1.0);
-            out_color.xyz = cascade_color * debug_light(vout.normal, light_direction, shadow);
+            vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction_or_position;
+            out_color.xyz = cascade_color * debug_light(vout.normal, light_direction, max(shadow, 0.2));
         } break;
         case 2:
-            // out_color = vec4(normal * 0.5 + 0.5, 1.0);
-            // out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
-            out_color = vec4(vec3(shadow), 1.0);
+            out_color = vec4(normal * 0.5 + 0.5, 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 3: 
             out_color = vec4(vec3(metallic), 1.0);

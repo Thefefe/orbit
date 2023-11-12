@@ -3,7 +3,7 @@
 use std::f32::consts::PI;
 
 use ash::vk;
-use assets::GpuAssetStore;
+use assets::GpuAssets;
 use gltf_loader::load_gltf;
 
 use time::Time;
@@ -34,7 +34,7 @@ mod egui_renderer;
 
 use egui_renderer::EguiRenderer;
 use input::Input;
-use scene::{SceneData, Transform};
+use scene::{EntityData, Light, LightParams, SceneData, Transform};
 
 use passes::{
     debug_renderer::DebugRenderer,
@@ -84,6 +84,12 @@ impl CameraController {
             pitch: 0.0,
             movement_speed,
         }
+    }
+
+    pub fn set_look(&mut self, transform: &Transform) {
+        let (pitch, yaw, _) = transform.orientation.to_euler(glam::EulerRot::YXZ);
+        self.pitch = pitch;
+        self.yaw = f32::clamp(yaw, -PI / 2.0, PI / 2.0);
     }
 
     pub fn update_look(&mut self, delta: Vec2, transform: &mut Transform) {
@@ -192,7 +198,6 @@ pub struct Settings {
     pub shadow_settings: ShadowSettings,
 
     pub camera_debug_settings: CameraDebugSettings,
-    pub shadow_debug_settings: ShadowDebugSettings,
 }
 
 impl Default for Settings {
@@ -203,7 +208,6 @@ impl Default for Settings {
             shadow_settings: Default::default(),
 
             camera_debug_settings: Default::default(),
-            shadow_debug_settings: Default::default(),
         }
     }
 }
@@ -241,60 +245,6 @@ impl Settings {
         ui.heading("shadow_settings");
 
         self.shadow_settings.edit(ui);
-    }
-
-    fn edit_shadow_debug_settings(
-        &mut self,
-        ui: &mut egui::Ui,
-        shadow_maps: [graphics::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT],
-    ) {
-        ui.checkbox(
-            &mut self.shadow_debug_settings.frustum_culling,
-            "shadow frustum culling",
-        );
-        ui.checkbox(
-            &mut self.shadow_debug_settings.occlusion_culling,
-            "shadow occlusion culling",
-        );
-        let shadow_volume_culling_possible =
-            self.shadow_debug_settings.occlusion_culling && self.camera_debug_settings.occlusion_culling;
-        ui.add_enabled(
-            shadow_volume_culling_possible,
-            egui::Checkbox::new(
-                &mut self.shadow_debug_settings.shadow_volume_culling,
-                "shadow volume culling (WIP)",
-            ),
-        );
-
-        ui.checkbox(
-            &mut self.shadow_debug_settings.show_cascade_view_frustum,
-            "show cascade view frustum",
-        );
-        ui.checkbox(
-            &mut self.shadow_debug_settings.show_cascade_light_frustum,
-            "show cascade light frustum",
-        );
-        ui.checkbox(
-            &mut self.shadow_debug_settings.show_cascade_light_frustum_planes,
-            "show cascade light frustum planes",
-        );
-        ui.checkbox(
-            &mut self.shadow_debug_settings.show_cascade_screen_space_aabb,
-            "show cascade screen space aabb",
-        );
-
-        ui.horizontal(|ui| {
-            ui.label("selected_cascade");
-            ui.add(egui::Slider::new(
-                &mut self.shadow_debug_settings.selected_cascade,
-                0..=MAX_SHADOW_CASCADE_COUNT - 1,
-            ));
-        });
-
-        ui.image(egui::ImageSource::Texture(egui::load::SizedTexture {
-            id: shadow_maps[self.shadow_debug_settings.selected_cascade].into(),
-            size: egui::Vec2::new(250.0, 250.0),
-        }));
     }
 }
 
@@ -367,35 +317,8 @@ impl CameraDebugSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ShadowDebugSettings {
-    pub frustum_culling: bool,
-    pub occlusion_culling: bool,
-    pub shadow_volume_culling: bool,
-    pub selected_cascade: usize,
-    pub show_cascade_view_frustum: bool,
-    pub show_cascade_light_frustum: bool,
-    pub show_cascade_light_frustum_planes: bool,
-    pub show_cascade_screen_space_aabb: bool,
-}
-
-impl Default for ShadowDebugSettings {
-    fn default() -> Self {
-        Self {
-            frustum_culling: true,
-            occlusion_culling: true,
-            shadow_volume_culling: false,
-            show_cascade_view_frustum: false,
-            show_cascade_light_frustum: false,
-            show_cascade_light_frustum_planes: false,
-            show_cascade_screen_space_aabb: false,
-            selected_cascade: 0,
-        }
-    }
-}
-
 struct App {
-    gpu_assets: GpuAssetStore,
+    gpu_assets: GpuAssets,
     scene: SceneData,
 
     main_color_image: graphics::Image,
@@ -413,8 +336,8 @@ struct App {
     camera: Camera,
     camera_controller: CameraController,
     frozen_camera: Camera,
-    sun_light: Camera,
-    light_dir_controller: CameraController,
+    sun_light_entity_index: usize,
+    entity_dir_controller: CameraController,
 
     camera_exposure: f32,
     light_color: Vec3,
@@ -442,8 +365,66 @@ impl App {
         gltf_path: Option<std::path::PathBuf>,
         env_map_path: Option<std::path::PathBuf>,
     ) -> Self {
-        let mut gpu_assets = GpuAssetStore::new(context);
+        let mut gpu_assets = GpuAssets::new(context);
         let mut scene = SceneData::new(context);
+
+        let settings = Settings::default();
+        let mut shadow_renderer = ShadowRenderer::new(context, settings.shadow_settings);
+
+        let sun_light_entity_index = scene.add_entity(EntityData {
+            name: Some("sun".into()),
+            light: Some(Light {
+                color: vec3(1.0, 1.0, 1.0),
+                intensity: 8.0,
+                params: LightParams::Directional { size: 0.6 },
+                cast_shadows: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let environment_map = if let Some(env_map_path) = env_map_path {
+            let equirectangular_environment_image = {
+                let (image_binary, image_format) = gltf_loader::load_image_data(&env_map_path).unwrap();
+                let image = gltf_loader::load_image(
+                    context,
+                    "environment_map".into(),
+                    &image_binary,
+                    image_format,
+                    true,
+                    true,
+                    graphics::SamplerKind::LinearRepeat,
+                );
+
+                image
+            };
+
+            Some(EnvironmentMap::new(
+                context,
+                "environment_map".into(),
+                1024,
+                &equirectangular_environment_image,
+            ))
+        } else {
+            None
+        };
+
+        if let Some(environment_map) = environment_map.as_ref() {
+            scene.add_entity(EntityData {
+                name: Some("sky".into()),
+                light: Some(Light {
+                    color: vec3(1.0, 1.0, 1.0),
+                    intensity: 0.8,
+                    params: LightParams::Sky {
+                        irradiance: environment_map.irradiance.clone(),
+                        prefiltered: environment_map.prefiltered.clone(),
+                    },
+                    cast_shadows: false,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
 
         if let Some(gltf_path) = gltf_path {
             load_gltf(&gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
@@ -490,34 +471,7 @@ impl App {
         //     scene.add_entity(entity);
         // }
 
-        scene.update_instances(context);
-        scene.update_submeshes(context, &gpu_assets);
-        scene.update_lights(context);
-        let environment_map = if let Some(env_map_path) = env_map_path {
-            let equirectangular_environment_image = {
-                let (image_binary, image_format) = gltf_loader::load_image_data(&env_map_path).unwrap();
-                let image = gltf_loader::load_image(
-                    context,
-                    "environment_map".into(),
-                    &image_binary,
-                    image_format,
-                    true,
-                    true,
-                    graphics::SamplerKind::LinearRepeat,
-                );
-
-                image
-            };
-
-            Some(EnvironmentMap::new(
-                context,
-                "environment_map".into(),
-                1024,
-                &equirectangular_environment_image,
-            ))
-        } else {
-            None
-        };
+        scene.update_scene(context, &mut shadow_renderer, &gpu_assets);
 
         let screen_extent = context.swapchain.extent();
 
@@ -565,8 +519,6 @@ impl App {
             aspect_ratio,
         };
 
-        let settings = Settings::default();
-
         context.swapchain.set_present_mode(settings.present_mode);
 
         Self {
@@ -579,7 +531,7 @@ impl App {
             main_depth_resolve_image: None,
 
             forward_renderer: ForwardRenderer::new(context),
-            shadow_renderer: ShadowRenderer::new(context, settings.shadow_settings),
+            shadow_renderer,
             debug_renderer: DebugRenderer::new(context),
             settings,
 
@@ -588,16 +540,8 @@ impl App {
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
             frozen_camera: camera,
-            sun_light: Camera {
-                transform: Transform::default(),
-                projection: Projection::Orthographic {
-                    half_width: 20.0,
-                    near_clip: -20.0,
-                    far_clip: 20.0,
-                },
-                aspect_ratio: 1.0,
-            },
-            light_dir_controller: CameraController::new(1.0, 0.0003),
+            sun_light_entity_index,
+            entity_dir_controller: CameraController::new(1.0, 0.0003),
 
             camera_exposure: 1.0,
             light_color: Vec3::splat(1.0),
@@ -632,19 +576,26 @@ impl App {
             self.camera_controller.update_look(input.mouse_delta(), &mut self.camera.transform);
         }
         self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
+        
+        if let Some(entity_index) = self.selected_entity_index {
+            const PIS_IN_180: f32 = 57.2957795130823208767981548141051703_f32;
+            let entity = &mut self.scene.entities[entity_index];
 
-        if input.mouse_held(MouseButton::Left) {
-            let mut delta = input.mouse_delta();
-
-            if input.key_held(KeyCode::LShift) {
-                delta *= 8.0;
+            if input.mouse_held(MouseButton::Left) {
+                let mut delta = input.mouse_delta();
+    
+                if input.key_held(KeyCode::LShift) {
+                    delta *= 8.0;
+                }
+    
+                if input.key_held(KeyCode::LControl) {
+                    delta /= 8.0;
+                }
+    
+                self.entity_dir_controller.update_look(delta, &mut entity.transform);
+                self.selected_entity_euler_coords.y = self.entity_dir_controller.pitch * PIS_IN_180;
+                self.selected_entity_euler_coords.x = self.entity_dir_controller.yaw * PIS_IN_180;
             }
-
-            if input.key_held(KeyCode::LControl) {
-                delta /= 8.0;
-            }
-
-            self.light_dir_controller.update_look(delta, &mut self.sun_light.transform);
         }
 
         if input.key_pressed(KeyCode::F1) {
@@ -730,6 +681,15 @@ impl App {
                                     let is_entity_selected = Some(entity_index) == self.selected_entity_index;
                                     if ui.selectable_label(is_entity_selected, &header).clicked() {
                                         self.selected_entity_index = Some(entity_index);
+                                        if self.selected_entity_euler_index != entity_index {
+                                            const PIS_IN_180: f32 = 57.2957795130823208767981548141051703_f32;
+                                            self.selected_entity_euler_index = entity_index;
+                                            let (euler_x, euler_y, euler_z) =
+                                                entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
+                            
+                                            self.selected_entity_euler_coords = vec3(euler_y, euler_x, euler_z) * PIS_IN_180;
+                                            self.entity_dir_controller.set_look(&entity.transform);
+                                        }
                                     }
                                 }
                             });
@@ -743,23 +703,25 @@ impl App {
                             ui.heading("Transform");
                             drag_vec3(ui, "position", &mut entity.transform.position, 0.001);
 
-                            if self.selected_entity_euler_index != entity_index {
-                                const PIS_IN_180: f32 = 57.2957795130823208767981548141051703_f32;
-                                self.selected_entity_euler_index = entity_index;
-                                let (euler_x, euler_y, euler_z) = entity.transform.orientation
-                                    .to_euler(glam::EulerRot::YXZ);
-
-                                self.selected_entity_euler_coords = vec3(euler_y, euler_x, euler_z) * PIS_IN_180;
-                            }
                             drag_vec3(ui, "orientation", &mut self.selected_entity_euler_coords, 0.5);
                             let euler_radian = self.selected_entity_euler_coords * (PI / 180.0);
-                            entity.transform.orientation = Quat::from_euler(
-                                glam::EulerRot::YXZ,
-                                euler_radian.y,
-                                euler_radian.x,
-                                euler_radian.z
-                            );
+                            entity.transform.orientation =
+                                Quat::from_euler(glam::EulerRot::YXZ, euler_radian.y, euler_radian.x, euler_radian.z);
                             drag_vec3(ui, "scale", &mut entity.transform.scale, 0.001);
+
+                            let mut has_light_component = entity.light.is_some();
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Checkbox::without_text(&mut has_light_component));
+                                ui.heading("Light");
+                            });
+
+                            if has_light_component != entity.light.is_some() {
+                                entity.light = has_light_component.then(Light::default);
+                            }
+
+                            if let Some(light) = &mut entity.light {
+                                light.edit(ui);
+                            }
                         } else {
                             ui.label("no entity selected");
                         }
@@ -816,12 +778,10 @@ impl App {
     fn render(&mut self, context: &mut graphics::Context, egui_ctx: &egui::Context) {
         puffin::profile_function!();
 
-        let selected_entity_position = self.selected_entity_index
-            .map(|entity_index| self.scene.entities[entity_index].transform.position);
+        let selected_entity_position =
+            self.selected_entity_index.map(|entity_index| self.scene.entities[entity_index].transform.position);
 
-        self.scene.update_instances(context);
-        self.scene.update_lights(context);
-        self.scene.update_submeshes(context, &self.gpu_assets);
+        self.scene.update_scene(context, &mut self.shadow_renderer, &self.gpu_assets);
 
         let assets = self.gpu_assets.import_to_graph(context);
         let scene = self.scene.import_to_graph(context);
@@ -923,12 +883,8 @@ impl App {
 
         let camera_depth_pyramid = self.forward_renderer.depth_pyramid.get_current(context);
 
-        let directional_light = self.shadow_renderer.render_directional_light(
+        self.shadow_renderer.render_shadows(
             context,
-            "sun".into(),
-            self.sun_light.transform.orientation,
-            self.light_color,
-            self.light_intensitiy,
             &self.frozen_camera,
             camera_depth_pyramid,
             &self.gpu_assets,
@@ -937,23 +893,37 @@ impl App {
             &mut self.debug_renderer,
         );
 
+        let skybox = self.environment_map.as_ref().map(|e| context.import(&e.skybox));
+        
+        let selected_light = self.selected_entity_index
+            .and_then(|i| self.scene.entities[i].light.as_ref().map(|l| l._light_index))
+            .flatten();
+        let selected_shadow = selected_light.and_then(|i| {
+            let shadow_index = self.scene.light_data_cache[i].shadow_data_index;
+            if shadow_index == u32::MAX { return None };
+            Some(shadow_index as usize - context.frame_index() * ShadowRenderer::MAX_SHADOW_COMMANDS)
+        });
+        self.shadow_renderer.debug_settings.selected_shadow = selected_shadow;
+
         self.forward_renderer.render(
             context,
             &self.settings,
-            assets,
-            scene,
-            self.environment_map.as_ref(),
-            directional_light,
+            &self.gpu_assets,
+            &self.scene,
+            skybox,
+            &self.shadow_renderer,
             &target_attachments,
             &self.camera,
             &self.frozen_camera,
+            selected_light
         );
 
         egui::Window::new("shadow debug settings")
             .open(&mut self.open_shadow_debug_settings)
             .show(egui_ctx, |ui| {
-                self.settings.edit_shadow_debug_settings(ui, directional_light.shadow_maps);
+                self.shadow_renderer.edit_shadow_debug_settings(ui, &self.settings.camera_debug_settings);
             });
+
 
         let show_bounding_boxes = self.settings.camera_debug_settings.show_bounding_boxes;
         let show_bounding_spheres = self.settings.camera_debug_settings.show_bounding_spheres;

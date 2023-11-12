@@ -15,7 +15,7 @@ use std::{
 
 use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
-    AllocatorDebugSettings, AllocationSizes,
+    AllocationSizes, AllocatorDebugSettings,
 };
 
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};

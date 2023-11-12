@@ -8,15 +8,39 @@ struct GlobalData {
     float elapsed_time;
 };
 
-struct DirectionalLightData {
-    mat4 projection_matrices[MAX_SHADOW_CASCADE_COUNT];
-    uint shadow_maps[MAX_SHADOW_CASCADE_COUNT];
-    float cascade_world_sizes[MAX_SHADOW_CASCADE_COUNT];
-    vec4 cascade_distances;
-    vec3 color;
-    float intensitiy;
-    vec3 direction;
-    float light_size;
+// struct DirectionalLightData {
+//     mat4 projection_matrices[MAX_SHADOW_CASCADE_COUNT];
+//     uint shadow_maps[MAX_SHADOW_CASCADE_COUNT];
+//     float cascade_world_sizes[MAX_SHADOW_CASCADE_COUNT];
+//     vec4 cascade_distances;
+//     vec3 color;
+//     float intensitiy;
+//     vec3 direction;
+//     float light_size;
+//     float blocker_search_radius;
+//     float normal_bias_scale;
+//     float oriented_bias;
+//     uint _padding;
+// };
+
+struct LightData {
+    vec3  color;
+    float intensity;
+    vec3  direction_or_position;
+    float size;
+    uint  light_type;
+    uint  shadow_data_index;
+    uint  irradiance_map_index;
+    uint  prefiltered_map_index;
+};
+
+struct ShadowData {
+    mat4 light_projection_matrices[MAX_SHADOW_CASCADE_COUNT];
+    vec4 shadow_map_world_sizes;
+    uint shadow_map_indices[MAX_SHADOW_CASCADE_COUNT];
+};
+
+struct ShadowSettings {
     float blocker_search_radius;
     float normal_bias_scale;
     float oriented_bias;
@@ -116,13 +140,6 @@ struct CullInfo {
     float z_far;
 };
 
-struct LightData {
-    vec3 color;
-    float intensity;
-    vec3 position;
-    float size;
-};
-
 struct EguiVertex {
     float position[2];
     float uv_coord[2];
@@ -159,8 +176,20 @@ RegisterBuffer(DebugLineVertexBuffer, {
     DebugLineVertex vertices[];
 });
 
-RegisterBuffer(LightBuffer, {
+#define LIGHT_TYPE_SKY 0
+#define LIGHT_TYPE_DIRECTIONAL 1
+#define LIGHT_TYPE_POINT 2
+
+RegisterBuffer(LightDataBuffer, {
 	LightData lights[];
+});
+
+RegisterBuffer(ShadowDataBuffer, {
+	ShadowData shadows[];
+});
+
+RegisterBuffer(ShadowSettingsBuffer, {
+	ShadowSettings data;
 });
 
 RegisterBuffer(SubmeshBuffer, {
@@ -187,10 +216,6 @@ RegisterBuffer(EntityBuffer, {
 
 RegisterBuffer(PerFrameBuffer, {
     PerFrameData data;
-});
-
-RegisterBuffer(DirectionalLightBuffer, {
-    DirectionalLightData data;
 });
 
 RegisterBuffer(MaterialsBuffer, {

@@ -2,15 +2,17 @@ use std::borrow::Cow;
 
 use ash::vk;
 
+use bytemuck::Zeroable;
 use glam::Vec2Swizzles;
 #[allow(unused_imports)]
 use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 use crate::{
-    assets::{AssetGraphData, GpuAssetStore},
-    graphics, math,
+    assets::{AssetGraphData, GpuAssets},
+    graphics::{self, FRAME_COUNT},
+    math,
     scene::{GpuMeshDrawCommand, SceneData, SceneGraphData},
-    Camera, Projection, Settings, MAX_DRAW_COUNT, MAX_SHADOW_CASCADE_COUNT,
+    Camera, CameraDebugSettings, Projection, Settings, MAX_DRAW_COUNT, MAX_SHADOW_CASCADE_COUNT,
 };
 
 use super::{
@@ -35,6 +37,14 @@ struct GpuDirectionalLight {
     normal_bias_scale: f32,
     oriented_bias: f32,
     _padding: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuCascadedShadowData {
+    light_projection_matrix: [Mat4; MAX_SHADOW_CASCADE_COUNT],
+    shadow_map_world_sizes: [f32; MAX_SHADOW_CASCADE_COUNT],
+    shadow_map_indices: [u32; MAX_SHADOW_CASCADE_COUNT],
 }
 
 #[derive(Clone, Copy)]
@@ -131,15 +141,94 @@ impl ShadowSettings {
             ui.add(egui::Slider::new(&mut self.cascade_split_lambda, 0.0..=1.0));
         });
     }
+
+    fn to_gpu_data(&self) -> GpuShadowSettings {
+        GpuShadowSettings {
+            blocker_search_radius: self.blocker_search_radius,
+            normal_bias_scale: self.depth_bias_normal_scale,
+            oriented_bias: -self.depth_bias_oriented,
+            _padding: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ShadowDebugSettings {
+    pub frustum_culling: bool,
+    pub occlusion_culling: bool,
+    pub shadow_volume_culling: bool,
+
+    pub selected_shadow: Option<usize>,
+    pub selected_cascade: usize,
+    pub show_cascade_view_frustum: bool,
+    pub show_cascade_light_frustum: bool,
+    pub show_cascade_light_frustum_planes: bool,
+    pub show_cascade_screen_space_aabb: bool,
+}
+
+impl Default for ShadowDebugSettings {
+    fn default() -> Self {
+        Self {
+            frustum_culling: true,
+            occlusion_culling: true,
+            shadow_volume_culling: false,
+
+            selected_shadow: None,
+            selected_cascade: 0,
+            show_cascade_view_frustum: false,
+            show_cascade_light_frustum: false,
+            show_cascade_light_frustum_planes: false,
+            show_cascade_screen_space_aabb: false,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct GpuShadowSettings {
+    blocker_search_radius: f32,
+    normal_bias_scale: f32,
+    oriented_bias: f32,
+    _padding: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ShadowKind {
+    Directional { orientation: Quat },
+}
+
+#[derive(Debug, Clone)]
+pub struct ShadowCommand {
+    pub name: Cow<'static, str>,
+    pub kind: ShadowKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RenderedShadow {
+    Cascaded([graphics::GraphImageHandle; MAX_SHADOW_CASCADE_COUNT]),
+}
+
+impl RenderedShadow {
+    pub fn shadow_maps(&self) -> &[graphics::GraphImageHandle] {
+        match self {
+            RenderedShadow::Cascaded(cascades) => cascades,
+        }
+    }
 }
 
 pub struct ShadowRenderer {
     pub settings: ShadowSettings,
+    pub debug_settings: ShadowDebugSettings,
     pub shadow_map_depth_pyramids: [DepthPyramid; MAX_SHADOW_CASCADE_COUNT],
     pub shadow_map_visiblity_buffers: [graphics::Buffer; MAX_SHADOW_CASCADE_COUNT],
+    pub shadow_data_buffer: graphics::Buffer,
+    shadow_commands: Vec<ShadowCommand>,
+    pub rendered_shadows: Vec<RenderedShadow>,
 }
 
 impl ShadowRenderer {
+    pub const MAX_SHADOW_COMMANDS: usize = 256;
+
     pub fn new(context: &graphics::Context, settings: ShadowSettings) -> Self {
         let shadow_size = [settings.shadow_resolution; 2];
         let shadow_map_depth_pyramids = std::array::from_fn(|i| {
@@ -157,6 +246,15 @@ impl ShadowRenderer {
             )
         });
 
+        let shadow_data_buffer = context.create_buffer(
+            "shadow_data_buffer",
+            &graphics::BufferDesc {
+                size: Self::MAX_SHADOW_COMMANDS * FRAME_COUNT * std::mem::size_of::<GpuCascadedShadowData>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: gpu_allocator::MemoryLocation::GpuOnly,
+            },
+        );
+
         context.record_and_submit(|cmd| {
             for visibility_buffer in shadow_map_visiblity_buffers.iter() {
                 cmd.fill_buffer(visibility_buffer, 0, vk::WHOLE_SIZE, 0);
@@ -165,8 +263,12 @@ impl ShadowRenderer {
 
         Self {
             settings,
+            debug_settings: ShadowDebugSettings::default(),
             shadow_map_depth_pyramids,
             shadow_map_visiblity_buffers,
+            shadow_data_buffer,
+            shadow_commands: Vec::new(),
+            rendered_shadows: Vec::new(),
         }
     }
 
@@ -175,6 +277,125 @@ impl ShadowRenderer {
         for depth_pyramid in self.shadow_map_depth_pyramids.iter_mut() {
             depth_pyramid.resize([self.settings.shadow_resolution; 2]);
         }
+    }
+
+    pub fn edit_shadow_debug_settings(
+        &mut self,
+        ui: &mut egui::Ui,
+        camera_debug_settings: &CameraDebugSettings,
+    ) {
+        ui.checkbox(&mut self.debug_settings.frustum_culling, "shadow frustum culling");
+        ui.checkbox(&mut self.debug_settings.occlusion_culling, "shadow occlusion culling");
+        let shadow_volume_culling_possible = self.debug_settings.occlusion_culling && camera_debug_settings.occlusion_culling;
+        ui.add_enabled(
+            shadow_volume_culling_possible,
+            egui::Checkbox::new(&mut self.debug_settings.shadow_volume_culling, "shadow volume culling (WIP)"),
+        );
+
+        ui.heading("Selected shadow");
+
+        if let Some(shadow_index) = self.debug_settings.selected_shadow {
+            match &self.rendered_shadows[shadow_index] {
+                RenderedShadow::Cascaded(shadow_maps) => {
+                    ui.checkbox(&mut self.debug_settings.show_cascade_view_frustum, "show cascade view frustum");
+                    ui.checkbox(&mut self.debug_settings.show_cascade_light_frustum, "show cascade light frustum");
+                    ui.checkbox(
+                        &mut self.debug_settings.show_cascade_light_frustum_planes,
+                        "show cascade light frustum planes",
+                    );
+                    ui.checkbox(
+                        &mut self.debug_settings.show_cascade_screen_space_aabb,
+                        "show cascade screen space aabb",
+                    );
+
+                    ui.horizontal(|ui| {
+                        ui.label("selected_cascade");
+                        ui.add(egui::Slider::new(
+                            &mut self.debug_settings.selected_cascade,
+                            0..=MAX_SHADOW_CASCADE_COUNT - 1,
+                        ));
+                    });
+
+                    ui.image(egui::ImageSource::Texture(egui::load::SizedTexture {
+                        id: shadow_maps[self.debug_settings.selected_cascade].into(),
+                        size: egui::Vec2::new(250.0, 250.0),
+                    }));
+                }
+            }
+        } else {
+            ui.label("no shadow selected");
+        }
+    }
+
+    pub fn gpu_shadow_settings(&self, context: &mut graphics::Context) -> graphics::GraphBufferHandle {
+        let data = self.settings.to_gpu_data();
+        context.transient_storage_data("shadow_settings_buffer", bytemuck::bytes_of(&data))
+    }
+
+    pub fn clear_shadow_commands(&mut self) {
+        self.shadow_commands.clear();
+    }
+
+    pub fn add_shadow(&mut self, shadow_command: ShadowCommand) -> usize {
+        let index = self.shadow_commands.len();
+        self.shadow_commands.push(shadow_command);
+        index
+    }
+
+    pub fn render_shadows(
+        &mut self,
+        context: &mut graphics::Context,
+
+        camera: &Camera,
+        camera_depth_pyramid: graphics::GraphImageHandle,
+
+        assets: &GpuAssets,
+        scene: &SceneData,
+
+        settings: &Settings,
+        debug_renderer: &mut DebugRenderer,
+    ) {
+        let mut shadow_datas = Vec::with_capacity(self.shadow_commands.len());
+        let mut shadow_commands = Vec::new();
+
+        self.rendered_shadows.clear();
+
+        std::mem::swap(&mut shadow_commands, &mut self.shadow_commands);
+
+        for (shadow_index, shadow_command) in shadow_commands.iter().enumerate() {
+            let mut shadow_data = GpuCascadedShadowData::zeroed();
+            match shadow_command.kind {
+                ShadowKind::Directional { orientation } => {
+                    self.render_cascaded_shadow(
+                        context,
+                        &mut shadow_data,
+                        shadow_command.name.clone(),
+                        shadow_index,
+                        orientation,
+                        camera,
+                        camera_depth_pyramid,
+                        assets,
+                        scene,
+                        settings,
+                        debug_renderer,
+                    );
+                }
+            };
+
+            shadow_datas.push(shadow_data);
+        }
+
+        std::mem::swap(&mut shadow_commands, &mut self.shadow_commands);
+
+        context.queue_write_buffer(
+            &self.shadow_data_buffer,
+            Self::MAX_SHADOW_COMMANDS * context.frame_index() * std::mem::size_of::<GpuCascadedShadowData>(),
+            bytemuck::cast_slice(shadow_datas.as_slice()),
+        );
+    }
+
+    pub fn rendered_shadow_maps(&self) -> impl Iterator<Item = graphics::GraphImageHandle> + '_ {
+        self.rendered_shadows.iter().map(|r| r.shadow_maps().iter().copied()).flatten()
     }
 
     pub fn render_shadow_map(
@@ -190,7 +411,7 @@ impl ShadowRenderer {
 
         assets: AssetGraphData,
         scene: SceneGraphData,
-    ) -> graphics::GraphImageHandle {
+    ) {
         let settings = self.settings;
 
         let mut pipeline_desc = graphics::RasterPipelineDesc::builder()
@@ -281,61 +502,46 @@ impl ShadowRenderer {
 
                 cmd.end_rendering();
             });
-
-        shadow_map
     }
 
-    pub fn render_directional_light(
+    pub fn render_cascaded_shadow(
         &mut self,
         context: &mut graphics::Context,
+        shadow_data: &mut GpuCascadedShadowData,
         name: Cow<'static, str>,
+        shadow_index: usize,
 
         direction: Quat,
-        light_color: Vec3,
-        intensity: f32,
 
         camera: &Camera,
         camera_depth_pyramid: graphics::GraphImageHandle,
 
-        assets: &GpuAssetStore,
+        assets: &GpuAssets,
         scene: &SceneData,
 
         settings: &Settings,
         debug_renderer: &mut DebugRenderer,
-    ) -> DirectionalLightGraphData {
+    ) {
         let imported_assets = assets.import_to_graph(context);
         let imported_scene = scene.import_to_graph(context);
 
-        let shadow_settings = self.settings;
-        let debug_settings = &settings.shadow_debug_settings;
-
-        let light_direction = -direction.mul_vec3(vec3(0.0, 0.0, -1.0));
         let inv_light_direction = direction.inverse();
 
-        let mut directional_light_data = GpuDirectionalLight {
-            projection_matrices: bytemuck::Zeroable::zeroed(),
-            shadow_maps: bytemuck::Zeroable::zeroed(),
-            cascade_world_sizes: bytemuck::Zeroable::zeroed(),
-            cascade_distances: Vec4::ZERO,
-            color: light_color,
-            intensity,
-            direction: light_direction,
-            light_size: self.settings.light_size,
-            blocker_search_radius: self.settings.blocker_search_radius,
-            normal_bias_scale: self.settings.depth_bias_normal_scale,
-            oriented_bias: -self.settings.depth_bias_oriented,
-            _padding: 0,
+        *shadow_data = GpuCascadedShadowData {
+            light_projection_matrix: bytemuck::Zeroable::zeroed(),
+            shadow_map_indices: bytemuck::Zeroable::zeroed(),
+            shadow_map_world_sizes: bytemuck::Zeroable::zeroed(),
         };
 
         let mut shadow_maps = [graphics::GraphHandle::uninit(); MAX_SHADOW_CASCADE_COUNT];
 
-        let lambda = shadow_settings.cascade_split_lambda;
+        let lambda = self.settings.cascade_split_lambda;
 
         for cascade_index in 0..MAX_SHADOW_CASCADE_COUNT {
             let Projection::Perspective { fov, near_clip } = camera.projection else {
                 todo!()
             };
-            let far_clip = shadow_settings.max_shadow_distance;
+            let far_clip = self.settings.max_shadow_distance;
 
             let near_split_ratio = cascade_index as f32 / MAX_SHADOW_CASCADE_COUNT as f32;
             let far_split_ratio = (cascade_index + 1) as f32 / MAX_SHADOW_CASCADE_COUNT as f32;
@@ -343,7 +549,7 @@ impl ShadowRenderer {
             let near = math::frustum_split(near_clip, far_clip, lambda, near_split_ratio);
             let far = math::frustum_split(near_clip, far_clip, lambda, far_split_ratio);
 
-            directional_light_data.cascade_distances[cascade_index] = far;
+            // cascaded_shadow_data.cascade_distances[cascade_index] = far;
 
             let light_matrix = Mat4::from_quat(inv_light_direction);
             let view_to_world_matrix = camera.transform.compute_matrix();
@@ -374,7 +580,8 @@ impl ShadowRenderer {
                 );
             }
             let radius = radius_sqr.sqrt();
-            directional_light_data.cascade_world_sizes[cascade_index] = radius * 2.0;
+            // cascaded_shadow_data.cascade_world_sizes[cascade_index] = radius * 2.0;
+            shadow_data.shadow_map_world_sizes[cascade_index] = radius * 2.0;
 
             // offsets the whole projection to minimize the area not visible by the camera
             // this one isn't perfect but close enough
@@ -392,7 +599,7 @@ impl ShadowRenderer {
                 offset
             };
 
-            let texel_size_vs = radius * 2.0 / shadow_settings.shadow_resolution as f32;
+            let texel_size_vs = radius * 2.0 / self.settings.shadow_resolution as f32;
 
             // modifications:
             //  - aligned to view space texel sizes
@@ -422,62 +629,68 @@ impl ShadowRenderer {
 
             let light_projection_matrix = projection_matrix * light_matrix;
 
-            if debug_settings.show_cascade_view_frustum && debug_settings.selected_cascade == cascade_index {
-                let subfrustum_corners_w =
-                    math::perspective_corners(fov, camera.aspect_ratio, near, far).map(|v| view_to_world_matrix * v);
-                debug_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
-            }
+            let show_debug_stuff =
+                self.debug_settings.selected_shadow == Some(shadow_index) &&
+                self.debug_settings.selected_cascade == cascade_index;
 
-            if debug_settings.show_cascade_light_frustum && debug_settings.selected_cascade == cascade_index {
-                let cascade_frustum_corners = math::frustum_corners_from_matrix(&(projection_matrix * light_matrix));
-                debug_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
-            }
-
-            if debug_settings.show_cascade_screen_space_aabb && debug_settings.selected_cascade == cascade_index {
-                let width = radius * 2.0;
-                let height = width;
-
-                // parameters used in shader
-                let width_recip_2x = width.recip() * 2.0;
-                let height_recip_2x = height.recip() * 2.0;
-
-                let projection_to_world_matrix = light_projection_matrix.inverse();
-
-                for entity in scene.entities.iter() {
-                    let Some(model) = entity.model else {
-                        continue;
-                    };
-
-                    let model_matrix = entity.transform.compute_matrix();
-                    for submesh in assets.models[model].submeshes.iter() {
-                        let bounding_sphere = assets.mesh_infos[submesh.mesh_handle].bounding_sphere;
-                        let bounding_sphere_light_space =
-                            math::transform_sphere(&(light_matrix * model_matrix), bounding_sphere);
-
-                        let sphere_center = vec2(
-                            width_recip_2x * bounding_sphere_light_space.x,
-                            height_recip_2x * bounding_sphere_light_space.y,
-                        );
-                        let sphere_box_size =
-                            Vec2::splat(bounding_sphere_light_space.w) * vec2(width_recip_2x, height_recip_2x);
-                        let aabb = sphere_center.xyxy() + sphere_box_size.xyxy() * vec4(-1.0, -1.0, 1.0, 1.0);
-                        let aabb = aabb.clamp(Vec4::splat(-1.0), Vec4::splat(1.0));
-
-                        let closest_z = bounding_sphere_light_space.z + bounding_sphere_light_space.w;
-                        let r = 1.0 / (far_clip - near_clip);
-                        let depth = closest_z * r + (r * far_clip);
-
-                        let corners = [
-                            vec2(aabb.x, aabb.y),
-                            vec2(aabb.x, aabb.w),
-                            vec2(aabb.z, aabb.w),
-                            vec2(aabb.z, aabb.y),
-                        ]
-                        .map(|c| {
-                            let v = projection_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
-                            v / v.w
-                        });
-                        debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+            if show_debug_stuff {
+                if self.debug_settings.show_cascade_view_frustum {
+                    let subfrustum_corners_w =
+                        math::perspective_corners(fov, camera.aspect_ratio, near, far).map(|v| view_to_world_matrix * v);
+                    debug_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
+                }
+    
+                if self.debug_settings.show_cascade_light_frustum {
+                    let cascade_frustum_corners = math::frustum_corners_from_matrix(&(projection_matrix * light_matrix));
+                    debug_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
+                }
+    
+                if self.debug_settings.show_cascade_screen_space_aabb {
+                    let width = radius * 2.0;
+                    let height = width;
+    
+                    // parameters used in shader
+                    let width_recip_2x = width.recip() * 2.0;
+                    let height_recip_2x = height.recip() * 2.0;
+    
+                    let projection_to_world_matrix = light_projection_matrix.inverse();
+    
+                    for entity in scene.entities.iter() {
+                        let Some(model) = entity.model else {
+                            continue;
+                        };
+    
+                        let model_matrix = entity.transform.compute_matrix();
+                        for submesh in assets.models[model].submeshes.iter() {
+                            let bounding_sphere = assets.mesh_infos[submesh.mesh_handle].bounding_sphere;
+                            let bounding_sphere_light_space =
+                                math::transform_sphere(&(light_matrix * model_matrix), bounding_sphere);
+    
+                            let sphere_center = vec2(
+                                width_recip_2x * bounding_sphere_light_space.x,
+                                height_recip_2x * bounding_sphere_light_space.y,
+                            );
+                            let sphere_box_size =
+                                Vec2::splat(bounding_sphere_light_space.w) * vec2(width_recip_2x, height_recip_2x);
+                            let aabb = sphere_center.xyxy() + sphere_box_size.xyxy() * vec4(-1.0, -1.0, 1.0, 1.0);
+                            let aabb = aabb.clamp(Vec4::splat(-1.0), Vec4::splat(1.0));
+    
+                            let closest_z = bounding_sphere_light_space.z + bounding_sphere_light_space.w;
+                            let r = 1.0 / (far_clip - near_clip);
+                            let depth = closest_z * r + (r * far_clip);
+    
+                            let corners = [
+                                vec2(aabb.x, aabb.y),
+                                vec2(aabb.x, aabb.w),
+                                vec2(aabb.z, aabb.w),
+                                vec2(aabb.z, aabb.y),
+                            ]
+                            .map(|c| {
+                                let v = projection_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
+                                v / v.w
+                            });
+                            debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                        }
                     }
                 }
             }
@@ -513,7 +726,7 @@ impl ShadowRenderer {
 
             let culling_planes = &culling_planes[..culling_plane_count];
 
-            if debug_settings.show_cascade_light_frustum_planes && debug_settings.selected_cascade == cascade_index {
+            if self.debug_settings.show_cascade_light_frustum_planes && show_debug_stuff {
                 for (i, light_space_plane) in culling_planes.iter().copied().enumerate() {
                     let world_space_plane = math::transform_plane(&light_to_world_matrix, light_space_plane);
                     if i > 5 {
@@ -526,11 +739,11 @@ impl ShadowRenderer {
 
             let visibility_buffer = context.import(&self.shadow_map_visiblity_buffers[cascade_index]);
 
-            let frustum_culling = debug_settings.frustum_culling;
-            let occlusion_culling = debug_settings.occlusion_culling;
+            let frustum_culling = self.debug_settings.frustum_culling;
+            let occlusion_culling = self.debug_settings.occlusion_culling;
 
             let shadow_volume_culling_possible = occlusion_culling && settings.camera_debug_settings.occlusion_culling;
-            let shadow_volume_culling = shadow_volume_culling_possible && debug_settings.shadow_volume_culling;
+            let shadow_volume_culling = shadow_volume_culling_possible && self.debug_settings.shadow_volume_culling;
 
             let draw_commands = create_draw_commands(
                 context,
@@ -560,7 +773,7 @@ impl ShadowRenderer {
                 graphics::ImageDesc {
                     ty: graphics::ImageType::Single2D,
                     format: vk::Format::D16_UNORM,
-                    dimensions: [shadow_settings.shadow_resolution, shadow_settings.shadow_resolution, 1],
+                    dimensions: [self.settings.shadow_resolution, self.settings.shadow_resolution, 1],
                     mip_levels: 1,
                     samples: graphics::MultisampleCount::None,
                     usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
@@ -613,7 +826,7 @@ impl ShadowRenderer {
                             }),
                         },
                         alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
-                        debug_print: debug_settings.selected_cascade == cascade_index,
+                        debug_print: self.debug_settings.selected_cascade == cascade_index,
                     },
                     None,
                 );
@@ -631,11 +844,16 @@ impl ShadowRenderer {
                 );
             }
 
-            directional_light_data.projection_matrices[cascade_index] = light_projection_matrix;
-            directional_light_data.shadow_maps[cascade_index] =
-                context.get_resource_descriptor_index(shadow_map).unwrap();
+            // cascaded_shadow_data.projection_matrices[cascade_index] = light_projection_matrix;
+            // cascaded_shadow_data.shadow_maps[cascade_index] =
+            //     context.get_resource_descriptor_index(shadow_map).unwrap();
+            shadow_data.light_projection_matrix[cascade_index] = light_projection_matrix;
+            shadow_data.shadow_map_indices[cascade_index] = context.get_resource_descriptor_index(shadow_map).unwrap();
+
             shadow_maps[cascade_index] = shadow_map;
         }
+
+        self.rendered_shadows.push(RenderedShadow::Cascaded(shadow_maps));
 
         // let shadow_map_depth_pyramids: [_; MAX_SHADOW_CASCADE_COUNT] =
         //     std::array::from_fn(|i| self.shadow_map_depth_pyramids[i].get_current(context));
@@ -644,12 +862,5 @@ impl ShadowRenderer {
         for depth_pyramid in self.shadow_map_depth_pyramids.iter_mut() {
             depth_pyramid.usable = true;
         }
-
-        let buffer = context.transient_storage_data(
-            format!("{name}_light_data"),
-            bytemuck::bytes_of(&directional_light_data),
-        );
-
-        DirectionalLightGraphData { shadow_maps, buffer }
     }
 }

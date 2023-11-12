@@ -5,7 +5,7 @@ use glam::{vec3, Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    assets::GpuAssetStore, collections::arena::Index, graphics, math, scene::GpuMeshDrawCommand, App, Settings, Camera,
+    assets::GpuAssets, collections::arena::Index, graphics, math, scene::GpuMeshDrawCommand, App, Settings, Camera,
 };
 
 #[repr(C)]
@@ -405,7 +405,7 @@ impl DebugRenderer {
         &mut self,
         context: &mut graphics::Context,
         settings: &Settings,
-        assets: &GpuAssetStore,
+        assets: &GpuAssets,
         target_image: graphics::GraphImageHandle,
         resolve_image: Option<graphics::GraphImageHandle>,
         depth_image: graphics::GraphImageHandle,

@@ -72,7 +72,7 @@ impl TransferQueue {
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
             },
-            None
+            None,
         );
 
         Self {
@@ -93,7 +93,9 @@ impl TransferQueue {
     }
 
     fn queue_write_buffer(&mut self, buffer: &graphics::BufferView, offset: usize, data: &[u8]) {
-        if data.len() == 0 { return; }
+        if data.len() == 0 {
+            return;
+        }
         puffin::profile_function!();
 
         let buffer_copy = BufferCopy {
@@ -109,7 +111,7 @@ impl TransferQueue {
             std::ptr::copy_nonoverlapping(
                 data.as_ptr(),
                 self.staging_buffer.mapped_ptr.unwrap().as_ptr().add(self.staging_buffer_offset),
-                data.len()
+                data.len(),
             );
         }
         self.staging_buffer_offset += data.len();
@@ -118,12 +120,16 @@ impl TransferQueue {
     fn submit(&mut self, device: &graphics::Device, semaphore: Option<vk::Semaphore>) -> bool {
         puffin::profile_function!();
 
-        if self.buffer_copies.is_empty() { return false; }
+        if self.buffer_copies.is_empty() {
+            return false;
+        }
         unsafe {
             puffin::profile_scope!("wait_for_trasnfer_fence");
             device.raw.wait_for_fences(&[self.fence], false, u64::MAX).unwrap();
         }
-        unsafe { device.raw.reset_fences(&[self.fence]).unwrap(); }
+        unsafe {
+            device.raw.reset_fences(&[self.fence]).unwrap();
+        }
         self.command_pool.reset(device);
 
         let cmd = self.command_pool.begin_new(device);
@@ -135,7 +141,7 @@ impl TransferQueue {
             cmd.copy_buffer(
                 self.staging_buffer.handle,
                 buffer_copy.dst_buffer,
-                std::slice::from_ref(&buffer_copy.region)
+                std::slice::from_ref(&buffer_copy.region),
             );
         }
         drop(cmd);
@@ -326,7 +332,9 @@ impl Context {
 
     pub fn submit_pending(&mut self) {
         self.transfer_queue.get_mut().submit(&self.device, None);
-        self.graph.dont_wait_semaphores.insert(self.frames[self.frame_index].transfer_finished_semaphore.handle);
+        self.graph
+            .dont_wait_semaphores
+            .insert(self.frames[self.frame_index].transfer_finished_semaphore.handle);
     }
 
     pub fn window(&self) -> &Window {
@@ -477,7 +485,7 @@ impl Context {
             target_access: graphics::AccessKind::Present,
             initial_queue: Some(QueueType::Graphics),
             target_queue: None,
-            
+
             wait_semaphore: Some(frame.image_available_semaphore.clone()),
             finish_semaphore: Some(frame.render_finished_semaphore.clone()),
             versions: vec![],
@@ -676,7 +684,9 @@ impl Context {
         };
 
         self.transfer_queue.get_mut().queue_write_buffer(&buffer, 0, data);
-        self.graph.dont_wait_semaphores.remove(&self.frames[self.frame_index].transfer_finished_semaphore.handle);
+        self.graph
+            .dont_wait_semaphores
+            .remove(&self.frames[self.frame_index].transfer_finished_semaphore.handle);
         self.frames[self.frame_index].uses_async_transfer = true;
 
         let descriptor_index = buffer.descriptor_index;
@@ -796,8 +806,8 @@ impl Context {
         let frame = &mut self.frames[self.frame_index];
 
         frame.uses_async_transfer = false;
-        let transfer_submited = self.transfer_queue.get_mut()
-            .submit(&self.device, Some(frame.transfer_finished_semaphore.handle));
+        let transfer_submited =
+            self.transfer_queue.get_mut().submit(&self.device, Some(frame.transfer_finished_semaphore.handle));
 
         frame.graph_debug_info.clear();
 
@@ -836,8 +846,8 @@ impl Context {
                     |command_pool, (batch_index, (batch_data, batch_debug_info))| {
                         let batch_ref = frame.compiled_graph.get_batch_ref(&batch_data);
 
-                        let transfer_semaphore = (transfer_submited && batch_index == 0)
-                            .then_some(frame.transfer_finished_semaphore.handle);
+                        let transfer_semaphore =
+                            (transfer_submited && batch_index == 0).then_some(frame.transfer_finished_semaphore.handle);
 
                         let command_index = record_batch(
                             &self.device,

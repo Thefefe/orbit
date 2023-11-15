@@ -430,24 +430,37 @@ impl App {
             load_gltf(&gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
         }
 
-        // let dist_size = 4.0;
-        // let light_data = scene::LightData {
-        //     color: vec3(1.0, 1.0, 1.0),
-        //     intensity: 2.0,
-        //     position: Vec3::ZERO,
-        //     size: 0.0,
-        // };
 
+        // let horizontal_range = -8.0..=8.0;
+        // let vertical_range = 0.0..=6.0;
         // let mut thread_rng = rand::thread_rng();
         // use rand::Rng;
 
         // for _ in 0..32 {
         //     let position = Vec3 {
-        //         x: thread_rng.gen_range(-dist_size..dist_size),
-        //         y: thread_rng.gen_range(-dist_size..dist_size),
-        //         z: thread_rng.gen_range(-dist_size..dist_size),
+        //         x: thread_rng.gen_range(horizontal_range.clone()),
+        //         y: thread_rng.gen_range(vertical_range.clone()),
+        //         z: thread_rng.gen_range(horizontal_range.clone()),
         //     };
-        //     scene.add_light(scene::LightData { position, ..light_data });
+
+        //     let color = egui::epaint::Hsva::new(thread_rng.gen_range(0.0..=1.0), 1.0, 1.0, 1.0).to_rgb();
+        //     let color = Vec3::from_array(color);
+        //     let intensity = thread_rng.gen_range(1.0..=16.0);
+
+        //     scene.add_entity(EntityData {
+        //         name: None,
+        //         transform: Transform {
+        //             position,
+        //             ..Default::default()
+        //         },
+        //         light: Some(Light {
+        //             color,
+        //             intensity,
+        //             params: LightParams::Point { radius: 1.0 },
+        //             ..Default::default()
+        //         }),
+        //         ..Default::default()
+        //     });
         // }
 
         // use rand::Rng;
@@ -881,15 +894,14 @@ impl App {
             &self.frozen_camera,
         );
 
-        let camera_depth_pyramid = self.forward_renderer.depth_pyramid.get_current(context);
+        let camera_visibility_buffer = context.import(&self.forward_renderer.visibility_buffer);
 
         self.shadow_renderer.render_shadows(
             context,
             &self.frozen_camera,
-            camera_depth_pyramid,
+            camera_visibility_buffer,
             &self.gpu_assets,
             &self.scene,
-            &self.settings,
             &mut self.debug_renderer,
         );
 
@@ -921,7 +933,7 @@ impl App {
         egui::Window::new("shadow debug settings")
             .open(&mut self.open_shadow_debug_settings)
             .show(egui_ctx, |ui| {
-                self.shadow_renderer.edit_shadow_debug_settings(ui, &self.settings.camera_debug_settings);
+                self.shadow_renderer.edit_shadow_debug_settings(ui);
             });
 
 

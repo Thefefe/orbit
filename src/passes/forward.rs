@@ -73,9 +73,10 @@ pub struct ForwardFrameData {
 pub struct ForwardRenderer {
     brdf_integration_map: graphics::Image,
     jitter_offset_texture: graphics::Image,
-    visibility_buffer: graphics::Buffer,
-    is_visibility_buffer_initialized: bool,
+    
     pub depth_pyramid: DepthPyramid,
+    pub visibility_buffer: graphics::Buffer,
+    is_visibility_buffer_initialized: bool,
 
     normal_buffer: graphics::GraphImageHandle,
 }
@@ -419,7 +420,6 @@ impl ForwardRenderer {
                         noskip_alphamode: AlphaModeFlags::empty(),
                         aspect_ratio: frozen_camera.aspect_ratio,
                         projection: frozen_camera.projection,
-                        shadow_volume_culling: None,
                     })
                     .unwrap_or_default(),
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,

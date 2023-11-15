@@ -101,8 +101,6 @@ vec4 project_sphere(vec4 sphere, float znear, float P00, float P11) {
 }
 
 void main() {
-	// GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count = 0;
-	// memoryBarrier();
     uint gID = gl_GlobalInvocationID.x;
 	if (gID < GetBuffer(SubmeshBuffer, submesh_buffer).count) {
 		Submesh submesh = GetBuffer(SubmeshBuffer, submesh_buffer).submeshes[gID];
@@ -114,7 +112,7 @@ void main() {
 		bool visible = true;
 		bool visible_in_buffer = true;
 
-		if (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2) {
+		if (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4) {
 			uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID / 32];
 			visible_in_buffer = (visibility_bitset & (1 << (gID % 32))) > 0;
 		}
@@ -133,10 +131,6 @@ void main() {
 			model_space_bounding_sphere
 		);
 
-		// // first occlusion pass: only proccess if submesh was visible last frame
-		// if (cull_info.occlusion_pass == 1)
-		// 	visible = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID] == 1;
-
 		// frustum culling
 		if (visible) {
 			for (uint i = 0; i < cull_info.cull_plane_count; i++) {
@@ -148,8 +142,8 @@ void main() {
 		}
 
 		// occlusion cull
-		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 3) && visible) {
-			bool occlusion_cull = true;
+		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4) && visible) {
+			bool cullable = true;
 			vec4 aabb;
 			float sphere_closest_depth;
 			float sampled_depth;
@@ -157,7 +151,7 @@ void main() {
 			switch (cull_info.projection_type) {
 				case 0: { // perspective
 					bounding_sphere_view_space.z = -bounding_sphere_view_space.z;
-					occlusion_cull = bounding_sphere_view_space.z >= bounding_sphere_view_space.w + cull_info.z_near;
+					cullable = bounding_sphere_view_space.z >= bounding_sphere_view_space.w + cull_info.z_near;
 					aabb = project_sphere(
 						bounding_sphere_view_space,
 						cull_info.z_near,
@@ -179,7 +173,8 @@ void main() {
 				} break;
 			}
 
-			if (occlusion_cull) {
+			// occlusion culling
+			if (cullable && cull_info.occlusion_pass != 4) {
 				vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.depth_pyramid), 0);
 				float width = (aabb.z - aabb.x) * pyramid_size.x;
 				float height = (aabb.w - aabb.y) * pyramid_size.y;
@@ -192,54 +187,25 @@ void main() {
 				visible = sphere_closest_depth >= sampled_depth;
 			}
 
-			// shadow volume culling
-			if (cull_info.occlusion_pass == 3 && occlusion_cull && visible) {
-				vec4 reprojected_aabb;
-				float closest_reprojected_depth;
+			// shadow mask culling
+			if (cullable && cull_info.occlusion_pass == 4) {
+				vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.depth_pyramid), 0);
+				float width = (aabb.z - aabb.x) * pyramid_size.x;
+				float height = (aabb.w - aabb.y) * pyramid_size.y;
 
-				for (uint i = 0; i <= 1; i++) {
-					for (uint j = 0; j <= 1; j++) {
-						for (uint k = 0; k <= 1; k++) {
-							vec3 point = mix(
-								vec3(aabb.xy, sphere_closest_depth),
-								vec3(aabb.zw, sampled_depth),
-								vec3(i, j, k)
-							);
-							vec3 projected_point = (cull_info.reprojection_matrix * vec4(point, 1.0)).xyz;
-							
-							if (i == 0 && j == 0 && j == 0) {
-								reprojected_aabb = projected_point.xyxy;
-								closest_reprojected_depth = projected_point.z;
-							}
-
-							reprojected_aabb.xy = min(reprojected_aabb.xy, projected_point.xy);
-							reprojected_aabb.zw = max(reprojected_aabb.zw, projected_point.xy);
-							closest_reprojected_depth = min(closest_reprojected_depth, projected_point.z);
-						}
-					}
-				}
-
-				if (closest_reprojected_depth > 0.0) {
-					reprojected_aabb = clamp(reprojected_aabb, -1.0, 1.0) * vec4(0.5f, 0.5f, 0.5f, 0.5f) + vec4(0.5f);
-
-					vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.secondary_depth_pyramid), 0);
-					float width = (aabb.z - aabb.x) * pyramid_size.x;
-					float height = (aabb.w - aabb.y) * pyramid_size.y;
-
-					float sampled_depth = textureLod(
-						sampler2D(GetTexture2D(cull_info.secondary_depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
-						(aabb.xy + aabb.zw) * 0.5,
-						log2(max(width, height))
-					).x;
-					visible = closest_reprojected_depth >= sampled_depth;
-				}
+				sampled_depth = textureLod(
+					sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
+					(aabb.xy + aabb.zw) * 0.5,
+					log2(max(width, height))
+				).x;
+				visible = sampled_depth == 0.0; // zero means there is a shadow receiver there
 			}
 		}
 
 		bool should_draw = visible && bool((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag);
 
 		// second occlusion pass: only proccess if submesh wasn't visible last frame
-		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 3) &&
+		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4) &&
 		    !bool((1 << submesh.alpha_mode) & cull_info.noskip_alphamode)
 		) {
 			should_draw = visible && !visible_in_buffer;
@@ -261,7 +227,7 @@ void main() {
 		}
 
 		// update visibility buffer, only on second occlusion pass
-		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 3)) {
+		if (cull_info.occlusion_pass == 2) {
 #ifdef USE_SUBGROUP_OPS
 			uvec4 visiblity_bitset = subgroupBallot(visible);
 			

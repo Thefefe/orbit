@@ -1,0 +1,20 @@
+#version 460
+
+#include "include/common.glsl"
+#include "include/types.glsl"
+
+RegisterImageFormat(r8);
+
+layout(push_constant, std430) uniform PushConstants {
+    uvec2 dimensions;
+    uint src_image;
+    uint dst_image;
+};
+
+layout (local_size_x = 16, local_size_y = 16) in;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    float depth = texture(sampler2D(GetTexture2D(src_image), GetSampler(REDUCE_MIN_SAMPLER)), (vec2(pos) + vec2(0.5)) / vec2(dimensions)).r;
+    imageStore(GetImage2D(r8, dst_image), pos, vec4(depth));
+}

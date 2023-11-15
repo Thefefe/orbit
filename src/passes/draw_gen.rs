@@ -6,16 +6,10 @@ use gpu_allocator::MemoryLocation;
 
 use crate::{
     assets::{AlphaMode, AssetGraphData},
-    graphics,
+    graphics::{self, AccessKind},
     scene::{GpuMeshDrawCommand, SceneGraphData},
     Projection, MAX_DRAW_COUNT,
 };
-
-#[derive(Debug, Clone, Copy)]
-pub struct ShadowVolumeCulling {
-    pub reprojection_matrix: Mat4,
-    pub camera_depth_pyramid: graphics::GraphImageHandle,
-}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum OcclusionCullInfo {
@@ -30,7 +24,12 @@ pub enum OcclusionCullInfo {
         noskip_alphamode: AlphaModeFlags,
         projection: Projection,
         aspect_ratio: f32,
-        shadow_volume_culling: Option<ShadowVolumeCulling>,
+    },
+    ShadowMask {
+        visibility_buffer: graphics::GraphBufferHandle,
+        shadow_mask: graphics::GraphImageHandle,
+        projection: Projection,
+        aspect_ratio: f32,
     },
 }
 
@@ -40,26 +39,22 @@ impl OcclusionCullInfo {
             OcclusionCullInfo::None => None,
             OcclusionCullInfo::VisibilityRead { visibility_buffer, .. } => Some(*visibility_buffer),
             OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => Some(*visibility_buffer),
+            OcclusionCullInfo::ShadowMask { visibility_buffer, .. } => Some(*visibility_buffer),
         }
     }
 
-    fn visibility_buffer_dependency(&self) -> Option<(graphics::GraphBufferHandle, graphics::AccessKind)> {
+    fn visibility_buffer_dependency(&self) -> Option<(graphics::GraphBufferHandle, AccessKind)> {
         match self {
             OcclusionCullInfo::None => None,
             OcclusionCullInfo::VisibilityRead { visibility_buffer } => {
-                Some((*visibility_buffer, graphics::AccessKind::ComputeShaderRead))
+                Some((*visibility_buffer, AccessKind::ComputeShaderRead))
             }
             OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => {
-                Some((*visibility_buffer, graphics::AccessKind::ComputeShaderWrite))
+                Some((*visibility_buffer, AccessKind::ComputeShaderWrite))
             }
-        }
-    }
-
-    fn write_visibility_buffer(&self) -> bool {
-        match self {
-            OcclusionCullInfo::None => false,
-            OcclusionCullInfo::VisibilityRead { .. } => false,
-            OcclusionCullInfo::VisibilityWrite { .. } => true,
+            OcclusionCullInfo::ShadowMask { visibility_buffer, .. } => {
+                Some((*visibility_buffer, AccessKind::ComputeShaderReadGeneral))
+            }
         }
     }
 
@@ -68,42 +63,20 @@ impl OcclusionCullInfo {
             OcclusionCullInfo::None => None,
             OcclusionCullInfo::VisibilityRead { .. } => None,
             OcclusionCullInfo::VisibilityWrite { depth_pyramid, .. } => Some(*depth_pyramid),
+            OcclusionCullInfo::ShadowMask { shadow_mask, .. } => Some(*shadow_mask),
         }
     }
 
-    fn depth_pyramid_dependency(&self) -> Option<(graphics::GraphImageHandle, graphics::AccessKind)> {
-        if let OcclusionCullInfo::VisibilityWrite { depth_pyramid, .. } = self {
-            Some((*depth_pyramid, graphics::AccessKind::ComputeShaderReadGeneral))
-        } else {
-            None
-        }
-    }
-
-    fn secondary_depth_pyramid_dependency(self) -> Option<(graphics::GraphImageHandle, graphics::AccessKind)> {
-        if let OcclusionCullInfo::VisibilityWrite {
-            shadow_volume_culling: Some(shadow_volume_culling),
-            ..
-        } = self
-        {
-            Some((
-                shadow_volume_culling.camera_depth_pyramid,
-                graphics::AccessKind::ComputeShaderReadGeneral,
-            ))
-        } else {
-            None
-        }
+    fn depth_pyramid_dependency(&self) -> Option<(graphics::GraphImageHandle, AccessKind)> {
+        self.depth_pyramid().map(|h| (h, AccessKind::ComputeShaderReadGeneral))
     }
 
     fn pass_index(&self) -> u32 {
         match self {
             OcclusionCullInfo::None => 0,
             OcclusionCullInfo::VisibilityRead { .. } => 1,
-            OcclusionCullInfo::VisibilityWrite {
-                shadow_volume_culling, ..
-            } => match shadow_volume_culling.is_some() {
-                false => 2,
-                true => 3,
-            },
+            OcclusionCullInfo::VisibilityWrite { .. } => 2,
+            OcclusionCullInfo::ShadowMask { .. } => 4,
         }
     }
 }
@@ -204,11 +177,35 @@ pub fn create_draw_commands(
         }
     }
 
+    if let OcclusionCullInfo::ShadowMask { projection, aspect_ratio, .. } = cull_info.occlusion_culling {
+        match projection {
+            Projection::Perspective { fov, near_clip } => {
+                let f = 1.0 / f32::tan(0.5 * fov);
+                gpu_cull_info_data.projection_type = 0;
+                gpu_cull_info_data.p00_or_width_recip_x2 = f / aspect_ratio;
+                gpu_cull_info_data.p11_or_height_recipx2 = f;
+                gpu_cull_info_data.z_near = near_clip;
+            }
+            Projection::Orthographic {
+                half_width,
+                near_clip,
+                far_clip,
+            } => {
+                let width = half_width * 2.0;
+                let height = width * aspect_ratio.recip();
+                gpu_cull_info_data.projection_type = 1;
+                gpu_cull_info_data.p00_or_width_recip_x2 = width.recip() * 2.0;
+                gpu_cull_info_data.p11_or_height_recipx2 = height.recip() * 2.0;
+                gpu_cull_info_data.z_near = near_clip;
+                gpu_cull_info_data.z_far = far_clip;
+            }
+        }
+    }
+
     if let OcclusionCullInfo::VisibilityWrite {
         projection,
         aspect_ratio,
         noskip_alphamode,
-        shadow_volume_culling,
         ..
     } = cull_info.occlusion_culling
     {
@@ -236,12 +233,6 @@ pub fn create_draw_commands(
                 gpu_cull_info_data.z_far = far_clip;
             }
         }
-
-        if let Some(shadow_volume_culling) = shadow_volume_culling {
-            gpu_cull_info_data.reprojection_matrix = shadow_volume_culling.reprojection_matrix;
-            gpu_cull_info_data.secondary_depth_pyramid =
-                context.get_resource_descriptor_index(shadow_volume_culling.camera_depth_pyramid).unwrap();
-        }
     }
 
     let cull_data = context.transient_storage_data(
@@ -252,7 +243,7 @@ pub fn create_draw_commands(
     // TODO: come up with a better way to do this, maybe in the compute shader
     context
         .add_pass("zeroing_draw_commands_buffer")
-        .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
+        .with_dependency(draw_commands, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
             let draw_commands = graph.get_buffer(draw_commands);
             cmd.fill_buffer(draw_commands, 0, 4, 0);
@@ -264,11 +255,10 @@ pub fn create_draw_commands(
         .add_pass(pass_name)
         // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
         // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
-        .with_dependency(draw_commands, graphics::AccessKind::ComputeShaderWrite)
-        .with_dependency(cull_data, graphics::AccessKind::ComputeShaderRead)
+        .with_dependency(draw_commands, AccessKind::ComputeShaderWrite)
+        .with_dependency(cull_data, AccessKind::ComputeShaderRead)
         .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
         .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .with_dependencies(cull_info.occlusion_culling.secondary_depth_pyramid_dependency())
         .render(move |cmd, graph| {
             let mesh_infos = graph.get_buffer(assets.mesh_info_buffer);
             let scene_submeshes = graph.get_buffer(scene.submesh_buffer);
@@ -342,8 +332,8 @@ impl DepthPyramid {
             self.pyramid.name.clone(),
             &self.pyramid,
             graphics::GraphResourceImportDesc {
-                initial_access: graphics::AccessKind::ComputeShaderReadGeneral,
-                target_access: graphics::AccessKind::None,
+                initial_access: AccessKind::ComputeShaderReadGeneral,
+                target_access: AccessKind::None,
                 ..Default::default()
             },
         );
@@ -358,8 +348,8 @@ impl DepthPyramid {
             self.pyramid.name.clone(),
             &self.pyramid,
             graphics::GraphResourceImportDesc {
-                initial_access: graphics::AccessKind::ComputeShaderReadGeneral,
-                target_access: graphics::AccessKind::None,
+                initial_access: AccessKind::ComputeShaderReadGeneral,
+                target_access: AccessKind::None,
                 ..Default::default()
             },
         );
@@ -371,8 +361,8 @@ impl DepthPyramid {
 
         context
             .add_pass("depth_pyramid_reduce")
-            .with_dependency(pyramid, graphics::AccessKind::ComputeShaderWrite)
-            .with_dependency(depth_buffer, graphics::AccessKind::ComputeShaderRead)
+            .with_dependency(pyramid, AccessKind::ComputeShaderWrite)
+            .with_dependency(depth_buffer, AccessKind::ComputeShaderRead)
             .render(move |cmd, graph| {
                 let depth_buffer = graph.get_image(depth_buffer);
                 let pyramid = graph.get_image(pyramid);
@@ -423,8 +413,8 @@ pub fn update_multiple_depth_pyramids<const C: usize>(
 
     context
         .add_pass("depth_pyramid_reduce_multiple")
-        .with_dependencies(depth_pyramids.into_iter().map(|i| (i, graphics::AccessKind::ComputeShaderWrite)))
-        .with_dependencies(depth_buffers.into_iter().map(|i| (i, graphics::AccessKind::ComputeShaderRead)))
+        .with_dependencies(depth_pyramids.into_iter().map(|i| (i, AccessKind::ComputeShaderWrite)))
+        .with_dependencies(depth_buffers.into_iter().map(|i| (i, AccessKind::ComputeShaderRead)))
         .render(move |cmd, graph| {
             let depth_pyramids = depth_pyramids.map(|i| graph.get_image(i));
             let depth_buffers = depth_buffers.map(|i| graph.get_image(i));

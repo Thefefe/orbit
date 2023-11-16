@@ -570,6 +570,7 @@ impl Device {
             .depth_bias_clamp(true)
             .depth_clamp(true)
             .shader_int64(true)
+            .fragment_stores_and_atomics(true)
             .build();
 
         let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder().shader_draw_parameters(true).build();

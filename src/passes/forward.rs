@@ -50,7 +50,7 @@ pub struct TargetAttachments {
 }
 
 impl TargetAttachments {
-    fn dependencies(&self) -> impl Iterator<Item = (graphics::GraphImageHandle, graphics::AccessKind)> {
+    pub fn dependencies(&self) -> impl Iterator<Item = (graphics::GraphImageHandle, graphics::AccessKind)> {
         [
             (self.color_target, graphics::AccessKind::ColorAttachmentWrite),
             (self.depth_target, graphics::AccessKind::DepthAttachmentWrite),
@@ -58,6 +58,10 @@ impl TargetAttachments {
         .into_iter()
         .chain(self.color_resolve.map(|i| (i, graphics::AccessKind::ColorAttachmentWrite)))
         .chain(self.depth_resolve.map(|i| (i, graphics::AccessKind::DepthAttachmentWrite)))
+    }
+
+    pub fn non_msaa_depth_target(&self) -> graphics::GraphImageHandle {
+        self.depth_resolve.unwrap_or(self.depth_target)
     }
 }
 

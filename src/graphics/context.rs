@@ -326,7 +326,10 @@ impl Context {
         }
     }
 
+    #[track_caller]
     pub fn queue_write_buffer(&self, buffer: &graphics::BufferView, offset: usize, data: &[u8]) {
+        assert!(offset <= buffer.size as usize);
+        assert!(data.len() <= buffer.size as usize - offset);
         self.transfer_queue.lock().queue_write_buffer(buffer, offset, data);
     }
 

@@ -466,7 +466,7 @@ impl App {
         // use rand::Rng;
         // let mut rng = rand::thread_rng();
 
-        // let prefab = scene.entities.pop().unwrap();
+        // let prefab = scene.entities.pop();
         // let pos_range = 0.0..=32.0;
         // let rot_range = 0.0..=2.0 * PI;
 
@@ -900,6 +900,7 @@ impl App {
             context,
             &self.frozen_camera,
             camera_visibility_buffer,
+            target_attachments.non_msaa_depth_target(),
             &self.gpu_assets,
             &self.scene,
             &mut self.debug_renderer,

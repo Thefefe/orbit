@@ -240,21 +240,10 @@ pub fn create_draw_commands(
         bytemuck::bytes_of(&gpu_cull_info_data),
     );
 
-    // TODO: come up with a better way to do this, maybe in the compute shader
-    context
-        .add_pass("zeroing_draw_commands_buffer")
-        .with_dependency(draw_commands, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
-            let draw_commands = graph.get_buffer(draw_commands);
-            cmd.fill_buffer(draw_commands, 0, 4, 0);
-        });
-
     let debug_print: u32 = if cull_info.debug_print { 1 } else { 0 };
 
     context
         .add_pass(pass_name)
-        // .with_dependency(scene_submeshes, AccessKind::ComputeShaderRead)
-        // .with_dependency(mesh_infos, AccessKind::ComputeShaderRead)
         .with_dependency(draw_commands, AccessKind::ComputeShaderWrite)
         .with_dependency(cull_data, AccessKind::ComputeShaderRead)
         .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())

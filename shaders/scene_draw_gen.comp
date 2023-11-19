@@ -101,6 +101,12 @@ vec4 project_sphere(vec4 sphere, float znear, float P00, float P11) {
 }
 
 void main() {
+	if (gl_GlobalInvocationID.x == 0) {
+		GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count = 0;
+	}
+
+	barrier();
+
     uint gID = gl_GlobalInvocationID.x;
 	if (gID < GetBuffer(SubmeshBuffer, submesh_buffer).count) {
 		Submesh submesh = GetBuffer(SubmeshBuffer, submesh_buffer).submeshes[gID];

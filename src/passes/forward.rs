@@ -136,8 +136,6 @@ impl ForwardRenderer {
         );
 
         context.record_and_submit(|cmd| {
-            cmd.fill_buffer(&visibility_buffer, 0, vk::WHOLE_SIZE, 0);
-
             cmd.barrier(
                 &[],
                 &[graphics::image_barrier(

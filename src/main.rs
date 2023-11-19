@@ -466,7 +466,7 @@ impl App {
         // use rand::Rng;
         // let mut rng = rand::thread_rng();
 
-        // let prefab = scene.entities.pop();
+        // let prefab = scene.entities.pop().unwrap();
         // let pos_range = 0.0..=32.0;
         // let rot_range = 0.0..=2.0 * PI;
 

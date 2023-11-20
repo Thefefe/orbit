@@ -21,6 +21,7 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) out VertexOutput {
     vec3 pos;
+    vec3 camera_pos;
     vec2 uv;
     flat uint material_index;
 } vout;
@@ -37,4 +38,9 @@ void main() {
         .commands[gl_DrawID].material_index;
 
     vout.pos = gl_Position.xyz / gl_Position.w;
+    vec4 camera_pos = GetBuffer(ShadowMaskFragData, data_buffer).reprojection_matrix * vec4(vout.pos, 1.0);
+    camera_pos /= camera_pos.w;
+    camera_pos.xy = camera_pos.xy * 0.5 + 0.5;
+    camera_pos.y = 1.0 - camera_pos.y;
+    vout.camera_pos = camera_pos.xyz;
 }

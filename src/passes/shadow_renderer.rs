@@ -995,7 +995,7 @@ fn shadow_mask_pass_geom(
     let shadow_settings = shadow_settings.clone();
 
     let pipeline = context.create_raster_pipeline(
-        "shadow_mask_pipeline",
+        "shadow_mask_geom_pipeline",
         &graphics::RasterPipelineDesc::builder()
             .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
             .fragment_shader(graphics::ShaderSource::spv("shaders/shadow_mask_geom.frag.spv"))
@@ -1133,7 +1133,7 @@ fn shadow_mask_pass_frag(
     );
 
     let pipeline = context.create_raster_pipeline(
-        "shadow_mask_pipeline",
+        "shadow_mask_frag_pipeline",
         &graphics::RasterPipelineDesc::builder()
             .vertex_shader(graphics::ShaderSource::spv("shaders/shadow_mask_frag.vert.spv"))
             .fragment_shader(graphics::ShaderSource::spv("shaders/shadow_mask_frag.frag.spv"))

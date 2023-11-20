@@ -23,6 +23,7 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) in VertexOutput {
     vec3 pos;
+    vec3 camera_pos;
     vec2 uv;
     flat uint material_index;
 } vout;
@@ -44,10 +45,7 @@ void main() {
         }
     }
 
-    vec4 camera_pos = GetBuffer(ShadowMaskFragData, data_buffer).reprojection_matrix * vec4(vout.pos, 1.0);
-    camera_pos /= camera_pos.w;
-    camera_pos.xy = camera_pos.xy * 0.5 + 0.5;
-    camera_pos.y = 1.0 - camera_pos.y;
+    vec3 camera_pos = vout.camera_pos;
     float camera_depth = texture(GetSampledTexture2D(GetBuffer(ShadowMaskFragData, data_buffer).camera_depth_buffer), camera_pos.xy).x;
     if (
         camera_pos.z >= 0.01 / (0.01 / camera_depth + 0.1)

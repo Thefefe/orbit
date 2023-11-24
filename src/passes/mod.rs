@@ -4,3 +4,4 @@ pub mod env_map_loader;
 pub mod forward;
 pub mod post_process;
 pub mod shadow_renderer;
+pub mod cluster;

@@ -47,12 +47,20 @@ struct ShadowSettings {
     uint _padding;
 };
 
-struct PerFrameData {
-    mat4 view_projection;
-    mat4 view;
-    vec3 view_pos;
-    uint render_mode;
+struct ClusterGridInfo {
+    float z_scale;
+    float z_bias;
+    uint  z_slice_count;
 };
+
+RegisterBuffer(PerFrameBuffer, {
+    mat4  view_projection;
+    mat4  view;
+    vec3  view_pos;
+    uint  render_mode;
+    float z_near;
+    ClusterGridInfo cluster_info;
+});
 
 struct MeshVertex {
     float position[3];
@@ -212,10 +220,6 @@ RegisterBuffer(VertexBuffer, {
 
 RegisterBuffer(EntityBuffer, {
     EntityData entities[];
-});
-
-RegisterBuffer(PerFrameBuffer, {
-    PerFrameData data;
 });
 
 RegisterBuffer(MaterialsBuffer, {

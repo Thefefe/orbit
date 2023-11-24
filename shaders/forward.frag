@@ -250,13 +250,16 @@ uint select_cascade_by_interval(vec4 distances, float d) {
     return 4 - uint(dot(cmp, vec4(1.0)));
 }
 
-const vec3 CASCADE_COLORS[6] = vec3[](
+#define DEBUG_COLOR_COUNT 8
+const vec3 DEBUG_COLORS[DEBUG_COLOR_COUNT] = vec3[](
     vec3(1.0, 0.25, 0.25),
     vec3(0.25, 1.0, 0.25),
     vec3(0.25, 0.25, 1.0),
     vec3(1.0, 1.0, 0.25),
     vec3(0.25, 1.0, 1.0),
-    vec3(1.0, 0.25, 1.0)
+    vec3(1.0, 0.25, 1.0),
+    vec3(1.0, 1.0, 1.0),
+    vec3(0.25, 0.25, 0.25)
 );
 
 // used for debugging
@@ -277,7 +280,7 @@ float calc_mip_level(vec2 texture_coord) {
 }
 
 void main() {
-    uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).data.render_mode;
+    uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode;
 
     out_color = vec4(1.0);
 
@@ -359,9 +362,15 @@ void main() {
         return;
     }
 
+    float z_near =  GetBuffer(PerFrameBuffer, per_frame_buffer).z_near;
+    float cluster_z_scale = GetBuffer(PerFrameBuffer, per_frame_buffer).cluster_info.z_scale;
+    float cluster_z_bias = GetBuffer(PerFrameBuffer, per_frame_buffer).cluster_info.z_bias;
+    uint cluster_z_slice_count = GetBuffer(PerFrameBuffer, per_frame_buffer).cluster_info.z_slice_count;
+    uint cluster_z = uint(clamp(log2(z_near / gl_FragCoord.z) * cluster_z_scale + cluster_z_bias, 0, cluster_z_slice_count));
+
     switch (render_mode) {
         case 0:
-            vec3 view_direction = normalize(GetBuffer(PerFrameBuffer, per_frame_buffer).data.view_pos - vout.world_pos.xyz);
+            vec3 view_direction = normalize(GetBuffer(PerFrameBuffer, per_frame_buffer).view_pos - vout.world_pos.xyz);
             
             vec3 light_sum = emissive;
 
@@ -524,7 +533,7 @@ void main() {
                     shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, inv_world_size, uv_light_size);
                 }
 
-                if (cascade_index < MAX_SHADOW_CASCADE_COUNT) cascade_color = CASCADE_COLORS[cascade_index];
+                if (cascade_index < MAX_SHADOW_CASCADE_COUNT) cascade_color = DEBUG_COLORS[cascade_index];
             }
             
             vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction_or_position;
@@ -548,6 +557,10 @@ void main() {
             break;
         case 6: 
             out_color = vec4(vec3(ao), 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            break;
+        case 8: 
+            out_color = vec4(DEBUG_COLORS[cluster_z % DEBUG_COLOR_COUNT], 1.0);
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
     }

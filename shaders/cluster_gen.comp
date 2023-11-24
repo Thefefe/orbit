@@ -1,0 +1,19 @@
+#version 460
+
+#include "include/common.glsl"
+#include "include/types.glsl"
+
+layout(push_constant, std430) uniform PushConstants {
+	mat4 screen_to_view_matrix;
+	uvec2 screen_size;
+	uint tile_size_px;
+	float z_near;
+	float z_far;
+	uint cluster_buffer;
+};
+
+layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+void main() {
+
+}

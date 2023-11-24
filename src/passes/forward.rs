@@ -10,7 +10,7 @@ use crate::{
     App, Camera, Settings, MAX_DRAW_COUNT,
 };
 
-use super::{draw_gen::DepthPyramid, shadow_renderer::ShadowRenderer};
+use super::{cluster::GpuClusterGridInfo, draw_gen::DepthPyramid, shadow_renderer::ShadowRenderer};
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +23,7 @@ pub enum RenderMode {
     Emissive = 5,
     Ao = 6,
     Overdraw = 7,
+    ClusterSlice = 8,
 }
 
 impl From<u32> for RenderMode {
@@ -36,6 +37,7 @@ impl From<u32> for RenderMode {
             5 => Self::Emissive,
             6 => Self::Ao,
             7 => Self::Overdraw,
+            8 => Self::ClusterSlice,
             _ => Self::Shaded,
         }
     }
@@ -72,12 +74,14 @@ pub struct ForwardFrameData {
     view: Mat4,
     view_pos: Vec3,
     render_mode: u32,
+    z_near: f32,
+    cluster_grid_info: GpuClusterGridInfo,
 }
 
 pub struct ForwardRenderer {
     brdf_integration_map: graphics::Image,
     jitter_offset_texture: graphics::Image,
-    
+
     pub depth_pyramid: DepthPyramid,
     pub visibility_buffer: graphics::Buffer,
     is_visibility_buffer_initialized: bool,
@@ -537,7 +541,7 @@ impl ForwardRenderer {
         camera: &Camera,
         frozen_camera: &Camera,
 
-        selected_light: Option<usize>
+        selected_light: Option<usize>,
     ) {
         puffin::profile_function!();
 
@@ -568,6 +572,8 @@ impl ForwardRenderer {
                 view: camera_view_matrix,
                 view_pos: camera.transform.position,
                 render_mode: render_mode as u32,
+                z_near: frozen_camera.z_near(),
+                cluster_grid_info: GpuClusterGridInfo::new(&settings.cluster_settings, frozen_camera.z_near()),
             }),
         );
 

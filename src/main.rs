@@ -37,6 +37,7 @@ use input::Input;
 use scene::{EntityData, Light, LightParams, SceneData, Transform};
 
 use passes::{
+    cluster::ClusterSettings,
     debug_renderer::DebugRenderer,
     env_map_loader::EnvironmentMap,
     forward::{ForwardRenderer, RenderMode},
@@ -189,6 +190,10 @@ impl Camera {
     pub fn compute_projection_matrix(&self) -> Mat4 {
         self.projection.compute_matrix(self.aspect_ratio)
     }
+
+    pub fn z_near(&self) -> f32 {
+        self.projection.z_near()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -198,6 +203,7 @@ pub struct Settings {
     pub shadow_settings: ShadowSettings,
 
     pub camera_debug_settings: CameraDebugSettings,
+    pub cluster_settings: ClusterSettings,
 }
 
 impl Default for Settings {
@@ -208,6 +214,7 @@ impl Default for Settings {
             shadow_settings: Default::default(),
 
             camera_debug_settings: Default::default(),
+            cluster_settings: Default::default(),
         }
     }
 }
@@ -223,7 +230,7 @@ impl Settings {
                 _ => unimplemented!(),
             };
 
-            ui.label("present_mode");
+            ui.label("present mode");
             egui::ComboBox::from_id_source("present_mode")
                 .selected_text(format!("{}", present_mode_display(self.present_mode)))
                 .show_ui(ui, |ui| {
@@ -242,9 +249,11 @@ impl Settings {
             });
         });
 
-        ui.heading("shadow_settings");
-
+        ui.heading("Shadow settings");
         self.shadow_settings.edit(ui);
+
+        ui.heading("Cluster settings");
+        self.cluster_settings.edit(ui);
     }
 }
 
@@ -430,7 +439,6 @@ impl App {
             load_gltf(&gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
         }
 
-
         // let horizontal_range = -8.0..=8.0;
         // let vertical_range = 0.0..=6.0;
         // let mut thread_rng = rand::thread_rng();
@@ -589,22 +597,22 @@ impl App {
             self.camera_controller.update_look(input.mouse_delta(), &mut self.camera.transform);
         }
         self.camera_controller.update_movement(input, delta_time, &mut self.camera.transform);
-        
+
         if let Some(entity_index) = self.selected_entity_index {
             const PIS_IN_180: f32 = 57.2957795130823208767981548141051703_f32;
             let entity = &mut self.scene.entities[entity_index];
 
             if input.mouse_held(MouseButton::Left) {
                 let mut delta = input.mouse_delta();
-    
+
                 if input.key_held(KeyCode::LShift) {
                     delta *= 8.0;
                 }
-    
+
                 if input.key_held(KeyCode::LControl) {
                     delta /= 8.0;
                 }
-    
+
                 self.entity_dir_controller.update_look(delta, &mut entity.transform);
                 self.selected_entity_euler_coords.y = self.entity_dir_controller.pitch * PIS_IN_180;
                 self.selected_entity_euler_coords.x = self.entity_dir_controller.yaw * PIS_IN_180;
@@ -699,8 +707,9 @@ impl App {
                                             self.selected_entity_euler_index = entity_index;
                                             let (euler_x, euler_y, euler_z) =
                                                 entity.transform.orientation.to_euler(glam::EulerRot::YXZ);
-                            
-                                            self.selected_entity_euler_coords = vec3(euler_y, euler_x, euler_z) * PIS_IN_180;
+
+                                            self.selected_entity_euler_coords =
+                                                vec3(euler_y, euler_x, euler_z) * PIS_IN_180;
                                             self.entity_dir_controller.set_look(&entity.transform);
                                         }
                                     }
@@ -907,13 +916,16 @@ impl App {
         );
 
         let skybox = self.environment_map.as_ref().map(|e| context.import(&e.skybox));
-        
-        let selected_light = self.selected_entity_index
+
+        let selected_light = self
+            .selected_entity_index
             .and_then(|i| self.scene.entities[i].light.as_ref().map(|l| l._light_index))
             .flatten();
         let selected_shadow = selected_light.and_then(|i| {
             let shadow_index = self.scene.light_data_cache[i].shadow_data_index;
-            if shadow_index == u32::MAX { return None };
+            if shadow_index == u32::MAX {
+                return None;
+            };
             Some(shadow_index as usize - context.frame_index() * ShadowRenderer::MAX_SHADOW_COMMANDS)
         });
         self.shadow_renderer.debug_settings.selected_shadow = selected_shadow;
@@ -928,7 +940,7 @@ impl App {
             &target_attachments,
             &self.camera,
             &self.frozen_camera,
-            selected_light
+            selected_light,
         );
 
         egui::Window::new("shadow debug settings")
@@ -936,7 +948,6 @@ impl App {
             .show(egui_ctx, |ui| {
                 self.shadow_renderer.edit_shadow_debug_settings(ui);
             });
-
 
         let show_bounding_boxes = self.settings.camera_debug_settings.show_bounding_boxes;
         let show_bounding_spheres = self.settings.camera_debug_settings.show_bounding_spheres;

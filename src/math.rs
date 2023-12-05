@@ -15,7 +15,37 @@ pub const NDC_BOUNDS: [Vec4; 8] = [
     vec4(-1.0, 1.0, 1.0, 1.0),
 ];
 
+#[derive(Debug, Clone, Copy)]
+pub struct Aabb {
+    pub min: Vec3A,
+    pub max: Vec3A,
+}
+
+impl Aabb {
+    pub const ZERO: Self = Self {
+        min: Vec3A::ZERO,
+        max: Vec3A::ZERO,
+    };
+
+    pub fn from_arrays(min: [f32; 3], max: [f32; 3]) -> Self {
+        Self {
+            min: Vec3A::from_array(min),
+            max: Vec3A::from_array(max),
+        }
+    }
+}
+
+impl Default for Aabb {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
 pub fn lerp_element_wise(x: Vec4, y: Vec4, a: Vec4) -> Vec4 {
+    x + ((y - x) * a)
+}
+
+pub fn lerp(x: f32, y: f32, a: f32) -> f32 {
     x + ((y - x) * a)
 }
 
@@ -53,6 +83,29 @@ pub fn transform_plane(matrix: &Mat4, plane: Vec4) -> Vec4 {
     o = matrix.mul_vec4(o);
     n = matrix.inverse().transpose() * n;
     Vec3A::from(n).extend(Vec3A::dot(o.into(), n.into()))
+}
+
+pub fn aabb_to_to_cube_corners(aabb: Aabb, transform: Option<&Mat4>) -> [Vec4; 8] {
+    [
+        vec3a(0.0, 0.0, 0.0),
+        vec3a(1.0, 0.0, 0.0),
+        vec3a(1.0, 1.0, 0.0),
+        vec3a(0.0, 1.0, 0.0),
+        vec3a(0.0, 0.0, 1.0),
+        vec3a(1.0, 0.0, 1.0),
+        vec3a(1.0, 1.0, 1.0),
+        vec3a(0.0, 1.0, 1.0),
+    ]
+    .map(|s| {
+        let mut corner = (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0);
+
+        if let Some(transform) = transform {
+            corner = transform.mul_vec4(corner);
+            corner /= corner.w;
+        }
+
+        corner
+    })
 }
 
 #[inline]

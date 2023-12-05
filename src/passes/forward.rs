@@ -750,7 +750,8 @@ impl ForwardRenderer {
                 })
                 .clear_value(vk::ClearValue {
                     color: vk::ClearColorValue {
-                        float32: [1.0, 0.0, 1.0, 0.0],
+                        // float32: [1.0, 0.0, 1.0, 0.0],
+                        float32: [0.0, 0.0, 0.0, 0.0],
                     },
                 })
                 .store_op(vk::AttachmentStoreOp::STORE);

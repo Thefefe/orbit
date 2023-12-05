@@ -140,7 +140,7 @@ impl DebugRenderer {
         ]);
     }
 
-    pub fn draw_frustum(&mut self, corners: &[Vec4; 8], color: Vec4) {
+    pub fn draw_cube_with_corners(&mut self, corners: &[Vec4; 8], color: Vec4) {
         let color = color.to_array().map(|f| (f * 255.0) as u8);
 
         self.line_vertices.extend_from_slice(&[

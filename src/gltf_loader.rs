@@ -6,10 +6,10 @@ use gpu_allocator::MemoryLocation;
 use image::EncodableLayout;
 
 use crate::{
-    assets::{sep_vertex_merge, Aabb, GpuAssets, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle},
+    assets::{sep_vertex_merge, GpuAssets, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle},
     graphics,
     scene::{EntityData, SceneData, Transform},
-    utils::OptionDefaultIterator,
+    utils::OptionDefaultIterator, math::Aabb,
 };
 
 fn dxgi_format_to_vk(format: ddsfile::DxgiFormat) -> Option<vk::Format> {

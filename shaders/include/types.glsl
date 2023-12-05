@@ -164,6 +164,15 @@ struct DebugMeshInstance {
     vec4 color;
 };
 
+struct ClusterVolume {
+    vec4 min_pos;
+    vec4 max_pos;
+};
+
+RegisterBuffer(ClusterVolumeBuffer, {
+    ClusterVolume clusters[];
+});
+
 RegisterBuffer(DebugMeshInstanceBuffer, {
     DebugMeshInstance instances[];
 });

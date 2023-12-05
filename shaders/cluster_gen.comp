@@ -7,13 +7,82 @@ layout(push_constant, std430) uniform PushConstants {
 	mat4 screen_to_view_matrix;
 	uvec2 screen_size;
 	uint tile_size_px;
+	uint cluster_buffer;
+    uvec3 cluster_count;
 	float z_near;
 	float z_far;
-	uint cluster_buffer;
 };
 
 layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
-void main() {
+vec4 screen_to_view(vec4 screen_pos){
+    //Convert to NDC
+    vec2 tex_coord = screen_pos.xy / screen_size.xy;
 
+    //Convert to clipSpace
+    vec4 clip = vec4(vec2(tex_coord.x, 1.0 - tex_coord.y)* 2.0 - 1.0, screen_pos.z, screen_pos.w);
+
+    //View space transform
+    vec4 view = screen_to_view_matrix * clip;
+
+    //Perspective projection
+    view = view / view.w;
+
+    return view;
+}
+
+vec3 line_intersection_to_z_plane(vec3 a, vec3 b, float z_distance){
+    //all clusters planes are aligned in the same z direction
+    vec3 normal = vec3(0.0, 0.0, -1.0);
+    //getting the line from the eye to the tile
+    vec3 ab =  b - a;
+    //Computing the intersection length for the line and the plane
+    float t = (z_distance - dot(normal, a)) / dot(normal, ab);
+    //Computing the actual xyz position of the point along the line
+    vec3 result = a + t * ab;
+    return result;
+}
+
+uint cluster_index_from_id(uvec3 id) {
+    // TODO: optimize data layout
+    return id.x + id.y * cluster_count.x + id.z * cluster_count.x * cluster_count.y;
+}
+
+// http://www.aortiz.me/2018/12/21/CG.html
+void main() {
+    if (gl_GlobalInvocationID.x >= cluster_count.x ||
+        gl_GlobalInvocationID.y >= cluster_count.y ||
+        gl_GlobalInvocationID.z >= cluster_count.z) return;
+
+    const vec3 eye_pos = vec3(0.0);
+    const uvec3 cluster_id = gl_GlobalInvocationID;
+    
+    uint cluster_index  = cluster_index_from_id(cluster_id);
+
+    // screen space bounds
+    vec2 min_bounds_screen_space = cluster_id.xy * tile_size_px;
+    vec2 max_bounds_screen_space = min(min_bounds_screen_space + tile_size_px, screen_size);
+
+    //Pass min and max to view space
+    vec3 min_bounds_view_space = screen_to_view(vec4(min_bounds_screen_space, 1.0, 1.0)).xyz;
+    vec3 max_bounds_view_space = screen_to_view(vec4(max_bounds_screen_space, 1.0, 1.0)).xyz;
+
+    //Near and far values of the cluster in view space
+    //We use equation (2) directly to obtain the tile values
+    float cluster_near  = z_near * pow(z_far / z_near,  cluster_id.z      / float(cluster_count.z));
+    float cluster_far   = z_near * pow(z_far / z_near, (cluster_id.z + 1) / float(cluster_count.z));
+
+    //Finding the 4 intersection points made from each point to the cluster near/far plane
+    vec3 minPointNear = line_intersection_to_z_plane(eye_pos, min_bounds_view_space, cluster_near);
+    vec3 minPointFar  = line_intersection_to_z_plane(eye_pos, min_bounds_view_space, cluster_far );
+    vec3 maxPointNear = line_intersection_to_z_plane(eye_pos, max_bounds_view_space, cluster_near);
+    vec3 maxPointFar  = line_intersection_to_z_plane(eye_pos, max_bounds_view_space, cluster_far );
+
+    vec3 minPointAABB = min(min(minPointNear, minPointFar),min(maxPointNear, maxPointFar));
+    vec3 maxPointAABB = max(max(minPointNear, minPointFar),max(maxPointNear, maxPointFar));
+
+    //Saving the AABB at the tile linear index
+    //Cluster is just a SSBO made of a struct of 2 vec4's
+    GetBuffer(ClusterVolumeBuffer, cluster_buffer).clusters[cluster_index].min_pos  = vec4(minPointAABB , 0.0);
+    GetBuffer(ClusterVolumeBuffer, cluster_buffer).clusters[cluster_index].max_pos  = vec4(maxPointAABB , 0.0);
 }

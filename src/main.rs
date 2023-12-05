@@ -37,14 +37,14 @@ use input::Input;
 use scene::{EntityData, Light, LightParams, SceneData, Transform};
 
 use passes::{
-    cluster::ClusterSettings,
+    cluster::{ClusterDebugSettings, ClusterSettings},
     debug_renderer::DebugRenderer,
     env_map_loader::EnvironmentMap,
     forward::{ForwardRenderer, RenderMode},
     shadow_renderer::{ShadowRenderer, ShadowSettings},
 };
 
-use crate::passes::{forward::TargetAttachments, post_process::render_post_process};
+use crate::passes::{forward::TargetAttachments, post_process::render_post_process, cluster::draw_cluster_volumes};
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
@@ -204,6 +204,7 @@ pub struct Settings {
 
     pub camera_debug_settings: CameraDebugSettings,
     pub cluster_settings: ClusterSettings,
+    pub cluster_debug_settings: ClusterDebugSettings,
 }
 
 impl Default for Settings {
@@ -215,12 +216,13 @@ impl Default for Settings {
 
             camera_debug_settings: Default::default(),
             cluster_settings: Default::default(),
+            cluster_debug_settings: Default::default(),
         }
     }
 }
 
 impl Settings {
-    pub fn edit(&mut self, device: &graphics::Device, ui: &mut egui::Ui) {
+    pub fn edit_general(&mut self, device: &graphics::Device, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let present_mode_display = |p: vk::PresentModeKHR| match p {
                 vk::PresentModeKHR::FIFO => "fifo",
@@ -249,11 +251,14 @@ impl Settings {
             });
         });
 
-        ui.heading("Shadow settings");
+        ui.heading("Shadow Settings");
         self.shadow_settings.edit(ui);
+    }
 
-        ui.heading("Cluster settings");
+    pub fn edit_cluster(&mut self, ui: &mut egui::Ui) {
         self.cluster_settings.edit(ui);
+        ui.heading("Debug Settings");
+        self.cluster_debug_settings.edit(&self.cluster_settings, ui);
     }
 }
 
@@ -363,6 +368,7 @@ struct App {
     open_camera_debug_settings: bool,
     open_settings: bool,
     open_shadow_debug_settings: bool,
+    open_cluster_settings: bool,
 }
 
 impl App {
@@ -578,6 +584,7 @@ impl App {
             open_camera_debug_settings: false,
             open_settings: false,
             open_shadow_debug_settings: false,
+            open_cluster_settings: false,
         }
     }
 
@@ -636,6 +643,9 @@ impl App {
         }
         if input.key_pressed(KeyCode::F6) {
             self.open_shadow_debug_settings = !self.open_shadow_debug_settings;
+        }
+        if input.key_pressed(KeyCode::F7) {
+            self.open_cluster_settings = !self.open_cluster_settings;
         }
 
         fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
@@ -761,7 +771,7 @@ impl App {
 
         if self.open_settings {
             egui::Window::new("settings").open(&mut self.open_settings).show(egui_ctx, |ui| {
-                self.settings.edit(&context.device, ui);
+                self.settings.edit_general(&context.device, ui);
             });
             self.shadow_renderer.update_settings(&self.settings.shadow_settings);
         }
@@ -809,9 +819,11 @@ impl App {
         let scene = self.scene.import_to_graph(context);
 
         let screen_extent = context.swapchain_extent();
+
         self.camera.aspect_ratio = screen_extent.width as f32 / screen_extent.height as f32;
 
         if !self.settings.camera_debug_settings.freeze_camera {
+            self.settings.cluster_settings.set_resolution([screen_extent.width, screen_extent.height]);
             self.frozen_camera = self.camera;
         }
 
@@ -822,7 +834,7 @@ impl App {
             let far_clip = self.settings.shadow_settings.max_shadow_distance;
             let frustum_corner = math::perspective_corners(fov, self.frozen_camera.aspect_ratio, near_clip, far_clip)
                 .map(|corner| self.frozen_camera.transform.compute_matrix() * corner);
-            self.debug_renderer.draw_frustum(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
+            self.debug_renderer.draw_cube_with_corners(&frustum_corner, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
         self.main_color_image.recreate(&graphics::ImageDesc {
@@ -949,6 +961,10 @@ impl App {
                 self.shadow_renderer.edit_shadow_debug_settings(ui);
             });
 
+        egui::Window::new("Cluster Settings")
+            .open(&mut self.open_cluster_settings)
+            .show(egui_ctx, |ui| self.settings.edit_cluster(ui));
+
         let show_bounding_boxes = self.settings.camera_debug_settings.show_bounding_boxes;
         let show_bounding_spheres = self.settings.camera_debug_settings.show_bounding_spheres;
         let show_screen_space_aabbs = self.settings.camera_debug_settings.show_screen_space_aabbs;
@@ -975,7 +991,7 @@ impl App {
                                 vec3a(0.0, 1.0, 1.0),
                             ]
                             .map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
-                            self.debug_renderer.draw_frustum(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                            self.debug_renderer.draw_cube_with_corners(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                         }
 
                         if show_bounding_spheres || show_screen_space_aabbs {
@@ -1057,6 +1073,13 @@ impl App {
                 );
             }
         }
+
+        draw_cluster_volumes(
+            &self.settings.cluster_settings,
+            &self.settings.cluster_debug_settings,
+            &self.frozen_camera,
+            &mut self.debug_renderer,
+        );
 
         self.debug_renderer.render(
             context,

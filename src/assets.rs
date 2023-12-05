@@ -1,5 +1,5 @@
 use crate::collections::freelist_alloc::*;
-use crate::math;
+use crate::math::{self, Aabb};
 use crate::{collections::arena, graphics};
 
 use ash::vk;
@@ -481,32 +481,6 @@ impl MeshData {
         }
 
         Ok(mesh_data)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Aabb {
-    pub min: Vec3A,
-    pub max: Vec3A,
-}
-
-impl Aabb {
-    pub const ZERO: Self = Self {
-        min: Vec3A::ZERO,
-        max: Vec3A::ZERO,
-    };
-
-    pub fn from_arrays(min: [f32; 3], max: [f32; 3]) -> Self {
-        Self {
-            min: Vec3A::from_array(min),
-            max: Vec3A::from_array(max),
-        }
-    }
-}
-
-impl Default for Aabb {
-    fn default() -> Self {
-        Self::ZERO
     }
 }
 

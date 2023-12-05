@@ -601,13 +601,13 @@ impl ShadowRenderer {
                 if self.debug_settings.show_cascade_view_frustum {
                     let subfrustum_corners_w = math::perspective_corners(fov, camera.aspect_ratio, near, far)
                         .map(|v| view_to_world_matrix * v);
-                    debug_renderer.draw_frustum(&subfrustum_corners_w, Vec4::splat(1.0));
+                    debug_renderer.draw_cube_with_corners(&subfrustum_corners_w, Vec4::splat(1.0));
                 }
 
                 if self.debug_settings.show_cascade_light_frustum {
                     let cascade_frustum_corners =
                         math::frustum_corners_from_matrix(&(projection_matrix * light_matrix));
-                    debug_renderer.draw_frustum(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
+                    debug_renderer.draw_cube_with_corners(&cascade_frustum_corners, vec4(1.0, 1.0, 0.0, 1.0));
                 }
 
                 if self.debug_settings.show_cascade_screen_space_aabb {

@@ -1,0 +1,50 @@
+#version 460
+
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+#include "../include/functions.glsl"
+
+#include "cluster_common.glsl"
+
+layout(push_constant, std430) uniform PushConstants {
+    uvec3 cluster_count;
+    uint mask_buffer;
+    uint unique_cluster_buffer;
+};
+
+layout (local_size_x = 4, local_size_y = 4, local_size_x = 4) in;
+
+shared uint bitmask;
+
+void main() {
+    if (gl_GlobalInvocationID == uvec3(0)) {
+        GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_count = 0;
+    }
+
+    barrier();
+
+    if (gl_GlobalInvocationID.x >= cluster_count.x ||
+        gl_GlobalInvocationID.y >= cluster_count.y ||
+        gl_GlobalInvocationID.z >= cluster_count.z) return;
+
+    const uvec3 cluster_id = gl_GlobalInvocationID;
+    uint cluster_index  = cluster_volume_index_from_id(cluster_count, cluster_id);
+    uint tile_index = tile_id_to_tile_index(cluster_count.xy, cluster_id.xy);
+    uint tile_bitmask = GetBuffer(TileDepthSliceMask, mask_buffer).masks[tile_index];
+    bool cluster_active = bool(tile_bitmask & (1 << cluster_id.z));
+
+    if (cluster_active) {
+        uint unique_index = atomicAdd(GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_count, 1);
+        GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_indices[unique_index] = cluster_index;
+    }
+
+    barrier();
+    
+    if (gl_GlobalInvocationID == uvec3(0)) {
+        uint cluster_count = GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_count;
+        uint workgroup_count_x = div_ceil(cluster_count, 256);
+        GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_x = workgroup_count_x;
+        GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_y = 0;
+        GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_z = 0;
+    }
+}

@@ -9,6 +9,16 @@ float random(vec2 co)
 	return fract(sin(sn) * c);
 }
 
+uint div_ceil(uint lhs, uint rhs) {
+    uint d = lhs / rhs;
+    uint r = lhs % rhs;
+    if (r > 0 && rhs > 0) {
+        return d + 1;
+    } else {
+        return d;
+    }
+}
+
 uint hash(uint a)
 {
    a = (a+0x7ed55d16) + (a<<12);

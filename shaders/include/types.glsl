@@ -177,6 +177,15 @@ RegisterBuffer(TileDepthSliceMask, {
     uint masks[];
 });
 
+// also doubles as indirect dispatch arguments
+RegisterBuffer(CompactedClusterIndexList, {
+    uint workgroup_count_x;
+    uint workgroup_count_y;
+    uint workgroup_count_z;
+    uint cluster_count;
+    uint cluster_indices[];
+});
+
 RegisterBuffer(DebugMeshInstanceBuffer, {
     DebugMeshInstance instances[];
 });

@@ -2,7 +2,11 @@ use ash::vk;
 use glam::{vec2, vec3a, vec4, Mat4, Vec2, Vec3A, Vec3Swizzles, Vec4, Vec4Swizzles};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics::{self, AccessKind}, Camera, math::{self, Aabb}};
+use crate::{
+    graphics::{self, AccessKind},
+    math::{self, Aabb},
+    Camera,
+};
 
 use super::debug_renderer::DebugRenderer;
 
@@ -45,11 +49,7 @@ impl ClusterSettings {
 
     pub fn cluster_counts(&self) -> [usize; 3] {
         let tile_counts = self.tile_counts();
-        [
-            tile_counts[0],
-            tile_counts[1],
-            self.z_slice_count as usize,
-        ]
+        [tile_counts[0], tile_counts[1], self.z_slice_count as usize]
     }
 
     pub fn cluster_grid_info(&self, near: f32) -> (f32, f32) {
@@ -170,12 +170,12 @@ fn compute_cluster_aabb(
 }
 
 fn compute_cluster_volume_corners(
-	matrix: &Mat4, // inverse projection matrix
-	screen_size: Vec2,
-	tile_size_px: f32,
+    matrix: &Mat4, // inverse projection matrix
+    screen_size: Vec2,
+    tile_size_px: f32,
     cluster_count: Vec3A,
-	z_near: f32,
-	z_far: f32,
+    z_near: f32,
+    z_far: f32,
     cluster_id: Vec3A,
 ) -> [Vec4; 8] {
     let eye_pos = Vec3A::splat(0.0);
@@ -190,8 +190,8 @@ fn compute_cluster_volume_corners(
 
     //Near and far values of the cluster in view space
     //We use equation (2) directly to obtain the tile values
-    let cluster_near  = z_near * f32::powf(z_far / z_near,  cluster_id.z        / cluster_count.z);
-    let cluster_far   = z_near * f32::powf(z_far / z_near, (cluster_id.z + 1.0) / cluster_count.z);
+    let cluster_near = z_near * f32::powf(z_far / z_near, cluster_id.z / cluster_count.z);
+    let cluster_far = z_near * f32::powf(z_far / z_near, (cluster_id.z + 1.0) / cluster_count.z);
 
     [
         vec3a(0.0, 0.0, 0.0),
@@ -216,8 +216,10 @@ pub fn debug_cluster_volumes(
     camera: &Camera,
     debug_renderer: &mut DebugRenderer,
 ) {
-    if !debug_settings.show_cluster_volumes { return; }
-    
+    if !debug_settings.show_cluster_volumes {
+        return;
+    }
+
     let cluster_counts = settings.cluster_counts();
     let inverse_projection_matrix = camera.compute_projection_matrix().inverse();
     let view_to_world_matrix = camera.compute_view_matrix().inverse();
@@ -234,7 +236,8 @@ pub fn debug_cluster_volumes(
                         camera.z_near(),
                         settings.far_plane,
                         Vec3A::new(x as f32, y as f32, z as f32),
-                    ).map(|c| {
+                    )
+                    .map(|c| {
                         let c = view_to_world_matrix.mul_vec4(c);
                         c / c.w
                     });
@@ -242,7 +245,7 @@ pub fn debug_cluster_volumes(
                 }
             }
         }
-        
+
         return;
     }
 
@@ -251,7 +254,6 @@ pub fn debug_cluster_volumes(
         debug_settings.selected_cluster_id[1].min(cluster_counts[1] as u32 - 1),
         debug_settings.selected_cluster_id[2].min(cluster_counts[2] as u32 - 1),
     ];
-
 
     let aabb = compute_cluster_aabb(
         &inverse_projection_matrix,
@@ -271,7 +273,8 @@ pub fn debug_cluster_volumes(
         camera.z_near(),
         settings.far_plane,
         Vec3A::from_array(selected_cluster_id.map(|x| x as f32)),
-    ).map(|c| {
+    )
+    .map(|c| {
         let c = view_to_world_matrix.mul_vec4(c);
         c / c.w
     });
@@ -365,11 +368,14 @@ pub fn mark_active_clusters(
 
     let tile_count = settings.tile_counts();
 
-    let tile_depth_slice_mask = context.create_transient_buffer("tile_depth_slice_mask", graphics::BufferDesc {
-        size: tile_count[0] * tile_count[1] * 4,
-        usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-        memory_location: MemoryLocation::GpuOnly,
-    });
+    let tile_depth_slice_mask = context.create_transient_buffer(
+        "tile_depth_slice_mask",
+        graphics::BufferDesc {
+            size: tile_count[0] * tile_count[1] * 4,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            memory_location: MemoryLocation::GpuOnly,
+        },
+    );
 
     let tile_size_px = settings.tile_px_size();
     let z_near = camera.z_near();
@@ -378,7 +384,8 @@ pub fn mark_active_clusters(
     let cluster_count = settings.cluster_counts().map(|x| x as u32);
     let screen_resolution = settings.screen_resolution;
 
-    context.add_pass("mark_active_tiles")
+    context
+        .add_pass("mark_active_tiles")
         .with_dependency(depth_buffer, AccessKind::ComputeShaderRead)
         .with_dependency(tile_depth_slice_mask, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
@@ -401,4 +408,45 @@ pub fn mark_active_clusters(
         });
 
     tile_depth_slice_mask
+}
+
+pub fn compact_active_clusters(
+    context: &mut graphics::Context,
+    settings: &ClusterSettings,
+    active_cluster_mask: graphics::GraphBufferHandle,
+) -> graphics::GraphBufferHandle {
+    let pipeline = context.create_compute_pipeline(
+        "compact_active_clusters_pipeline",
+        graphics::ShaderSource::spv("shaders/light_cluster/active_cluster_compaction.comp.spv"),
+    );
+
+    let compact_cluster_index_list = context.create_transient_buffer(
+        "compact_cluster_index_list",
+        graphics::BufferDesc {
+            size: 16 + settings.cluster_linear_count() * 4,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            memory_location: MemoryLocation::GpuOnly,
+        },
+    );
+
+    let cluster_count = settings.cluster_counts().map(|x| x as u32);
+
+    context
+        .add_pass("compact_active_clusters")
+        .with_dependency(active_cluster_mask, AccessKind::ComputeShaderRead)
+        .with_dependency(compact_cluster_index_list, AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let active_cluster_mask = graph.get_buffer(active_cluster_mask);
+            let compact_cluster_index_list = graph.get_buffer(compact_cluster_index_list);
+
+            cmd.bind_compute_pipeline(pipeline);
+            cmd.build_constants()
+                .uvec3(cluster_count)
+                .buffer(active_cluster_mask)
+                .buffer(compact_cluster_index_list);
+
+            cmd.dispatch(cluster_count.map(|x| x.div_ceil(4)));
+        });
+
+    compact_cluster_index_list
 }

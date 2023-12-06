@@ -18,8 +18,6 @@ layout(push_constant, std430) uniform PushConstants {
 
 layout (local_size_x = 8, local_size_y = 8) in;
 
-shared uint bitmask;
-
 void main() {
     uvec2 pixel_id = gl_GlobalInvocationID.xy;
     if (pixel_id.x >= screen_size.x || pixel_id.y >= screen_size.y) return;

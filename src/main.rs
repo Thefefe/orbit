@@ -45,7 +45,7 @@ use passes::{
 };
 
 use crate::passes::{
-    cluster::{debug_cluster_volumes, generate_cluster_volumes, mark_active_clusters},
+    cluster::{compact_active_clusters, debug_cluster_volumes, generate_cluster_volumes, mark_active_clusters},
     forward::TargetAttachments,
     post_process::render_post_process,
 };
@@ -947,12 +947,14 @@ impl App {
         self.shadow_renderer.debug_settings.selected_shadow = selected_shadow;
 
         let _cluster_volumes = generate_cluster_volumes(context, &self.settings.cluster_settings, &self.frozen_camera);
-        let _active_cluster_mask = mark_active_clusters(
+        let active_cluster_mask = mark_active_clusters(
             context,
             &self.settings.cluster_settings,
             target_attachments.non_msaa_depth_target(),
             &self.frozen_camera,
         );
+        let _compact_cluster_list =
+            compact_active_clusters(context, &self.settings.cluster_settings, active_cluster_mask);
 
         self.forward_renderer.render(
             context,

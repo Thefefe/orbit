@@ -173,6 +173,10 @@ RegisterBuffer(ClusterVolumeBuffer, {
     ClusterVolume clusters[];
 });
 
+RegisterBuffer(TileDepthSliceMask, {
+    uint masks[];
+});
+
 RegisterBuffer(DebugMeshInstanceBuffer, {
     DebugMeshInstance instances[];
 });

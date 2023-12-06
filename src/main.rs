@@ -44,7 +44,11 @@ use passes::{
     shadow_renderer::{ShadowRenderer, ShadowSettings},
 };
 
-use crate::passes::{forward::TargetAttachments, post_process::render_post_process, cluster::draw_cluster_volumes};
+use crate::passes::{
+    cluster::{debug_cluster_volumes, generate_cluster_volumes, mark_active_clusters},
+    forward::TargetAttachments,
+    post_process::render_post_process,
+};
 
 pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
@@ -445,37 +449,37 @@ impl App {
             load_gltf(&gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
         }
 
-        // let horizontal_range = -8.0..=8.0;
-        // let vertical_range = 0.0..=6.0;
-        // let mut thread_rng = rand::thread_rng();
-        // use rand::Rng;
+        let horizontal_range = -8.0..=8.0;
+        let vertical_range = 0.0..=6.0;
+        let mut thread_rng = rand::thread_rng();
+        use rand::Rng;
 
-        // for _ in 0..32 {
-        //     let position = Vec3 {
-        //         x: thread_rng.gen_range(horizontal_range.clone()),
-        //         y: thread_rng.gen_range(vertical_range.clone()),
-        //         z: thread_rng.gen_range(horizontal_range.clone()),
-        //     };
+        for _ in 0..64 {
+            let position = Vec3 {
+                x: thread_rng.gen_range(horizontal_range.clone()),
+                y: thread_rng.gen_range(vertical_range.clone()),
+                z: thread_rng.gen_range(horizontal_range.clone()),
+            };
 
-        //     let color = egui::epaint::Hsva::new(thread_rng.gen_range(0.0..=1.0), 1.0, 1.0, 1.0).to_rgb();
-        //     let color = Vec3::from_array(color);
-        //     let intensity = thread_rng.gen_range(1.0..=16.0);
+            let color = egui::epaint::Hsva::new(thread_rng.gen_range(0.0..=1.0), 1.0, 1.0, 1.0).to_rgb();
+            let color = Vec3::from_array(color);
+            let intensity = thread_rng.gen_range(1.0..=16.0);
 
-        //     scene.add_entity(EntityData {
-        //         name: None,
-        //         transform: Transform {
-        //             position,
-        //             ..Default::default()
-        //         },
-        //         light: Some(Light {
-        //             color,
-        //             intensity,
-        //             params: LightParams::Point { radius: 1.0 },
-        //             ..Default::default()
-        //         }),
-        //         ..Default::default()
-        //     });
-        // }
+            scene.add_entity(EntityData {
+                name: None,
+                transform: Transform {
+                    position,
+                    ..Default::default()
+                },
+                light: Some(Light {
+                    color,
+                    intensity,
+                    params: LightParams::Point { radius: 1.0 },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
 
         // use rand::Rng;
         // let mut rng = rand::thread_rng();
@@ -942,6 +946,14 @@ impl App {
         });
         self.shadow_renderer.debug_settings.selected_shadow = selected_shadow;
 
+        let _cluster_volumes = generate_cluster_volumes(context, &self.settings.cluster_settings, &self.frozen_camera);
+        let _active_cluster_mask = mark_active_clusters(
+            context,
+            &self.settings.cluster_settings,
+            target_attachments.non_msaa_depth_target(),
+            &self.frozen_camera,
+        );
+
         self.forward_renderer.render(
             context,
             &self.settings,
@@ -1074,7 +1086,7 @@ impl App {
             }
         }
 
-        draw_cluster_volumes(
+        debug_cluster_volumes(
             &self.settings.cluster_settings,
             &self.settings.cluster_debug_settings,
             &self.frozen_camera,

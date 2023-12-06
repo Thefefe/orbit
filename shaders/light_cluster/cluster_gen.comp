@@ -1,7 +1,9 @@
 #version 460
 
-#include "include/common.glsl"
-#include "include/types.glsl"
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+
+#include "cluster_common.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
 	mat4 screen_to_view_matrix;
@@ -43,11 +45,6 @@ vec3 line_intersection_to_z_plane(vec3 a, vec3 b, float z_distance){
     return result;
 }
 
-uint cluster_index_from_id(uvec3 id) {
-    // TODO: optimize data layout
-    return id.x + id.y * cluster_count.x + id.z * cluster_count.x * cluster_count.y;
-}
-
 // http://www.aortiz.me/2018/12/21/CG.html
 void main() {
     if (gl_GlobalInvocationID.x >= cluster_count.x ||
@@ -57,22 +54,19 @@ void main() {
     const vec3 eye_pos = vec3(0.0);
     const uvec3 cluster_id = gl_GlobalInvocationID;
     
-    uint cluster_index  = cluster_index_from_id(cluster_id);
+    uint cluster_index  = cluster_volume_index_from_id(cluster_count, cluster_id);
 
-    // screen space bounds
     vec2 min_bounds_screen_space = cluster_id.xy * tile_size_px;
     vec2 max_bounds_screen_space = min(min_bounds_screen_space + tile_size_px, screen_size);
 
-    //Pass min and max to view space
     vec3 min_bounds_view_space = screen_to_view(vec4(min_bounds_screen_space, 1.0, 1.0)).xyz;
     vec3 max_bounds_view_space = screen_to_view(vec4(max_bounds_screen_space, 1.0, 1.0)).xyz;
 
-    //Near and far values of the cluster in view space
-    //We use equation (2) directly to obtain the tile values
-    float cluster_near  = z_near * pow(z_far / z_near,  cluster_id.z      / float(cluster_count.z));
-    float cluster_far   = z_near * pow(z_far / z_near, (cluster_id.z + 1) / float(cluster_count.z));
+    // float cluster_near  = z_near * pow(z_far / z_near,  cluster_id.z      / float(cluster_count.z));
+    // float cluster_far   = z_near * pow(z_far / z_near, (cluster_id.z + 1) / float(cluster_count.z));
+    float cluster_near  = depth_slice_to_linear_near_z(cluster_count.z, z_near, z_far, cluster_id.z);
+    float cluster_far   = depth_slice_to_linear_near_z(cluster_count.z, z_near, z_far, cluster_id.z + 1);
 
-    //Finding the 4 intersection points made from each point to the cluster near/far plane
     vec3 minPointNear = line_intersection_to_z_plane(eye_pos, min_bounds_view_space, cluster_near);
     vec3 minPointFar  = line_intersection_to_z_plane(eye_pos, min_bounds_view_space, cluster_far );
     vec3 maxPointNear = line_intersection_to_z_plane(eye_pos, max_bounds_view_space, cluster_near);
@@ -81,8 +75,6 @@ void main() {
     vec3 minPointAABB = min(min(minPointNear, minPointFar),min(maxPointNear, maxPointFar));
     vec3 maxPointAABB = max(max(minPointNear, minPointFar),max(maxPointNear, maxPointFar));
 
-    //Saving the AABB at the tile linear index
-    //Cluster is just a SSBO made of a struct of 2 vec4's
     GetBuffer(ClusterVolumeBuffer, cluster_buffer).clusters[cluster_index].min_pos  = vec4(minPointAABB , 0.0);
     GetBuffer(ClusterVolumeBuffer, cluster_buffer).clusters[cluster_index].max_pos  = vec4(maxPointAABB , 0.0);
 }

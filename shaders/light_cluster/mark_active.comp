@@ -1,0 +1,40 @@
+#version 460
+
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+
+#include "cluster_common.glsl"
+
+layout(push_constant, std430) uniform PushConstants {
+    uvec3 cluster_count;
+	uint tile_size_px;
+	uvec2 screen_size;
+	float z_near;
+    float z_scale;
+    float z_bias;
+    uint depth_buffer;
+    uint depth_slice_mask_buffer;
+};
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+shared uint bitmask;
+
+void main() {
+    uvec2 pixel_id = gl_GlobalInvocationID.xy;
+    if (pixel_id.x >= screen_size.x || pixel_id.y >= screen_size.y) return;
+    
+    vec2 tex_coord = vec2(pixel_id) / vec2(screen_size);
+    tex_coord.y = 1.0 - tex_coord.y;
+    float depth = texture(GetSampledTexture2D(depth_buffer), tex_coord).x;
+    float linear_z = z_near / depth;
+    uint slice = linear_z_to_depth_slice(z_scale, z_bias, linear_z);
+
+    if (slice >= cluster_count.z) return;
+
+    uint bitmask = 1 << slice;
+
+    uvec2 tile_id = pixel_id / uvec2(tile_size_px);
+    uint tile_index = tile_id_to_tile_index(cluster_count.xy, tile_id);
+    atomicOr(GetBuffer(TileDepthSliceMask, depth_slice_mask_buffer).masks[tile_index], bitmask);
+}

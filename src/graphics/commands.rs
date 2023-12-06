@@ -649,6 +649,24 @@ impl<'a> PushConstantBuilder<'a> {
 
     #[track_caller]
     #[inline(always)]
+    pub fn uvec2(self, val: [u32; 2]) -> Self {
+        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    pub fn uvec3(self, val: [u32; 3]) -> Self {
+        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    pub fn uvec4(self, val: [u32; 4]) -> Self {
+        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    }
+
+    #[track_caller]
+    #[inline(always)]
     pub fn float(self, val: impl Into<f32>) -> Self {
         let val = val.into();
         self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))

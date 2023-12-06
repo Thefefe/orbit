@@ -2,7 +2,7 @@ use ash::vk;
 use glam::{vec2, vec3a, vec4, Mat4, Vec2, Vec3A, Vec3Swizzles, Vec4, Vec4Swizzles};
 use gpu_allocator::MemoryLocation;
 
-use crate::{graphics, Camera, math::{self, Aabb}};
+use crate::{graphics::{self, AccessKind}, Camera, math::{self, Aabb}};
 
 use super::debug_renderer::DebugRenderer;
 
@@ -50,6 +50,17 @@ impl ClusterSettings {
             tile_counts[1],
             self.z_slice_count as usize,
         ]
+    }
+
+    pub fn cluster_grid_info(&self, near: f32) -> (f32, f32) {
+        let far = self.far_plane;
+        let num_slices = self.z_slice_count as f32;
+        let log_f_n = f32::log2(far / near);
+
+        let z_scale = num_slices / log_f_n;
+        let z_bias = -((num_slices * near.log2()) / log_f_n);
+
+        (z_scale, z_bias)
     }
 
     pub fn edit(&mut self, ui: &mut egui::Ui) {
@@ -199,7 +210,7 @@ fn compute_cluster_volume_corners(
     })
 }
 
-pub fn draw_cluster_volumes(
+pub fn debug_cluster_volumes(
     settings: &ClusterSettings,
     debug_settings: &ClusterDebugSettings,
     camera: &Camera,
@@ -278,13 +289,10 @@ pub struct GpuClusterGridInfo {
 
 impl GpuClusterGridInfo {
     pub fn new(settings: &ClusterSettings, z_near: f32) -> Self {
-        let far = settings.far_plane;
-        let near = z_near;
-        let num_slices = settings.z_slice_count as f32;
-        let log_f_n = f32::log2(far / near);
+        let (z_scale, z_bias) = settings.cluster_grid_info(z_near);
         Self {
-            z_scale: num_slices / log_f_n,
-            z_bias: -((num_slices * near.log2()) / log_f_n),
+            z_scale,
+            z_bias,
             z_slice_count: settings.z_slice_count,
         }
     }
@@ -292,14 +300,14 @@ impl GpuClusterGridInfo {
 
 const CLUSTER_VOLUME_SIZE: usize = 32;
 
-fn generate_clusters(
+pub fn generate_cluster_volumes(
     context: &mut graphics::Context,
     settings: &ClusterSettings,
     camera: &Camera,
 ) -> graphics::GraphBufferHandle {
     let pipeline = context.create_compute_pipeline(
         "cluster_gen_pipeline",
-        graphics::ShaderSource::spv("shaders/cluster_gen.comp.spv"),
+        graphics::ShaderSource::spv("shaders/light_cluster/cluster_gen.comp.spv"),
     );
 
     let cluster_volume_buffer = context.create_transient_buffer(
@@ -321,7 +329,7 @@ fn generate_clusters(
 
     context
         .add_pass("cluster_gen_pass")
-        .with_dependency(cluster_volume_buffer, graphics::AccessKind::ComputeShaderWrite)
+        .with_dependency(cluster_volume_buffer, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
             let cluster_volume_buffer = graph.get_buffer(cluster_volume_buffer);
 
@@ -342,4 +350,55 @@ fn generate_clusters(
         });
 
     cluster_volume_buffer
+}
+
+pub fn mark_active_clusters(
+    context: &mut graphics::Context,
+    settings: &ClusterSettings,
+    depth_buffer: graphics::GraphImageHandle,
+    camera: &Camera,
+) -> graphics::GraphBufferHandle {
+    let pipeline = context.create_compute_pipeline(
+        "mark_active_clusters_pipeline",
+        graphics::ShaderSource::spv("shaders/light_cluster/mark_active.comp.spv"),
+    );
+
+    let tile_count = settings.tile_counts();
+
+    let tile_depth_slice_mask = context.create_transient_buffer("tile_depth_slice_mask", graphics::BufferDesc {
+        size: tile_count[0] * tile_count[1] * 4,
+        usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+        memory_location: MemoryLocation::GpuOnly,
+    });
+
+    let tile_size_px = settings.tile_px_size();
+    let z_near = camera.z_near();
+    let (z_scale, z_bias) = settings.cluster_grid_info(z_near);
+
+    let cluster_count = settings.cluster_counts().map(|x| x as u32);
+    let screen_resolution = settings.screen_resolution;
+
+    context.add_pass("mark_active_tiles")
+        .with_dependency(depth_buffer, AccessKind::ComputeShaderRead)
+        .with_dependency(tile_depth_slice_mask, AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let depth_buffer = graph.get_image(depth_buffer);
+            let tile_depth_slice_mask = graph.get_buffer(tile_depth_slice_mask);
+
+            cmd.bind_compute_pipeline(pipeline);
+            cmd.build_constants()
+                .uvec3(cluster_count)
+                .uint(tile_size_px)
+                .uvec2(screen_resolution)
+                .float(z_near)
+                .float(z_scale)
+                .float(z_bias)
+                .sampled_image(depth_buffer)
+                .buffer(tile_depth_slice_mask);
+
+            cmd.dispatch([screen_resolution[0].div_ceil(8), screen_resolution[1].div_ceil(8), 1]);
+            // cmd.dispatch([1, 1, 1]);
+        });
+
+    tile_depth_slice_mask
 }

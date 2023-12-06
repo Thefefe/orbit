@@ -137,7 +137,7 @@ impl CommandBuffer {
         if self.queue_type.supports_graphics() {
             device.bind_descriptors(self.handle(), vk::PipelineBindPoint::GRAPHICS);
         }
-        
+
         if self.queue_type.supports_compute() {
             device.bind_descriptors(self.handle(), vk::PipelineBindPoint::COMPUTE);
         }
@@ -219,12 +219,7 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
-    pub fn copy_buffer_to_image(
-        &self,
-        src_handle: vk::Buffer,
-        dst_handle: vk::Image,
-        regions: &[vk::BufferImageCopy],
-    ) {
+    pub fn copy_buffer_to_image(&self, src_handle: vk::Buffer, dst_handle: vk::Image, regions: &[vk::BufferImageCopy]) {
         unsafe {
             self.device.raw.cmd_copy_buffer_to_image(
                 self.buffer(),
@@ -419,7 +414,7 @@ impl<'a> CommandRecorder<'a> {
     pub fn draw_indexed_indirect(
         &self,
         indirect_buffer: &graphics::BufferView,
-        offset: vk::DeviceSize,
+        offset: u64,
         draw_count: u32,
         stride: u32,
     ) {
@@ -467,6 +462,13 @@ impl<'a> CommandRecorder<'a> {
     #[inline(always)]
     pub fn dispatch(&self, group_counts: [u32; 3]) {
         unsafe { self.device.raw.cmd_dispatch(self.buffer(), group_counts[0], group_counts[1], group_counts[2]) }
+    }
+
+    #[inline(always)]
+    pub fn dispatch_indirect(&self, buffer: &graphics::BufferView, offset: u64) {
+        unsafe {
+            self.device.raw.cmd_dispatch_indirect(self.buffer(), buffer.handle, offset);
+        }
     }
 
     pub fn generate_mipmaps(

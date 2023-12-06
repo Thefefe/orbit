@@ -8,21 +8,6 @@ struct GlobalData {
     float elapsed_time;
 };
 
-// struct DirectionalLightData {
-//     mat4 projection_matrices[MAX_SHADOW_CASCADE_COUNT];
-//     uint shadow_maps[MAX_SHADOW_CASCADE_COUNT];
-//     float cascade_world_sizes[MAX_SHADOW_CASCADE_COUNT];
-//     vec4 cascade_distances;
-//     vec3 color;
-//     float intensitiy;
-//     vec3 direction;
-//     float light_size;
-//     float blocker_search_radius;
-//     float normal_bias_scale;
-//     float oriented_bias;
-//     uint _padding;
-// };
-
 struct LightData {
     vec3  color;
     float intensity;
@@ -47,11 +32,14 @@ struct ShadowSettings {
     uint _padding;
 };
 
-struct ClusterGridInfo {
+RegisterBuffer(ClusterBuffer, {
+    uvec3 cluster_count;
+    uint  tile_px_size;
+    uvec2 screen_size;
     float z_scale;
     float z_bias;
     uint  z_slice_count;
-};
+});
 
 RegisterBuffer(PerFrameBuffer, {
     mat4  view_projection;
@@ -59,7 +47,6 @@ RegisterBuffer(PerFrameBuffer, {
     vec3  view_pos;
     uint  render_mode;
     float z_near;
-    ClusterGridInfo cluster_info;
 });
 
 struct MeshVertex {

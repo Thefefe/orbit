@@ -3,6 +3,7 @@
 #include "include/common.glsl"
 #include "include/types.glsl"
 #include "include/functions.glsl"
+#include "light_cluster/cluster_common.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
     uint per_frame_buffer;
@@ -10,6 +11,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint entity_buffer;
     uint draw_commands;
     uint materials_buffer;
+    uint cluster_buffer;
     uint light_count;
     uint light_data_buffer;
     uint shadow_data_buffer;
@@ -362,11 +364,15 @@ void main() {
         return;
     }
 
+    
+    uvec2 tile_id = uvec2(gl_FragCoord.xy) / GetBuffer(ClusterBuffer, cluster_buffer).tile_px_size;
     float z_near =  GetBuffer(PerFrameBuffer, per_frame_buffer).z_near;
-    float cluster_z_scale = GetBuffer(PerFrameBuffer, per_frame_buffer).cluster_info.z_scale;
-    float cluster_z_bias = GetBuffer(PerFrameBuffer, per_frame_buffer).cluster_info.z_bias;
-    uint cluster_z_slice_count = GetBuffer(PerFrameBuffer, per_frame_buffer).cluster_info.z_slice_count;
-    uint cluster_z = uint(clamp(log2(z_near / gl_FragCoord.z) * cluster_z_scale + cluster_z_bias, 0, cluster_z_slice_count));
+    float z_scale = GetBuffer(ClusterBuffer, cluster_buffer).z_scale;
+    float z_bias = GetBuffer(ClusterBuffer, cluster_buffer).z_bias;
+    uint depth_slice_count = GetBuffer(ClusterBuffer, cluster_buffer).z_slice_count;
+    uint depth_slice = uint(clamp(log2(z_near / gl_FragCoord.z) * z_scale + z_bias, 0, depth_slice_count));
+
+    uvec3 cluster_id = uvec3(tile_id, depth_slice);
 
     switch (render_mode) {
         case 0:
@@ -560,7 +566,13 @@ void main() {
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 8: 
-            out_color = vec4(DEBUG_COLORS[cluster_z % DEBUG_COLOR_COUNT], 1.0);
+            out_color = vec4(DEBUG_COLORS[cluster_id.z % DEBUG_COLOR_COUNT], 1.0);
+            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            break;
+        case 9:
+            uint hash = hash(cluster_volume_index_from_id(GetBuffer(ClusterBuffer, cluster_buffer).cluster_count, cluster_id));
+            vec3 mcolor = vec3(float(hash & 255), float((hash >> 8) & 255), float((hash >> 16) & 255)) / 255.0;
+            out_color = vec4(mcolor, 1.0);
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
     }

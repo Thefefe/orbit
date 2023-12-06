@@ -285,6 +285,9 @@ pub fn debug_cluster_volumes(
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuClusterGridInfo {
+    cluster_count: [u32; 3],
+    tile_size_px: u32,
+    screen_size: [u32; 2],
     z_scale: f32,
     z_bias: f32,
     z_slice_count: u32,
@@ -294,6 +297,9 @@ impl GpuClusterGridInfo {
     pub fn new(settings: &ClusterSettings, z_near: f32) -> Self {
         let (z_scale, z_bias) = settings.cluster_grid_info(z_near);
         Self {
+            cluster_count: settings.cluster_counts().map(|x| x as u32),
+            tile_size_px: settings.tile_px_size(),
+            screen_size: settings.screen_resolution,
             z_scale,
             z_bias,
             z_slice_count: settings.z_slice_count,

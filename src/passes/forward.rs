@@ -24,6 +24,7 @@ pub enum RenderMode {
     Ao = 6,
     Overdraw = 7,
     ClusterSlice = 8,
+    ClusterId = 9,
 }
 
 impl From<u32> for RenderMode {
@@ -38,6 +39,7 @@ impl From<u32> for RenderMode {
             6 => Self::Ao,
             7 => Self::Overdraw,
             8 => Self::ClusterSlice,
+            9 => Self::ClusterId,
             _ => Self::Shaded,
         }
     }
@@ -75,7 +77,7 @@ pub struct ForwardFrameData {
     view_pos: Vec3,
     render_mode: u32,
     z_near: f32,
-    cluster_grid_info: GpuClusterGridInfo,
+    _padding: [u32; 3],
 }
 
 pub struct ForwardRenderer {
@@ -573,9 +575,12 @@ impl ForwardRenderer {
                 view_pos: camera.transform.position,
                 render_mode: render_mode as u32,
                 z_near: frozen_camera.z_near(),
-                cluster_grid_info: GpuClusterGridInfo::new(&settings.cluster_settings, frozen_camera.z_near()),
+                _padding: [0; 3],
             }),
         );
+
+        let cluster_data = GpuClusterGridInfo::new(&settings.cluster_settings, frozen_camera.z_near());
+        let cluster_buffer = context.transient_storage_data("cluster_data", bytemuck::bytes_of(&cluster_data));
 
         let brdf_integration_map = context.import(&self.brdf_integration_map);
         let jitter_texture = context.import(&self.jitter_offset_texture);
@@ -698,6 +703,7 @@ impl ForwardRenderer {
         pass_builder = pass_builder
             .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
             .with_dependency(frame_data, graphics::AccessKind::VertexShaderRead)
+            .with_dependency(cluster_buffer, graphics::AccessKind::FragmentShaderRead)
             .with_dependency(
                 target_attachments.depth_target,
                 graphics::AccessKind::DepthAttachmentWrite,
@@ -728,6 +734,7 @@ impl ForwardRenderer {
             let skybox = skybox.map(|h| graph.get_image(h));
 
             let per_frame_data = graph.get_buffer(frame_data);
+            let cluster_buffer = graph.get_buffer(cluster_buffer);
 
             let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
             let index_buffer = graph.get_buffer(assets.index_buffer);
@@ -810,6 +817,7 @@ impl ForwardRenderer {
                 .buffer(entity_buffer)
                 .buffer(draw_commands_buffer)
                 .buffer(materials_buffer)
+                .buffer(cluster_buffer)
                 .uint(scene.light_count as u32)
                 .buffer(light_buffer)
                 .buffer(shadow_data_buffer)

@@ -77,7 +77,7 @@ impl ClusterSettings {
         });
         ui.horizontal(|ui| {
             ui.label("z far plane");
-            ui.add(egui::DragValue::new(&mut self.far_plane).clamp_range(10.0..=200.0));
+            ui.add(egui::DragValue::new(&mut self.far_plane).clamp_range(10.0..=1000.0));
         });
     }
 }

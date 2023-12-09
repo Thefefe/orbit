@@ -5,7 +5,7 @@ use glam::{vec3, Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    assets::GpuAssets, collections::arena::Index, graphics, math, scene::GpuMeshDrawCommand, App, Settings, Camera,
+    assets::GpuAssets, collections::arena::Index, graphics, math, scene::GpuMeshDrawCommand, App, Camera, Settings,
 };
 
 #[repr(C)]
@@ -62,7 +62,7 @@ impl DebugRenderer {
         );
 
         let mesh_instance_buffer = context.create_buffer(
-            "debug_mesh_intance_buffermesh_intance_buffer",
+            "debug_mesh_instance_buffer",
             &graphics::BufferDesc {
                 size: graphics::FRAME_COUNT * Self::MAX_MESH_INSTANCE_COUNT * size_of::<GpuDebugMeshInstance>(),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
@@ -414,6 +414,10 @@ impl DebugRenderer {
         // for now the msaa resolve always happens here so we always need this pass
         // if self.line_vertices.is_empty() && self.mesh_draw_commands.is_empty() { return; }
 
+        let mesh_instance_offset = Self::MAX_MESH_INSTANCE_COUNT * context.frame_index();
+        let mesh_draw_commands_buffer_byte_offset =
+            Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuMeshDrawCommand>() * context.frame_index();
+
         self.mesh_expanded_draw_commands.clear();
         for draw_command in self.mesh_draw_commands.iter().copied() {
             for submesh in assets.submesh_blocks(draw_command.model) {
@@ -422,7 +426,7 @@ impl DebugRenderer {
                     instance_count: draw_command.instance_count,
                     first_index: submesh.index_offset(),
                     vertex_offset: submesh.vertex_offset(),
-                    first_instance: draw_command.instance_start,
+                    first_instance: mesh_instance_offset as u32 + draw_command.instance_start,
                     ..Default::default()
                 })
             }
@@ -610,7 +614,7 @@ impl DebugRenderer {
                     cmd.set_depth_test_enable(true);
                     cmd.draw_indexed_indirect(
                         draw_commands_buffer,
-                        0,
+                        mesh_draw_commands_buffer_byte_offset as u64,
                         mesh_draw_commands_count as u32,
                         size_of::<GpuMeshDrawCommand>() as u32,
                     );

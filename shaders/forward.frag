@@ -214,7 +214,7 @@ vec3 calculate_light(
 
     vec3 light_dir,
     vec3 light_color,
-    float light_distance,
+    float attenuation,
 
     vec3  albedo,
     vec3  normal,
@@ -223,7 +223,6 @@ vec3 calculate_light(
 ) {
     vec3 H = normalize(view_dir + light_dir);
 
-    float attenuation = 1.0 / max(light_distance * light_distance, EPSILON);
     vec3 radiance = light_color * attenuation;
 
     float n_dot_v = max(dot(normal, view_dir), EPSILON);
@@ -434,15 +433,15 @@ void main() {
                             if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
                                 uint shadow_map = GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_indices[cascade_index];
 
-                                float n_dot_l = dot(normal, GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction_or_position);
+                                float n_dot_l = dot(normal, GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction);
                                 float normal_bias_scale = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.normal_bias_scale;
                                 
                                 vec3 shadow_pos_world_space = vout.world_pos.xyz;
 
                                 shadow_pos_world_space += shadow_normal_offset(n_dot_l, normal, shadow_map, normal_bias_scale);
                                 
-                                vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction_or_position;
                                 float oriented_bias = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.oriented_bias;
+                                vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction;
                                 shadow_pos_world_space += get_oriented_bias(normal, light_direction, oriented_bias, false) * light_direction;
                                 
                                 vec4 cascade_shadow_map_coords =
@@ -450,19 +449,18 @@ void main() {
                                     vec4(shadow_pos_world_space, 1.0);
 
                                 float inv_world_size = 1.0 / GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_world_sizes[cascade_index];
-                                float uv_light_size = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].size * inv_world_size;
+                                float uv_light_size = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].inner_radius * inv_world_size;
 
                                 shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, inv_world_size, uv_light_size);
                             }
                         }
 
-                        vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction_or_position;
-
+                        vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction;
                         light_sum += calculate_light(
                             view_direction,
                             light_direction,
                             light_color,
-                            1.0, // light_distance
+                            1.0, // attenuation
                             base_color.rgb,
                             normal,
                             metallic,
@@ -471,17 +469,25 @@ void main() {
                     } break;
                     case LIGHT_TYPE_POINT: {
                         vec3 light_direction = 
-                            GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction_or_position
+                            GetBuffer(LightDataBuffer, light_data_buffer).lights[i].position
                             - vout.world_pos.xyz;
 
                         float light_distance = length(light_direction);
                         light_direction /= light_distance;
+                        light_distance = max(light_distance, GetBuffer(LightDataBuffer, light_data_buffer).lights[i].inner_radius);
+                        
+                        float attenuation = attenuation(
+                            max(light_distance, GetBuffer(LightDataBuffer, light_data_buffer).lights[i].inner_radius),
+                            GetBuffer(LightDataBuffer, light_data_buffer).lights[i].intensity, 
+                            GetBuffer(ClusterBuffer, cluster_buffer).luminance_cutoff, 
+                            GetBuffer(LightDataBuffer, light_data_buffer).lights[i].outer_radius
+                        );
 
                         light_sum += calculate_light(
                             view_direction,
                             light_direction,
                             light_color,
-                            light_distance,
+                            attenuation,
                             base_color.rgb,
                             normal,
                             metallic,
@@ -518,14 +524,14 @@ void main() {
                 if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
                     uint shadow_map = GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_indices[cascade_index];
 
-                    float n_dot_l = dot(normal, GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction_or_position);
+                    float n_dot_l = dot(normal, GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction);
                     float normal_bias_scale = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.normal_bias_scale;
                     
                     vec3 shadow_pos_world_space = vout.world_pos.xyz;
 
                     shadow_pos_world_space += shadow_normal_offset(n_dot_l, normal, shadow_map, normal_bias_scale);
                     
-                    vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction_or_position;
+                    vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction;
                     float oriented_bias = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.oriented_bias;
                     shadow_pos_world_space += get_oriented_bias(normal, light_direction, oriented_bias, false) * light_direction;
                     
@@ -534,7 +540,7 @@ void main() {
                         vec4(shadow_pos_world_space, 1.0);
 
                     float inv_world_size = 1.0 / GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_world_sizes[cascade_index];
-                    float uv_light_size = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].size * inv_world_size;
+                    float uv_light_size = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].inner_radius * inv_world_size;
 
                     shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, inv_world_size, uv_light_size);
                 }
@@ -542,7 +548,7 @@ void main() {
                 if (cascade_index < MAX_SHADOW_CASCADE_COUNT) cascade_color = DEBUG_COLORS[cascade_index];
             }
             
-            vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction_or_position;
+            vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[selected_light].direction;
             out_color.xyz = cascade_color * debug_light(vout.normal, light_direction, max(shadow, 0.2));
         } break;
         case 2:

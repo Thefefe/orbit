@@ -12,10 +12,11 @@ use super::debug_renderer::DebugRenderer;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ClusterSettings {
-    px_size_power: u32,
-    screen_resolution: [u32; 2],
-    z_slice_count: u32,
-    far_plane: f32,
+    pub px_size_power: u32,
+    pub screen_resolution: [u32; 2],
+    pub z_slice_count: u32,
+    pub far_plane: f32,
+    pub luminance_cutoff: f32,
 }
 
 impl Default for ClusterSettings {
@@ -25,6 +26,7 @@ impl Default for ClusterSettings {
             screen_resolution: [0; 2],
             z_slice_count: 24,
             far_plane: 100.0,
+            luminance_cutoff: 0.25,
         }
     }
 }
@@ -79,14 +81,18 @@ impl ClusterSettings {
             ui.label("z far plane");
             ui.add(egui::DragValue::new(&mut self.far_plane).clamp_range(10.0..=1000.0));
         });
+        ui.horizontal(|ui| {
+            ui.label("luminance cutoff");
+            ui.add(egui::DragValue::new(&mut self.luminance_cutoff).clamp_range(0.01..=0.5).speed(0.01));
+        });
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ClusterDebugSettings {
-    show_cluster_volumes: bool,
-    show_all_cluster_volumes: bool,
-    selected_cluster_id: [u32; 3],
+    pub show_cluster_volumes: bool,
+    pub show_all_cluster_volumes: bool,
+    pub selected_cluster_id: [u32; 3],
 }
 
 impl Default for ClusterDebugSettings {
@@ -288,9 +294,10 @@ pub struct GpuClusterGridInfo {
     cluster_count: [u32; 3],
     tile_size_px: u32,
     screen_size: [u32; 2],
+    z_slice_count: u32,
     z_scale: f32,
     z_bias: f32,
-    z_slice_count: u32,
+    luminance_cutoff: f32,
 }
 
 impl GpuClusterGridInfo {
@@ -303,6 +310,7 @@ impl GpuClusterGridInfo {
             z_scale,
             z_bias,
             z_slice_count: settings.z_slice_count,
+            luminance_cutoff: settings.luminance_cutoff,
         }
     }
 }

@@ -70,7 +70,7 @@ impl EntityData {
         }
     }
 
-    fn light_gpu_data(&self) -> Option<GpuLightData> {
+    fn light_gpu_data(&self, luminance_cutoff: f32) -> Option<GpuLightData> {
         let Some(light) = self.light.as_ref() else {
             return None;
         };
@@ -88,13 +88,14 @@ impl EntityData {
                 light_data.irradiance_map_index = irradiance.descriptor_index().unwrap();
                 light_data.prefiltered_map_index = prefiltered.descriptor_index().unwrap();
             },
-            LightParams::Directional { size } => {
-                light_data.direction_or_position = -self.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
-                light_data.size = *size;
+            LightParams::Directional { angular_size: size } => {
+                light_data.direction = -self.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
+                light_data.inner_radius = *size;
             },
-            LightParams::Point { radius } => {
-                light_data.direction_or_position = self.transform.position;
-                light_data.size = *radius;
+            LightParams::Point { inner_radius: radius } => {
+                light_data.position = self.transform.position;
+                light_data.inner_radius = *radius;
+                light_data.outer_radius = light.outer_radius(luminance_cutoff)
             },
         };
 
@@ -159,10 +160,10 @@ pub enum LightParams {
         prefiltered: graphics::Image,
     },
     Directional {
-        size: f32,
+        angular_size: f32,
     },
     Point {
-        radius: f32,
+        inner_radius: f32,
     },
 }
 
@@ -170,8 +171,8 @@ impl LightParams {
     fn default_from_kind(kind: LightKind) -> Self {
         match kind {
             LightKind::Sky         => todo!(),
-            LightKind::Directional => Self::Directional { size: 0.6 },
-            LightKind::Point       => Self::Point { radius: 0.1 },
+            LightKind::Directional => Self::Directional { angular_size: 0.6 },
+            LightKind::Point       => Self::Point { inner_radius: 0.1 },
         }
     }
 
@@ -196,15 +197,15 @@ impl LightParams {
             LightParams::Sky { .. } => {
                 ui.label("editing not yet implemented");
             },
-            LightParams::Directional { size } => {
+            LightParams::Directional { angular_size: size } => {
                 ui.horizontal(|ui| {
-                    ui.label("size");
+                    ui.label("angular size");
                     ui.add(egui::DragValue::new(size).speed(0.01).clamp_range(0.0..=16.0));
                 });
             },
-            LightParams::Point { radius } => {
+            LightParams::Point { inner_radius: radius } => {
                 ui.horizontal(|ui| {
-                    ui.label("radius");
+                    ui.label("inner radius");
                     ui.add(egui::DragValue::new(radius).speed(0.01).clamp_range(0.0..=16.0));
                 });
             },
@@ -234,7 +235,7 @@ impl Default for Light {
         Self {
             color: Vec3::ONE,
             intensity: 1.0,
-            params: LightParams::Point { radius: 0.6 },
+            params: LightParams::Point { inner_radius: 0.6 },
             cast_shadows: false,
             _light_index: None,
         }
@@ -242,6 +243,18 @@ impl Default for Light {
 }
 
 impl Light {
+    pub fn is_skylight(&self) -> bool {
+        matches!(&self.params, LightParams::Sky { .. })
+    }
+
+    pub fn is_directional(&self) -> bool {
+        matches!(&self.params, LightParams::Directional { .. })
+    }
+
+    pub fn is_point(&self) -> bool {
+        matches!(&self.params, LightParams::Point { .. })
+    }
+
     pub fn edit(&mut self, ui: &mut egui::Ui) {
         let mut arr = self.color.to_array();
         ui.horizontal(|ui| {
@@ -261,19 +274,25 @@ impl Light {
             ui.add(egui::Checkbox::without_text(&mut self.cast_shadows));
         });
     }
+
+    pub fn outer_radius(&self, cutoff: f32) -> f32 {
+        f32::sqrt(self.intensity / cutoff)
+    }
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuLightData {
-    pub color: Vec3,
-    pub intensity: f32,
-    pub direction_or_position: Vec3,
-    pub size: f32,
     pub light_type: u32,
     pub shadow_data_index: u32,
     pub irradiance_map_index: u32,
     pub prefiltered_map_index: u32,
+    pub color: Vec3,
+    pub intensity: f32,
+    pub position: Vec3,
+    pub inner_radius: f32,
+    pub direction: Vec3,
+    pub outer_radius: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -369,6 +388,7 @@ impl SceneData {
         context: &graphics::Context,
         shadow_renderer: &mut ShadowRenderer,
         assets: &GpuAssets,
+        luminance_cutoff: f32,
     ) {
         puffin::profile_function!();
 
@@ -392,7 +412,7 @@ impl SceneData {
                 }
             }
 
-            let light_data = entity.light_gpu_data();
+            let light_data = entity.light_gpu_data(luminance_cutoff);
             if let (Some(light), Some(mut light_data)) = (entity.light.as_mut(), light_data) {
                 light._light_index = Some(self.light_data_cache.len());
                 if light.cast_shadows {

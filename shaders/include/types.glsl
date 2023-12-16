@@ -9,14 +9,16 @@ struct GlobalData {
 };
 
 struct LightData {
-    vec3  color;
-    float intensity;
-    vec3  direction_or_position;
-    float size;
     uint  light_type;
     uint  shadow_data_index;
     uint  irradiance_map_index;
     uint  prefiltered_map_index;
+    vec3  color;
+    float intensity;
+    vec3  position;
+    float inner_radius;
+    vec3  direction;
+    float outer_radius;
 };
 
 struct ShadowData {
@@ -36,9 +38,10 @@ RegisterBuffer(ClusterBuffer, {
     uvec3 cluster_count;
     uint  tile_px_size;
     uvec2 screen_size;
+    uint  z_slice_count;
     float z_scale;
     float z_bias;
-    uint  z_slice_count;
+    float luminance_cutoff;
 });
 
 RegisterBuffer(PerFrameBuffer, {

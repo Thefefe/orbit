@@ -14,3 +14,8 @@ uint linear_z_to_depth_slice(float z_scale, float z_bias, float z) {
 float depth_slice_to_linear_near_z(uint slice_count, float near, float far, uint slice) {
     return near * pow(far / near, slice / float(slice_count));
 }
+
+float attenuation(float dist, float intensity, float luminance_cutoff, float outer_radius) {
+    float d2 = dist*dist;
+    return max((intensity / d2) - luminance_cutoff * d2 / (outer_radius * outer_radius), 0);
+}

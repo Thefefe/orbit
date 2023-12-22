@@ -19,11 +19,23 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture3D _u_texture3
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2DMS _u_texture2dms_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_texture_cube_registry[];
 
-#define RegisterImageFormat(Format) \
-    layout(set = 2, binding = 0, Format) uniform writeonly image2D _u_image2d##Format##_registry[];
+#define RegisterFloatImageFormat(Format) \
+    layout(set = 2, binding = 0, Format) uniform writeonly image2D _u_image2d_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform writeonly image3D _u_image3d_##Format##_registry[]
+
+#define RegisterIntImageFormat(Format) \
+    layout(set = 2, binding = 0, Format) uniform writeonly iimage2D _u_image2d_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform writeonly iimage3D _u_image3d_##Format##_registry[]
+
+#define RegisterUintImageFormat(Format) \
+    layout(set = 2, binding = 0, Format) uniform uimage2D _u_image2d_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform uimage3D _u_image3d_##Format##_registry[]
 
 #define GetImage2D(Format, Index) \
-    _u_image2d##Format##_registry[nonuniformEXT(Index)]
+    _u_image2d_##Format##_registry[nonuniformEXT(Index)]
+
+#define GetImage3D(Format, Index) \
+    _u_image3d_##Format##_registry[nonuniformEXT(Index)]
 
 #define GetBufferRegistryName(Name) _u_##Name##Registry
 

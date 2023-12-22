@@ -153,6 +153,15 @@ pub enum MultisampleCount {
 impl MultisampleCount {
     pub const ALL: [Self; 4] = [Self::None, Self::X2, Self::X4, Self::X8];
 
+    pub fn sample_count(self) -> u32 {
+        match self {
+            MultisampleCount::None  => 1,
+            MultisampleCount::X2    => 2,
+            MultisampleCount::X4    => 4,
+            MultisampleCount::X8    => 8,
+        }
+    }
+
     pub fn is_some(self) -> bool {
         self != Self::None
     }

@@ -10,7 +10,7 @@ use crate::{
     App, Camera, Settings, MAX_DRAW_COUNT,
 };
 
-use super::{cluster::GpuClusterGridInfo, draw_gen::DepthPyramid, shadow_renderer::ShadowRenderer};
+use super::{cluster::GraphClusterInfo, draw_gen::DepthPyramid, shadow_renderer::ShadowRenderer};
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -539,6 +539,7 @@ impl ForwardRenderer {
         shadow_renderer: &ShadowRenderer,
 
         target_attachments: &TargetAttachments,
+        cluster_info: GraphClusterInfo,
 
         camera: &Camera,
         frozen_camera: &Camera,
@@ -578,9 +579,6 @@ impl ForwardRenderer {
                 _padding: [0; 3],
             }),
         );
-
-        let cluster_data = GpuClusterGridInfo::new(&settings.cluster_settings, frozen_camera.z_near());
-        let cluster_buffer = context.transient_storage_data("cluster_data", bytemuck::bytes_of(&cluster_data));
 
         let brdf_integration_map = context.import(&self.brdf_integration_map);
         let jitter_texture = context.import(&self.jitter_offset_texture);
@@ -641,34 +639,34 @@ impl ForwardRenderer {
                 }),
         );
 
-        let overdraw_pipeline = context.create_raster_pipeline(
-            "forward_overdraw_pipeline",
-            &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/forward.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/forward.frag.spv"))
-                .color_attachments(&[graphics::PipelineColorAttachment {
-                    format: App::COLOR_FORMAT,
-                    color_mask: vk::ColorComponentFlags::RGBA,
-                    color_blend: Some(graphics::ColorBlendState {
-                        src_color_blend_factor: vk::BlendFactor::ONE,
-                        dst_color_blend_factor: vk::BlendFactor::ONE,
-                        color_blend_op: vk::BlendOp::ADD,
-                        src_alpha_blend_factor: vk::BlendFactor::ONE,
-                        dst_alpha_blend_factor: vk::BlendFactor::ONE,
-                        alpha_blend_op: vk::BlendOp::ADD,
-                    }),
-                }])
-                .depth_state(Some(graphics::DepthState {
-                    format: App::DEPTH_FORMAT,
-                    test: graphics::PipelineState::Static(true),
-                    write: false,
-                    compare: vk::CompareOp::GREATER_OR_EQUAL,
-                }))
-                .multisample_state(graphics::MultisampleState {
-                    sample_count: settings.msaa,
-                    alpha_to_coverage: false,
-                }),
-        );
+        // let overdraw_pipeline = context.create_raster_pipeline(
+        //     "forward_overdraw_pipeline",
+        //     &graphics::RasterPipelineDesc::builder()
+        //         .vertex_shader(graphics::ShaderSource::spv("shaders/forward.vert.spv"))
+        //         .fragment_shader(graphics::ShaderSource::spv("shaders/forward.frag.spv"))
+        //         .color_attachments(&[graphics::PipelineColorAttachment {
+        //             format: App::COLOR_FORMAT,
+        //             color_mask: vk::ColorComponentFlags::RGBA,
+        //             color_blend: Some(graphics::ColorBlendState {
+        //                 src_color_blend_factor: vk::BlendFactor::ONE,
+        //                 dst_color_blend_factor: vk::BlendFactor::ONE,
+        //                 color_blend_op: vk::BlendOp::ADD,
+        //                 src_alpha_blend_factor: vk::BlendFactor::ONE,
+        //                 dst_alpha_blend_factor: vk::BlendFactor::ONE,
+        //                 alpha_blend_op: vk::BlendOp::ADD,
+        //             }),
+        //         }])
+        //         .depth_state(Some(graphics::DepthState {
+        //             format: App::DEPTH_FORMAT,
+        //             test: graphics::PipelineState::Static(true),
+        //             write: false,
+        //             compare: vk::CompareOp::GREATER_OR_EQUAL,
+        //         }))
+        //         .multisample_state(graphics::MultisampleState {
+        //             sample_count: settings.msaa,
+        //             alpha_to_coverage: false,
+        //         }),
+        // );
 
         let skybox_pipeline = context.create_raster_pipeline(
             "skybox_pipeline",
@@ -703,7 +701,15 @@ impl ForwardRenderer {
         pass_builder = pass_builder
             .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
             .with_dependency(frame_data, graphics::AccessKind::VertexShaderRead)
-            .with_dependency(cluster_buffer, graphics::AccessKind::FragmentShaderRead)
+            .with_dependency(
+                cluster_info.light_offset_image,
+                graphics::AccessKind::FragmentShaderReadGeneral,
+            )
+            .with_dependency(
+                cluster_info.light_index_list,
+                graphics::AccessKind::FragmentShaderRead,
+            )
+            .with_dependency(cluster_info.info_buffer, graphics::AccessKind::FragmentShaderRead)
             .with_dependency(
                 target_attachments.depth_target,
                 graphics::AccessKind::DepthAttachmentWrite,
@@ -734,7 +740,7 @@ impl ForwardRenderer {
             let skybox = skybox.map(|h| graph.get_image(h));
 
             let per_frame_data = graph.get_buffer(frame_data);
-            let cluster_buffer = graph.get_buffer(cluster_buffer);
+            let cluster_info_buffer = graph.get_buffer(cluster_info.info_buffer);
 
             let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
             let index_buffer = graph.get_buffer(assets.index_buffer);
@@ -806,7 +812,8 @@ impl ForwardRenderer {
             cmd.bind_index_buffer(&index_buffer, 0);
 
             if render_mode == RenderMode::Overdraw {
-                cmd.bind_raster_pipeline(overdraw_pipeline)
+                // cmd.bind_raster_pipeline(overdraw_pipeline);
+                cmd.bind_raster_pipeline(forward_pipeline);
             } else {
                 cmd.bind_raster_pipeline(forward_pipeline);
             }
@@ -817,7 +824,7 @@ impl ForwardRenderer {
                 .buffer(entity_buffer)
                 .buffer(draw_commands_buffer)
                 .buffer(materials_buffer)
-                .buffer(cluster_buffer)
+                .buffer(cluster_info_buffer)
                 .uint(scene.light_count as u32)
                 .buffer(light_buffer)
                 .buffer(shadow_data_buffer)

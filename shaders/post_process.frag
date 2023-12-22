@@ -48,38 +48,6 @@ float luminance(vec3 radiance) {
 
 #define HIGHEST_OVERDRAW_COUNT 12.0
 
-//https://github.com/kbinani/colormap-shaders/blob/master/shaders/glsl/MATLAB_jet.frag
-float colormap_red(float x) {
-    if (x < 0.7) {
-        return 4.0 * x - 1.5;
-    } else {
-        return -4.0 * x + 4.5;
-    }
-}
-
-float colormap_green(float x) {
-    if (x < 0.5) {
-        return 4.0 * x - 0.5;
-    } else {
-        return -4.0 * x + 3.5;
-    }
-}
-
-float colormap_blue(float x) {
-    if (x < 0.3) {
-       return 4.0 * x + 0.5;
-    } else {
-       return -4.0 * x + 2.5;
-    }
-}
-
-vec4 colormap_overdraw(float x) {
-    float red = colormap_red(x);
-    float green = colormap_green(x);
-    float blue = colormap_blue(x);
-    return vec4(red, green, blue, 1.0);
-}
-
 layout(push_constant, std430) uniform PushConstants {
     uint render_mode;
     uint image_index;
@@ -92,6 +60,8 @@ layout(push_constant, std430) uniform PushConstants {
 void main() {
     vec3 hdr_color = texture(GetSampledTexture2D(image_index), in_uv).rgb;
 
+    if (render_mode == 8) out_color = vec4(hdr_color.xyz, 1.0);
+
     // overdraw visualization
     if (render_mode == 7) {
         float draw_count = hdr_color.r;
@@ -99,7 +69,7 @@ void main() {
             out_color = vec4(0.0);
         } else {
             float x = clamp((draw_count - 1.0) / HIGHEST_OVERDRAW_COUNT, 0.0, 1.0);
-            out_color = colormap_overdraw(x);
+            out_color = heat_colormap(x);
         }
         out_color.xyz = srgb_to_linear(out_color.rgb);
     } else {

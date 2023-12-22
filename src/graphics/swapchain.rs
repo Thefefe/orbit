@@ -79,6 +79,7 @@ impl SwapchainInner {
                     format: config.surface_format.format,
                     view,
                     extent,
+                    sample_count: graphics::MultisampleCount::None,
                 }
             })
             .collect();

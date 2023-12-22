@@ -12,27 +12,36 @@ layout(push_constant, std430) uniform PushConstants {
 	float z_near;
     float z_scale;
     float z_bias;
+    float z_far;
     uint depth_buffer;
+    uint depth_buffer_sample_count;
     uint depth_slice_mask_buffer;
 };
 
 layout (local_size_x = 8, local_size_y = 8) in;
 
+uint depth_to_bitmask(float depth) {
+    float linear_z = z_near / depth;
+    uint slice = linear_z_to_depth_slice(z_scale, z_bias, linear_z);
+    return 1 << slice;
+}
+
 void main() {
     uvec2 pixel_id = gl_GlobalInvocationID.xy;
     if (pixel_id.x >= screen_size.x || pixel_id.y >= screen_size.y) return;
     
-    vec2 tex_coord = vec2(pixel_id) / vec2(screen_size);
-    tex_coord.y = 1.0 - tex_coord.y;
-    float depth = texture(GetSampledTexture2D(depth_buffer), tex_coord).x;
-    float linear_z = z_near / depth;
-    uint slice = linear_z_to_depth_slice(z_scale, z_bias, linear_z);
+    uint bitmask = 0;
+    if (depth_buffer_sample_count == 1) {
+        bitmask |= depth_to_bitmask(texelFetch(GetSampledTexture2D(depth_buffer), ivec2(pixel_id), 0).x);
+    } else {
+        for (int i = 0; i < depth_buffer_sample_count; i++) {
+            bitmask |= depth_to_bitmask(texelFetch(GetSampledTexture2DMS(depth_buffer), ivec2(pixel_id), i).x);
+        }
+    }
 
-    if (slice >= cluster_count.z) return;
-
-    uint bitmask = 1 << slice;
-
-    uvec2 tile_id = pixel_id / uvec2(tile_size_px);
-    uint tile_index = tile_id_to_tile_index(cluster_count.xy, tile_id);
-    atomicOr(GetBuffer(TileDepthSliceMask, depth_slice_mask_buffer).masks[tile_index], bitmask);
+    if (bitmask > 0) {
+        uvec2 tile_id = pixel_id / uvec2(tile_size_px);
+        uint tile_index = tile_id_to_tile_index(cluster_count.xy, tile_id);
+        atomicOr(GetBuffer(TileDepthSliceMask, depth_slice_mask_buffer).masks[tile_index], bitmask);
+    }
 }

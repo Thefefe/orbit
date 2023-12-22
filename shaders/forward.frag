@@ -5,6 +5,8 @@
 #include "include/functions.glsl"
 #include "light_cluster/cluster_common.glsl"
 
+RegisterUintImageFormat(rg32ui);
+
 layout(push_constant, std430) uniform PushConstants {
     uint per_frame_buffer;
     uint vertex_buffer;
@@ -369,9 +371,13 @@ void main() {
     float z_scale = GetBuffer(ClusterBuffer, cluster_buffer).z_scale;
     float z_bias = GetBuffer(ClusterBuffer, cluster_buffer).z_bias;
     uint depth_slice_count = GetBuffer(ClusterBuffer, cluster_buffer).z_slice_count;
-    uint depth_slice = uint(clamp(log2(z_near / gl_FragCoord.z) * z_scale + z_bias, 0, depth_slice_count));
+    uint depth_slice = linear_z_to_depth_slice(z_scale, z_bias, z_near / gl_FragCoord.z);
 
     uvec3 cluster_id = uvec3(tile_id, depth_slice);
+    uint image_index = GetBuffer(ClusterBuffer, cluster_buffer).light_offset_image;
+    uvec2 cluster_slice = imageLoad(GetImage3D(rg32ui, image_index), ivec3(cluster_id)).xy;
+    uint light_offset = cluster_slice.x;
+    uint light_count = min(cluster_slice.y, 32);
 
     switch (render_mode) {
         case 0:
@@ -380,11 +386,12 @@ void main() {
             vec3 light_sum = emissive;
 
             for (int i = 0; i < light_count; i++) {
+                uint light_index = GetBuffer(ClusterLightIndices, GetBuffer(ClusterBuffer, cluster_buffer).light_index_buffer).light_indices[light_offset + i];
                 vec3 light_color =
-                    GetBuffer(LightDataBuffer, light_data_buffer).lights[i].color *
-                    GetBuffer(LightDataBuffer, light_data_buffer).lights[i].intensity;
+                    GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].color *
+                    GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].intensity;
 
-                switch (GetBuffer(LightDataBuffer, light_data_buffer).lights[i].light_type) {
+                switch (GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].light_type) {
                     case LIGHT_TYPE_SKY: {
                         vec3 R = reflect(view_direction, normal);
                         R.y *= -1.0;
@@ -398,13 +405,13 @@ void main() {
                         vec3 kD = 1.0 - kS;
                         kD *= 1.0 - metallic;	
 
-                        vec3 irradiance = texture(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[i].irradiance_map_index), normal).rgb;
+                        vec3 irradiance = texture(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].irradiance_map_index), normal).rgb;
                         vec3 diffuse    = irradiance * base_color.rgb;
 
-                        float max_reflection_lod = textureQueryLevels(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[i].prefiltered_map_index)) - 1;
+                        float max_reflection_lod = textureQueryLevels(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].prefiltered_map_index)) - 1;
                         float reflection_lod = roughness * max_reflection_lod;
                         vec3 reflection_color = 
-                            textureLod(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[i].prefiltered_map_index), R, reflection_lod).rgb;
+                            textureLod(GetSampledTextureCube(GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].prefiltered_map_index), R, reflection_lod).rgb;
                         vec2 env_brdf = texture(
                             GetSampledTexture2D(brdf_integration_map_index),
                             vec2(max(dot(normal, view_direction), 0.0), roughness)
@@ -414,7 +421,7 @@ void main() {
                         light_sum += (kD * diffuse + specular) * light_color * ao;
                     } break;
                     case LIGHT_TYPE_DIRECTIONAL: {
-                        uint shadow_index = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].shadow_data_index;
+                        uint shadow_index = GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].shadow_data_index;
                         float shadow = 1.0;
                         if (shadow_index != TEXTURE_NONE) {
                             uint cascade_index = 4;
@@ -433,7 +440,7 @@ void main() {
                             if (cascade_index < MAX_SHADOW_CASCADE_COUNT) {
                                 uint shadow_map = GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_indices[cascade_index];
 
-                                float n_dot_l = dot(normal, GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction);
+                                float n_dot_l = dot(normal, GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].direction);
                                 float normal_bias_scale = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.normal_bias_scale;
                                 
                                 vec3 shadow_pos_world_space = vout.world_pos.xyz;
@@ -441,7 +448,7 @@ void main() {
                                 shadow_pos_world_space += shadow_normal_offset(n_dot_l, normal, shadow_map, normal_bias_scale);
                                 
                                 float oriented_bias = GetBuffer(ShadowSettingsBuffer, shadow_settings_buffer).data.oriented_bias;
-                                vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction;
+                                vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].direction;
                                 shadow_pos_world_space += get_oriented_bias(normal, light_direction, oriented_bias, false) * light_direction;
                                 
                                 vec4 cascade_shadow_map_coords =
@@ -449,13 +456,13 @@ void main() {
                                     vec4(shadow_pos_world_space, 1.0);
 
                                 float inv_world_size = 1.0 / GetBuffer(ShadowDataBuffer, shadow_data_buffer).shadows[shadow_index].shadow_map_world_sizes[cascade_index];
-                                float uv_light_size = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].inner_radius * inv_world_size;
+                                float uv_light_size = GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].inner_radius * inv_world_size;
 
                                 shadow = pcf_poisson(shadow_map, cascade_shadow_map_coords, inv_world_size, uv_light_size);
                             }
                         }
 
-                        vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[i].direction;
+                        vec3 light_direction = GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].direction;
                         light_sum += calculate_light(
                             view_direction,
                             light_direction,
@@ -469,18 +476,18 @@ void main() {
                     } break;
                     case LIGHT_TYPE_POINT: {
                         vec3 light_direction = 
-                            GetBuffer(LightDataBuffer, light_data_buffer).lights[i].position
+                            GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].position
                             - vout.world_pos.xyz;
 
                         float light_distance = length(light_direction);
                         light_direction /= light_distance;
-                        light_distance = max(light_distance, GetBuffer(LightDataBuffer, light_data_buffer).lights[i].inner_radius);
+                        light_distance = max(light_distance, GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].inner_radius);
                         
                         float attenuation = attenuation(
-                            max(light_distance, GetBuffer(LightDataBuffer, light_data_buffer).lights[i].inner_radius),
-                            GetBuffer(LightDataBuffer, light_data_buffer).lights[i].intensity, 
+                            max(light_distance, GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].inner_radius),
+                            GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].intensity, 
                             GetBuffer(ClusterBuffer, cluster_buffer).luminance_cutoff, 
-                            GetBuffer(LightDataBuffer, light_data_buffer).lights[i].outer_radius
+                            GetBuffer(LightDataBuffer, light_data_buffer).lights[light_index].outer_radius
                         );
 
                         light_sum += calculate_light(
@@ -572,13 +579,25 @@ void main() {
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 8: 
-            out_color = vec4(DEBUG_COLORS[cluster_id.z % DEBUG_COLOR_COUNT], 1.0);
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+            float norm_light_count = clamp(light_count / 32.0, 0.0, 1.0);
+            out_color.xyz = colormap(norm_light_count).xyz;
+            // out_color = vec4(DEBUG_COLORS[cluster_id.z % DEBUG_COLOR_COUNT], 1.0);
+            // out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 9:
-            uint hash = hash(cluster_volume_index_from_id(GetBuffer(ClusterBuffer, cluster_buffer).cluster_count, cluster_id));
-            vec3 mcolor = vec3(float(hash & 255), float((hash >> 8) & 255), float((hash >> 16) & 255)) / 255.0;
-            out_color = vec4(mcolor, 1.0);
+            uint tile_mask_index = GetBuffer(ClusterBuffer, cluster_buffer).tile_depth_slice_mask;
+            uvec3 cluster_count = GetBuffer(ClusterBuffer, cluster_buffer).cluster_count;
+            bool cluster_active = is_cluster_active(tile_mask_index, cluster_count, cluster_id);
+            if (cluster_active) {
+                out_color.xyz = vec3(0.0, 0.0, 1.0);
+            } else {
+                out_color.xyz = vec3(1.0, 0.0, 0.0);
+            }
+
+            // uint hash = hash(cluster_volume_index_from_id(GetBuffer(ClusterBuffer, cluster_buffer).cluster_count, cluster_id));
+            // vec3 mcolor = vec3(float(hash & 255), float((hash >> 8) & 255), float((hash >> 16) & 255)) / 255.0;
+            // out_color = vec4(mcolor, 1.0);
+            
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
     }

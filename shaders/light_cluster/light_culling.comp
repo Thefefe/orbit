@@ -1,0 +1,82 @@
+#version 460
+
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+
+#include "cluster_common.glsl"
+
+RegisterUintImageFormat(rg32ui);
+
+layout(push_constant, std430) uniform PushConstants {
+    mat4 world_to_view_matrix;
+    
+    uvec3 cluster_count;
+    uint cluster_volume_buffer;
+    
+    uint compact_cluster_list;
+    uint cluster_offset_image;
+    uint light_index_buffer;
+    uint global_light_count;
+    
+    uint global_light_list;
+};
+
+float aabb_point_sqr_dist(vec3 aabb_min, vec3 aabb_max, vec3 point) {
+    float sqr_dist = 0.0;
+    for (uint i = 0; i < 3; i++) {
+        float v = point[i];
+        if (v < aabb_min[i]) sqr_dist += (aabb_min[i] - v) * (aabb_min[i] - v);
+        if (v > aabb_max[i]) sqr_dist += (v - aabb_max[i]) * (v - aabb_max[i]);
+    }
+    return sqr_dist;
+}
+
+bool aabb_sphere_test(vec3 aabb_min, vec3 aabb_max, vec4 sphere) {
+    return aabb_point_sqr_dist(aabb_min, aabb_max, sphere.xyz) <= sphere.w * sphere.w;
+} 
+
+layout (local_size_x = 256) in;
+
+bool is_light_in_cluster(vec3 cluster_aabb_min, vec3 cluster_aabb_max, uint light_index) {
+    switch (GetBuffer(LightDataBuffer, global_light_list).lights[light_index].light_type) {
+        case LIGHT_TYPE_POINT: {
+            vec3 center = (world_to_view_matrix * vec4(GetBuffer(LightDataBuffer, global_light_list).lights[light_index].position, 1.0)).xyz;
+            float radius = GetBuffer(LightDataBuffer, global_light_list).lights[light_index].outer_radius;
+            return aabb_sphere_test(cluster_aabb_min, cluster_aabb_max, vec4(center, radius));
+        } break;
+        default: {
+            return true;
+        } break;
+    }
+}
+
+void main() {
+    if (gl_GlobalInvocationID.x >= GetBuffer(CompactedClusterIndexList, compact_cluster_list).cluster_count) return;
+    uint cluster_index = GetBuffer(CompactedClusterIndexList, compact_cluster_list).cluster_indices[gl_GlobalInvocationID.x];
+    
+    ClusterVolume cluster_volume = GetBuffer(ClusterVolumeBuffer, cluster_volume_buffer).clusters[cluster_index];
+
+    uint light_count = 0;
+    for (uint light_index = 0; light_index < global_light_count; light_index++) {
+        if (is_light_in_cluster(cluster_volume.min_pos.xyz, cluster_volume.max_pos.xyz, light_index)) {
+            light_count += 1;
+        }
+    }
+
+    light_count = min(light_count, 32);
+    uint light_offset = atomicAdd(GetBuffer(ClusterLightIndices, light_index_buffer).light_count, light_count);
+
+    uint light_counter = 0;
+    uint light_index = 0;
+    while (light_counter < light_count) {
+        if (is_light_in_cluster(cluster_volume.min_pos.xyz, cluster_volume.max_pos.xyz, light_index)) {
+            GetBuffer(ClusterLightIndices, light_index_buffer).light_indices[light_offset + light_counter] = light_index;
+            light_counter += 1;
+        }
+
+        light_index += 1;
+    }
+
+    uvec3 cluster_id = cluster_id_from_volume_index(cluster_count, cluster_index);
+    imageStore(GetImage3D(rg32ui, cluster_offset_image), ivec3(cluster_id), uvec4(light_offset, light_count, 0, 0));
+}

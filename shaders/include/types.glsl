@@ -42,6 +42,9 @@ RegisterBuffer(ClusterBuffer, {
     float z_scale;
     float z_bias;
     float luminance_cutoff;
+    uint  light_offset_image;
+    uint  light_index_buffer;
+    uint  tile_depth_slice_mask;
 });
 
 RegisterBuffer(PerFrameBuffer, {
@@ -158,6 +161,11 @@ struct ClusterVolume {
     vec4 min_pos;
     vec4 max_pos;
 };
+
+RegisterBuffer(ClusterLightIndices, {
+    uint light_count;
+    uint light_indices[];
+});
 
 RegisterBuffer(ClusterVolumeBuffer, {
     ClusterVolume clusters[];

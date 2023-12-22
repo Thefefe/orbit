@@ -20,6 +20,7 @@ pub struct ImageView {
     pub _descriptor_flags: graphics::ImageDescriptorFlags,
     pub format: vk::Format,
     pub extent: vk::Extent3D,
+    pub sample_count: graphics::MultisampleCount,
     pub subresource_range: vk::ImageSubresourceRange,
 }
 
@@ -53,6 +54,11 @@ impl ImageView {
     #[inline(always)]
     pub fn depth(&self) -> u32 {
         self.extent.depth
+    }
+
+    #[inline(always)]
+    pub fn sample_count(&self) -> u32 {
+        self.sample_count.sample_count()
     }
 
     #[inline(always)]
@@ -470,6 +476,7 @@ impl ImageRaw {
                 format: desc.format,
                 view,
                 extent,
+                sample_count: desc.samples,
                 subresource_range,
             },
             desc: desc.clone(),
@@ -536,6 +543,7 @@ impl ImageRaw {
             _descriptor_flags: self.desc.subresource_desc.mip_descriptors,
             format: self.desc.format,
             extent: vk::Extent3D { width, height, depth },
+            sample_count: self.desc.samples,
             subresource_range: vk::ImageSubresourceRange {
                 aspect_mask: self.desc.aspect,
                 base_mip_level: mip_level as u32,
@@ -572,6 +580,7 @@ impl ImageRaw {
             _descriptor_flags: self.desc.subresource_desc.layer_descrptors,
             format: self.desc.format,
             extent: vk::Extent3D { width, height, depth },
+            sample_count: self.sample_count,
             subresource_range: vk::ImageSubresourceRange {
                 aspect_mask: self.desc.aspect,
                 base_mip_level: mip_level as u32,

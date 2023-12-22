@@ -45,7 +45,7 @@ use passes::{
 };
 
 use crate::passes::{
-    cluster::{compact_active_clusters, debug_cluster_volumes, generate_cluster_volumes, mark_active_clusters},
+    cluster::{compute_clusters, debug_cluster_volumes},
     forward::TargetAttachments,
     post_process::render_post_process,
 };
@@ -504,7 +504,12 @@ impl App {
         //     scene.add_entity(entity);
         // }
 
-        scene.update_scene(context, &mut shadow_renderer, &gpu_assets, settings.cluster_settings.luminance_cutoff);
+        scene.update_scene(
+            context,
+            &mut shadow_renderer,
+            &gpu_assets,
+            settings.cluster_settings.luminance_cutoff,
+        );
 
         let screen_extent = context.swapchain.extent();
 
@@ -946,15 +951,13 @@ impl App {
         });
         self.shadow_renderer.debug_settings.selected_shadow = selected_shadow;
 
-        let _cluster_volumes = generate_cluster_volumes(context, &self.settings.cluster_settings, &self.frozen_camera);
-        let active_cluster_mask = mark_active_clusters(
+        let cluster_info = compute_clusters(
             context,
             &self.settings.cluster_settings,
-            target_attachments.non_msaa_depth_target(),
-            &self.frozen_camera,
+            &self.camera,
+            target_attachments.depth_target,
+            scene,
         );
-        let _compact_cluster_list =
-            compact_active_clusters(context, &self.settings.cluster_settings, active_cluster_mask);
 
         self.forward_renderer.render(
             context,
@@ -964,6 +967,7 @@ impl App {
             skybox,
             &self.shadow_renderer,
             &target_attachments,
+            cluster_info,
             &self.camera,
             &self.frozen_camera,
             selected_light,

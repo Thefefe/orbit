@@ -5,6 +5,7 @@ use gpu_allocator::MemoryLocation;
 use crate::{
     graphics::{self, AccessKind},
     math::{self, Aabb},
+    scene::SceneGraphData,
     Camera,
 };
 
@@ -22,7 +23,7 @@ pub struct ClusterSettings {
 impl Default for ClusterSettings {
     fn default() -> Self {
         Self {
-            px_size_power: 3, // 2^3 = 8
+            px_size_power: 6, // 2^6 = 64
             screen_resolution: [0; 2],
             z_slice_count: 24,
             far_plane: 100.0,
@@ -290,7 +291,7 @@ pub fn debug_cluster_volumes(
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct GpuClusterGridInfo {
+pub struct GpuClusterInfoBuffer {
     cluster_count: [u32; 3],
     tile_size_px: u32,
     screen_size: [u32; 2],
@@ -298,10 +299,20 @@ pub struct GpuClusterGridInfo {
     z_scale: f32,
     z_bias: f32,
     luminance_cutoff: f32,
+    light_offset_image: u32,
+    light_index_list: u32,
+    tile_depth_slice_mask_buffer: u32,
 }
 
-impl GpuClusterGridInfo {
-    pub fn new(settings: &ClusterSettings, z_near: f32) -> Self {
+impl GpuClusterInfoBuffer {
+    pub fn new(
+        context: &graphics::Context,
+        settings: &ClusterSettings,
+        z_near: f32,
+        offset_image: graphics::GraphImageHandle,
+        index_list: graphics::GraphBufferHandle,
+        tile_depth_slice_mask_buffer: graphics::GraphBufferHandle,
+    ) -> Self {
         let (z_scale, z_bias) = settings.cluster_grid_info(z_near);
         Self {
             cluster_count: settings.cluster_counts().map(|x| x as u32),
@@ -311,7 +322,54 @@ impl GpuClusterGridInfo {
             z_bias,
             z_slice_count: settings.z_slice_count,
             luminance_cutoff: settings.luminance_cutoff,
+            light_offset_image: context.get_resource_descriptor_index(offset_image).unwrap(),
+            light_index_list: context.get_resource_descriptor_index(index_list).unwrap(),
+            tile_depth_slice_mask_buffer: context.get_resource_descriptor_index(tile_depth_slice_mask_buffer).unwrap(),
         }
+    }
+}
+
+pub struct GraphClusterInfo {
+    pub light_offset_image: graphics::GraphImageHandle,
+    pub light_index_list: graphics::GraphBufferHandle,
+    pub info_buffer: graphics::GraphBufferHandle,
+}
+
+pub fn compute_clusters(
+    context: &mut graphics::Context,
+    settings: &ClusterSettings,
+    camera: &Camera,
+    depth_buffer: graphics::GraphImageHandle,
+    scene: SceneGraphData,
+) -> GraphClusterInfo {
+    let cluster_volumes = generate_cluster_volumes(context, &settings, &camera);
+    let active_cluster_mask = mark_active_clusters(context, &settings, depth_buffer, &camera);
+    let compact_cluster_list = compact_active_clusters(context, &settings, active_cluster_mask);
+
+    let (light_offset_image, light_index_list) = cluster_light_assignment(
+        context,
+        &settings,
+        cluster_volumes,
+        compact_cluster_list,
+        scene,
+        &camera.compute_view_matrix(),
+    );
+
+    let data = GpuClusterInfoBuffer::new(
+        context,
+        settings,
+        camera.z_near(),
+        light_offset_image,
+        light_index_list,
+        active_cluster_mask,
+    );
+
+    let info_buffer = context.transient_storage_data("cluster_info_buffer", bytemuck::bytes_of(&data));
+
+    GraphClusterInfo {
+        light_offset_image,
+        light_index_list,
+        info_buffer,
     }
 }
 
@@ -386,17 +444,31 @@ pub fn mark_active_clusters(
         "tile_depth_slice_mask",
         graphics::BufferDesc {
             size: tile_count[0] * tile_count[1] * 4,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
         },
     );
 
     let tile_size_px = settings.tile_px_size();
     let z_near = camera.z_near();
+    let z_far = settings.far_plane;
     let (z_scale, z_bias) = settings.cluster_grid_info(z_near);
 
     let cluster_count = settings.cluster_counts().map(|x| x as u32);
     let screen_resolution = settings.screen_resolution;
+
+    context
+        .add_pass("zero_tile_depth_slice_mask")
+        .with_dependency(tile_depth_slice_mask, AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let compact_cluster_index_list = graph.get_buffer(tile_depth_slice_mask);
+            cmd.fill_buffer(
+                compact_cluster_index_list,
+                0,
+                (tile_count[0] * tile_count[1] * 4) as u64,
+                0,
+            );
+        });
 
     context
         .add_pass("mark_active_tiles")
@@ -414,11 +486,12 @@ pub fn mark_active_clusters(
                 .float(z_near)
                 .float(z_scale)
                 .float(z_bias)
+                .float(z_far)
                 .sampled_image(depth_buffer)
+                .uint(depth_buffer.sample_count())
                 .buffer(tile_depth_slice_mask);
 
             cmd.dispatch([screen_resolution[0].div_ceil(8), screen_resolution[1].div_ceil(8), 1]);
-            // cmd.dispatch([1, 1, 1]);
         });
 
     tile_depth_slice_mask
@@ -438,12 +511,22 @@ pub fn compact_active_clusters(
         "compact_cluster_index_list",
         graphics::BufferDesc {
             size: 16 + settings.cluster_linear_count() * 4,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::INDIRECT_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
         },
     );
 
     let cluster_count = settings.cluster_counts().map(|x| x as u32);
+
+    context
+        .add_pass("zero_compact_cluster_buffer")
+        .with_dependency(compact_cluster_index_list, AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let compact_cluster_index_list = graph.get_buffer(compact_cluster_index_list);
+            cmd.fill_buffer(compact_cluster_index_list, 0, 16, 0);
+        });
 
     context
         .add_pass("compact_active_clusters")
@@ -463,4 +546,86 @@ pub fn compact_active_clusters(
         });
 
     compact_cluster_index_list
+}
+
+pub fn cluster_light_assignment(
+    context: &mut graphics::Context,
+    settings: &ClusterSettings,
+    cluster_volume_buffer: graphics::GraphBufferHandle,
+    compact_cluster_list: graphics::GraphBufferHandle,
+    scene: SceneGraphData,
+    world_to_view_matrix: &Mat4,
+) -> (graphics::GraphImageHandle, graphics::GraphBufferHandle) {
+    let pipeline = context.create_compute_pipeline(
+        "cluster_light_assingment_pipeline",
+        graphics::ShaderSource::spv("shaders/light_cluster/light_culling.comp.spv"),
+    );
+
+    let light_offset_image = context.create_transient_image(
+        "cluster_offset_image",
+        graphics::ImageDesc {
+            ty: graphics::ImageType::Single3D,
+            format: vk::Format::R32G32_UINT,
+            dimensions: settings.cluster_counts().map(|x| x as u32),
+            mip_levels: 1,
+            samples: graphics::MultisampleCount::None,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+            aspect: vk::ImageAspectFlags::COLOR,
+            ..Default::default()
+        },
+    );
+
+    let tile_counts = settings.tile_counts();
+
+    let light_index_buffer = context.create_transient_buffer(
+        "light_index_buffer",
+        graphics::BufferDesc {
+            size: tile_counts[0] * tile_counts[1] * settings.z_slice_count as usize * 32,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            memory_location: MemoryLocation::GpuOnly,
+        },
+    );
+
+    let linear_cluster_count = settings.cluster_linear_count();
+    let cluster_count = settings.cluster_counts().map(|x| x as u32);
+    let world_to_view_matrix = world_to_view_matrix.clone();
+
+    context
+        .add_pass("zero_light_index_buffer")
+        .with_dependency(light_index_buffer, AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let compact_cluster_index_list = graph.get_buffer(light_index_buffer);
+            cmd.fill_buffer(compact_cluster_index_list, 0, 4, 0);
+        });
+
+    context
+        .add_pass("cluster_light_assingment")
+        .with_dependency(cluster_volume_buffer, AccessKind::ComputeShaderRead)
+        // .with_dependency(compact_cluster_list, AccessKind::IndirectBuffer)
+        .with_dependency(compact_cluster_list, AccessKind::ComputeShaderRead)
+        .with_dependency(light_offset_image, AccessKind::ComputeShaderWrite)
+        .with_dependency(light_index_buffer, AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let cluster_volume_buffer = graph.get_buffer(cluster_volume_buffer);
+            let compact_cluster_list = graph.get_buffer(compact_cluster_list);
+            let light_index_buffer = graph.get_buffer(light_index_buffer);
+            let light_offset_image = graph.get_image(light_offset_image);
+            let global_light_list = graph.get_buffer(scene.light_data_buffer);
+
+            cmd.bind_compute_pipeline(pipeline);
+            cmd.build_constants()
+                .mat4(&world_to_view_matrix)
+                .uvec3(cluster_count)
+                .buffer(cluster_volume_buffer)
+                .buffer(compact_cluster_list)
+                .storage_image(light_offset_image)
+                .buffer(light_index_buffer)
+                .uint(scene.light_count as u32)
+                .buffer(global_light_list);
+
+            // cmd.dispatch_indirect(compact_cluster_list, 0);
+            cmd.dispatch([linear_cluster_count.div_ceil(256) as u32, 1, 1]);
+        });
+
+    (light_offset_image, light_index_buffer)
 }

@@ -711,6 +711,8 @@ impl<'a> PushConstantBuilder<'a> {
         )
     }
 
+    #[track_caller]
+    #[inline(always)]
     pub fn storage_image(self, image: &graphics::ImageView) -> Self {
         let descriptor_index = image.storage_index().expect("image doesn't have storage descriptor index");
         self.push_bytes_with_align(

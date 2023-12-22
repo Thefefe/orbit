@@ -166,7 +166,7 @@ impl EnvironmentMap {
         );
 
         let cube_map_prefilter_pipeline = context.create_raster_pipeline(
-            "cubemap_convolution_pipeline",
+            "cubemap_prefilter_pipeline",
             &graphics::RasterPipelineDesc::builder()
                 .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
                 .fragment_shader(graphics::ShaderSource::spv(

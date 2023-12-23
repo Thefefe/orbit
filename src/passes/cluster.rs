@@ -542,11 +542,9 @@ pub fn generate_cluster_volumes(
     let cluster_counts = settings.cluster_counts();
     let screen_size = settings.screen_resolution;
 
-    let linear_cluster_count = settings.cluster_linear_count();
-
     context
         .add_pass("cluster_volume_generation")
-        .with_dependency(unique_cluster_buffer, AccessKind::ComputeShaderRead)
+        .with_dependency(unique_cluster_buffer, AccessKind::IndirectBuffer)
         .with_dependency(depth_bounds_buffer, AccessKind::ComputeShaderRead)
         .with_dependency(cluster_volume_buffer, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
@@ -566,7 +564,7 @@ pub fn generate_cluster_volumes(
                 .buffer(depth_bounds_buffer)
                 .buffer(cluster_volume_buffer);
 
-            cmd.dispatch([linear_cluster_count.div_ceil(256) as u32, 1, 1]);
+            cmd.dispatch_indirect(unique_cluster_buffer, 0);
         });
 
     cluster_volume_buffer
@@ -608,7 +606,6 @@ pub fn cluster_light_assignment(
         },
     );
 
-    let linear_cluster_count = settings.cluster_linear_count();
     let cluster_count = settings.cluster_counts().map(|x| x as u32);
     let world_to_view_matrix = world_to_view_matrix.clone();
 
@@ -623,8 +620,7 @@ pub fn cluster_light_assignment(
     context
         .add_pass("cluster_light_assingment")
         .with_dependency(cluster_volume_buffer, AccessKind::ComputeShaderRead)
-        // .with_dependency(unique_cluster_buffer, AccessKind::IndirectBuffer)
-        .with_dependency(unique_cluster_buffer, AccessKind::ComputeShaderRead)
+        .with_dependency(unique_cluster_buffer, AccessKind::IndirectBuffer)
         .with_dependency(light_offset_image, AccessKind::ComputeShaderWrite)
         .with_dependency(light_index_buffer, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
@@ -645,8 +641,7 @@ pub fn cluster_light_assignment(
                 .uint(scene.light_count as u32)
                 .buffer(global_light_list);
 
-            // cmd.dispatch_indirect(compact_cluster_list, 0);
-            cmd.dispatch([linear_cluster_count.div_ceil(256) as u32, 1, 1]);
+            cmd.dispatch_indirect(unique_cluster_buffer, 0);
         });
 
     (light_offset_image, light_index_buffer)

@@ -63,7 +63,7 @@ void main() {
         }
     }
 
-    light_count = min(light_count, 32);
+    light_count = min(light_count, 256);
     uint light_offset = atomicAdd(GetBuffer(ClusterLightIndices, light_index_buffer).light_count, light_count);
 
     uint light_counter = 0;

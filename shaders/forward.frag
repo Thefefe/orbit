@@ -377,7 +377,7 @@ void main() {
     uint image_index = GetBuffer(ClusterBuffer, cluster_buffer).light_offset_image;
     uvec2 cluster_slice = imageLoad(GetImage3D(rg32ui, image_index), ivec3(cluster_id)).xy;
     uint light_offset = cluster_slice.x;
-    uint light_count = clamp(cluster_slice.y, 0, 32);
+    uint light_count = clamp(cluster_slice.y, 0, 256);
 
     switch (render_mode) {
         case 0:

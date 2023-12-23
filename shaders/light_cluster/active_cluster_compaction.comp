@@ -36,11 +36,15 @@ void main() {
 
     // barrier();
     
-    // if (gl_GlobalInvocationID == uvec3(0)) {
-    //     uint cluster_count = GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_count;
-    //     uint workgroup_count_x = div_ceil(cluster_count, 256);
-    //     GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_x = workgroup_count_x;
-    //     GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_y = 1;
-    //     GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_z = 1;
-    // }
+    if (gl_LocalInvocationIndex == 0) {
+        uint finished_workgroups = atomicAdd(GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_x, 1);
+
+        if (finished_workgroups + 1 == gl_NumWorkGroups.x * gl_NumWorkGroups.y * gl_NumWorkGroups.z) {
+            uint cluster_count = GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_count;
+            uint workgroup_count_x = div_ceil(cluster_count, 256);
+            GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_x = workgroup_count_x;
+            GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_y = 1;
+            GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_z = 1;
+        }
+    }
 }

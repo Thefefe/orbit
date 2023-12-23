@@ -11,13 +11,12 @@ layout(push_constant, std430) uniform PushConstants {
     mat4 world_to_view_matrix;
     
     uvec3 cluster_count;
+    uint unique_cluster_buffer;
     uint cluster_volume_buffer;
-    
-    uint compact_cluster_list;
+
     uint cluster_offset_image;
     uint light_index_buffer;
     uint global_light_count;
-    
     uint global_light_list;
 };
 
@@ -51,10 +50,11 @@ bool is_light_in_cluster(vec3 cluster_aabb_min, vec3 cluster_aabb_max, uint ligh
 }
 
 void main() {
-    if (gl_GlobalInvocationID.x >= GetBuffer(CompactedClusterIndexList, compact_cluster_list).cluster_count) return;
-    uint cluster_index = GetBuffer(CompactedClusterIndexList, compact_cluster_list).cluster_indices[gl_GlobalInvocationID.x];
-    
-    ClusterVolume cluster_volume = GetBuffer(ClusterVolumeBuffer, cluster_volume_buffer).clusters[cluster_index];
+    uint unique_index = gl_GlobalInvocationID.x;
+    if (unique_index >= GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_count) return;
+
+    ClusterVolume cluster_volume = GetBuffer(ClusterVolumeBuffer, cluster_volume_buffer).clusters[unique_index];
+    uint cluster_index = GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_indices[unique_index];
 
     uint light_count = 0;
     for (uint light_index = 0; light_index < global_light_count; light_index++) {

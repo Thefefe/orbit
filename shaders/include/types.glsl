@@ -167,6 +167,16 @@ RegisterBuffer(ClusterLightIndices, {
     uint light_indices[];
 });
 
+struct ClusterDepthBounds {
+    // floats
+    uint min_depth;
+    uint max_depth;
+};
+
+RegisterBuffer(ClusterDepthBoundsBuffer, {
+    ClusterDepthBounds clusters[];
+});
+
 RegisterBuffer(ClusterVolumeBuffer, {
     ClusterVolume clusters[];
 });

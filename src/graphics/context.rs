@@ -967,7 +967,7 @@ fn record_batch(
 
     if graphics::is_memory_barrier_not_useless(&memory_barrier) {
         recorder.barrier(&[], &image_barriers, &[memory_barrier]);
-    } else {
+    } else if !image_barriers.is_empty() {
         recorder.barrier(&[], &image_barriers, &[]);
     }
 
@@ -993,6 +993,7 @@ fn record_batch(
     );
 
     image_barriers.clear();
+    
     for BatchDependency {
         resource_index: resoure_index,
         src_access,
@@ -1003,7 +1004,10 @@ fn record_batch(
             image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
         }
     }
-    recorder.barrier(&[], &image_barriers, &[]);
+
+    if !image_barriers.is_empty() {
+        recorder.barrier(&[], &image_barriers, &[]);
+    }
 
     recorder.command_buffer_index()
 }

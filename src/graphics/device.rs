@@ -364,6 +364,7 @@ pub struct Device {
     allocator_stuff: Mutex<AllocatorStuff>,
 
     pub swapchain_fns: khr::Swapchain,
+    pub mesh_shader_fns: Option<ext::MeshShader>,
 
     // descriptor stuff
     descriptor_layouts: Vec<vk::DescriptorSetLayout>,
@@ -482,7 +483,7 @@ impl Device {
 
         let required_device_extensions: &[&CStr] = &[khr::Swapchain::name()];
 
-        let optional_device_extensions: &[&CStr] = &[];
+        let optional_device_extensions: &[&CStr] = &[ext::MeshShader::name()];
 
         let gpu = enumerate_gpus(&instance, &surface_fns, surface)
             .rev()
@@ -601,11 +602,21 @@ impl Device {
             .maintenance4(true)
             .build();
 
+        let mut mesh_shader_features =
+            vk::PhysicalDeviceMeshShaderFeaturesEXT::builder().mesh_shader(true).task_shader(true);
+
         let mut device_features = vk::PhysicalDeviceFeatures2::builder()
             .features(vulkan10_features)
             .push_next(&mut vulkan11_features)
             .push_next(&mut vulkan12_features)
             .push_next(&mut vulkan13_features);
+
+        let mesh_shading_available = enabled_device_extensions.contains(ext::MeshShader::name());
+
+        if mesh_shading_available {
+            log::info!("mesh shading supported!");
+            device_features = device_features.push_next(&mut mesh_shader_features);
+        }
 
         let device_create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_create_infos)
@@ -670,6 +681,7 @@ impl Device {
         }
 
         let swapchain_fns = khr::Swapchain::new(&instance, &device);
+        let mesh_shader_fns = mesh_shading_available.then(|| ext::MeshShader::new(&instance, &device));
 
         let allocator_stuff = {
             let allocator = Allocator::new(&AllocatorCreateDesc {
@@ -825,6 +837,7 @@ impl Device {
             allocator_stuff,
 
             swapchain_fns,
+            mesh_shader_fns,
 
             //descriptor stuff
             descriptor_layouts,

@@ -23,9 +23,9 @@ pub struct ClusterSettings {
 impl Default for ClusterSettings {
     fn default() -> Self {
         Self {
-            px_size_power: 6, // 2^6 = 64
+            px_size_power: 3, // 2^3 = 8
             screen_resolution: [0; 2],
-            z_slice_count: 24,
+            z_slice_count: 32,
             far_plane: 100.0,
             luminance_cutoff: 0.25,
         }
@@ -417,7 +417,7 @@ pub fn mark_active_clusters(
     let screen_resolution = settings.screen_resolution;
 
     context
-        .add_pass("zero_cluster_depth_slice_buffers")
+        .add_pass("clear_cluster_depth_slice_buffers")
         .with_dependency(tile_depth_slice_mask, AccessKind::ComputeShaderWrite)
         .with_dependency(cluster_depth_bounds_buffer, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
@@ -489,7 +489,7 @@ pub fn compact_active_clusters(
     let cluster_count = settings.cluster_counts().map(|x| x as u32);
 
     context
-        .add_pass("zero_compact_cluster_buffer")
+        .add_pass("clear_compact_cluster_buffer")
         .with_dependency(unique_cluster_buffer, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
             let compact_cluster_index_list = graph.get_buffer(unique_cluster_buffer);
@@ -610,7 +610,7 @@ pub fn cluster_light_assignment(
     let world_to_view_matrix = world_to_view_matrix.clone();
 
     context
-        .add_pass("zero_light_index_buffer")
+        .add_pass("clear_light_index_buffer")
         .with_dependency(light_index_buffer, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
             let compact_cluster_index_list = graph.get_buffer(light_index_buffer);

@@ -15,11 +15,6 @@ layout(push_constant, std430) uniform PushConstants {
 layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 void main() {
-    // if (gl_GlobalInvocationID == uvec3(0)) {
-    //     GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_count = 0;
-    // }
-
-    // barrier();
 
     if (gl_GlobalInvocationID.x < cluster_count.x &&
         gl_GlobalInvocationID.y < cluster_count.y &&
@@ -34,7 +29,6 @@ void main() {
         }
     }
 
-    // barrier();
     
     if (gl_LocalInvocationIndex == 0) {
         uint finished_workgroups = atomicAdd(GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).workgroup_count_x, 1);

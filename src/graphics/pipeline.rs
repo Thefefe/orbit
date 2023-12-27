@@ -155,10 +155,10 @@ impl MultisampleCount {
 
     pub fn sample_count(self) -> u32 {
         match self {
-            MultisampleCount::None  => 1,
-            MultisampleCount::X2    => 2,
-            MultisampleCount::X4    => 4,
-            MultisampleCount::X8    => 8,
+            MultisampleCount::None => 1,
+            MultisampleCount::X2 => 2,
+            MultisampleCount::X4 => 4,
+            MultisampleCount::X8 => 8,
         }
     }
 
@@ -219,6 +219,8 @@ const MAX_COLOR_ATTACHMENT_COUNT: usize = 2;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct RasterPipelineDesc {
+    pub task_source: Option<ShaderSource>,
+    pub mesh_source: Option<ShaderSource>,
     pub vertex_source: Option<ShaderSource>,
     pub fragment_source: Option<ShaderSource>,
     pub rasterizer: RasterizerDesc,
@@ -249,6 +251,16 @@ impl std::ops::Deref for RasterPipelineDescBuilder {
 }
 
 impl RasterPipelineDescBuilder {
+    pub fn task_shader(mut self, source: ShaderSource) -> Self {
+        self.desc.task_source = Some(source);
+        self
+    }
+
+    pub fn mesh_shader(mut self, source: ShaderSource) -> Self {
+        self.desc.mesh_source = Some(source);
+        self
+    }
+
     pub fn vertex_shader(mut self, source: ShaderSource) -> Self {
         self.desc.vertex_source = Some(source);
         self
@@ -322,6 +334,38 @@ impl graphics::Context {
 
         let mut stages = vec![];
         let mut dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+
+        if desc.task_source.is_some() || desc.mesh_source.is_some() {
+            assert!(self.device.mesh_shader_fns.is_some(), "mesh shading isn't supported");
+        }
+
+        if let Some(task_source) = &desc.task_source {
+            assert!(
+                desc.mesh_source.is_some(),
+                "can't use task shaders without mesh shaders"
+            );
+            let module = self.get_shader_module(task_source);
+
+            stages.push(
+                vk::PipelineShaderStageCreateInfo::builder()
+                    .stage(vk::ShaderStageFlags::TASK_EXT)
+                    .module(module)
+                    .name(cstr::cstr!("main"))
+                    .build(),
+            );
+        }
+
+        if let Some(mesh_source) = &desc.mesh_source {
+            let module = self.get_shader_module(mesh_source);
+
+            stages.push(
+                vk::PipelineShaderStageCreateInfo::builder()
+                    .stage(vk::ShaderStageFlags::MESH_EXT)
+                    .module(module)
+                    .name(cstr::cstr!("main"))
+                    .build(),
+            );
+        }
 
         if let Some(vertex_source) = &desc.vertex_source {
             let module = self.get_shader_module(vertex_source);

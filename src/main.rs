@@ -456,7 +456,7 @@ impl App {
         let mut thread_rng = rand::thread_rng();
         use rand::Rng;
 
-        for _ in 0..256 {
+        for _ in 0..64 {
             let position = Vec3 {
                 x: thread_rng.gen_range(horizontal_range.clone()),
                 y: thread_rng.gen_range(vertical_range.clone()),

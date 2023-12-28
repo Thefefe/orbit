@@ -8,13 +8,12 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMeshVertex {
     pub position: [f32; 3],
     pub packed_normals: [i8; 4],
     pub uv_coord: [f32; 2],
 }
-
 impl GpuMeshVertex {
     pub fn new(position: Vec3, uv_coord: Vec2, normal: Vec3, tangent: Vec4) -> Self {
         Self {
@@ -419,6 +418,7 @@ impl Iterator for SepVertexIter<'_> {
     }
 }
 
+#[derive(Debug, Clone, Default)]
 pub struct MeshData {
     pub vertices: Vec<GpuMeshVertex>,
     pub indices: Vec<u32>,
@@ -481,6 +481,29 @@ impl MeshData {
         }
 
         Ok(mesh_data)
+    }
+
+    pub fn optimize(&mut self) {
+        // TODO: use ffi to reduce unnecessary allocations
+        let (vertex_count, remap) = meshopt::generate_vertex_remap(&self.vertices, Some(&self.indices));
+        let indices = meshopt::remap_index_buffer(Some(&self.indices), vertex_count, &remap);
+        let vertices = meshopt::remap_vertex_buffer(&self.vertices, vertex_count, &remap);
+        
+        self.indices = indices;
+        self.vertices = vertices;
+
+        meshopt::optimize_vertex_cache_in_place(&mut self.indices, vertex_count);
+        
+        let position_offset = bytemuck::offset_of!(GpuMeshVertex, position);
+        let vertex_stride = std::mem::size_of::<GpuMeshVertex>();
+        let vertex_adapter = meshopt::VertexDataAdapter::new(
+            bytemuck::cast_slice(&self.vertices),
+            vertex_stride,
+            position_offset
+        ).unwrap();
+        
+        meshopt::optimize_overdraw_in_place(&mut self.indices, &vertex_adapter, 1.05);
+        meshopt::optimize_vertex_fetch_in_place(&mut self.indices, &mut self.vertices);
     }
 }
 

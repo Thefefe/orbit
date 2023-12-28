@@ -37,3 +37,5 @@ ordered-float = "4.1.1"
 rayon = "1.8.0"
 parking_lot = "0.12.1"
 
+# crates.io version is outdated
+meshopt = { git = "https://github.com/gwihlidal/meshopt-rs.git", rev = "a342382" }

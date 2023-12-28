@@ -451,37 +451,37 @@ impl App {
             load_gltf(&gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
         }
 
-        let horizontal_range = -8.0..=8.0;
-        let vertical_range = 0.0..=6.0;
-        let mut thread_rng = rand::thread_rng();
-        use rand::Rng;
+        // let horizontal_range = -8.0..=8.0;
+        // let vertical_range = 0.0..=6.0;
+        // let mut thread_rng = rand::thread_rng();
+        // use rand::Rng;
 
-        for _ in 0..64 {
-            let position = Vec3 {
-                x: thread_rng.gen_range(horizontal_range.clone()),
-                y: thread_rng.gen_range(vertical_range.clone()),
-                z: thread_rng.gen_range(horizontal_range.clone()),
-            };
+        // for _ in 0..64 {
+        //     let position = Vec3 {
+        //         x: thread_rng.gen_range(horizontal_range.clone()),
+        //         y: thread_rng.gen_range(vertical_range.clone()),
+        //         z: thread_rng.gen_range(horizontal_range.clone()),
+        //     };
 
-            let color = egui::epaint::Hsva::new(thread_rng.gen_range(0.0..=1.0), 1.0, 1.0, 1.0).to_rgb();
-            let color = Vec3::from_array(color);
-            let intensity = thread_rng.gen_range(1.0..=6.0);
+        //     let color = egui::epaint::Hsva::new(thread_rng.gen_range(0.0..=1.0), 1.0, 1.0, 1.0).to_rgb();
+        //     let color = Vec3::from_array(color);
+        //     let intensity = thread_rng.gen_range(1.0..=6.0);
 
-            scene.add_entity(EntityData {
-                name: None,
-                transform: Transform {
-                    position,
-                    ..Default::default()
-                },
-                light: Some(Light {
-                    color,
-                    intensity,
-                    params: LightParams::Point { inner_radius: 0.1 },
-                    ..Default::default()
-                }),
-                ..Default::default()
-            });
-        }
+        //     scene.add_entity(EntityData {
+        //         name: None,
+        //         transform: Transform {
+        //             position,
+        //             ..Default::default()
+        //         },
+        //         light: Some(Light {
+        //             color,
+        //             intensity,
+        //             params: LightParams::Point { inner_radius: 0.1 },
+        //             ..Default::default()
+        //         }),
+        //         ..Default::default()
+        //     });
+        // }
 
         // use rand::Rng;
         // let mut rng = rand::thread_rng();

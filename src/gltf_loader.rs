@@ -539,6 +539,7 @@ pub fn load_gltf(
 
             mesh_data.vertices.extend(vertices);
             mesh_data.indices.extend(indices);
+            mesh_data.optimize();
 
             if !have_normals {
                 log::info!("generating normals for model '{name}' primitive {prim_index}...");

@@ -182,7 +182,7 @@ pub struct GpuAssets {
     pub vertex_buffer: graphics::Buffer,
     pub index_buffer: graphics::Buffer,
 
-    // INDICES!!! not bytes
+    // indices not bytes
     vertex_allocator: FreeListAllocator,
     index_allocator: FreeListAllocator,
 

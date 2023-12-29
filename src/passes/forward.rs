@@ -265,8 +265,8 @@ impl ForwardRenderer {
         let depth_prepass_pipeline = context.create_raster_pipeline(
             "forward_depth_prepass_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/forward_depth_prepass.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/forward_depth_prepass.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward_depth_prepass.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/forward/forward_depth_prepass.frag.spv"))
                 .color_attachments(&[graphics::PipelineColorAttachment {
                     format: vk::Format::R8G8B8A8_UNORM,
                     ..Default::default()
@@ -620,8 +620,8 @@ impl ForwardRenderer {
         let forward_pipeline = context.create_raster_pipeline(
             "forward_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/forward.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/forward.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/forward/forward.frag.spv"))
                 .color_attachments(&[graphics::PipelineColorAttachment {
                     format: App::COLOR_FORMAT,
                     color_mask: vk::ColorComponentFlags::RGBA,
@@ -639,40 +639,40 @@ impl ForwardRenderer {
                 }),
         );
 
-        // let overdraw_pipeline = context.create_raster_pipeline(
-        //     "forward_overdraw_pipeline",
-        //     &graphics::RasterPipelineDesc::builder()
-        //         .vertex_shader(graphics::ShaderSource::spv("shaders/forward.vert.spv"))
-        //         .fragment_shader(graphics::ShaderSource::spv("shaders/forward.frag.spv"))
-        //         .color_attachments(&[graphics::PipelineColorAttachment {
-        //             format: App::COLOR_FORMAT,
-        //             color_mask: vk::ColorComponentFlags::RGBA,
-        //             color_blend: Some(graphics::ColorBlendState {
-        //                 src_color_blend_factor: vk::BlendFactor::ONE,
-        //                 dst_color_blend_factor: vk::BlendFactor::ONE,
-        //                 color_blend_op: vk::BlendOp::ADD,
-        //                 src_alpha_blend_factor: vk::BlendFactor::ONE,
-        //                 dst_alpha_blend_factor: vk::BlendFactor::ONE,
-        //                 alpha_blend_op: vk::BlendOp::ADD,
-        //             }),
-        //         }])
-        //         .depth_state(Some(graphics::DepthState {
-        //             format: App::DEPTH_FORMAT,
-        //             test: graphics::PipelineState::Static(true),
-        //             write: false,
-        //             compare: vk::CompareOp::GREATER_OR_EQUAL,
-        //         }))
-        //         .multisample_state(graphics::MultisampleState {
-        //             sample_count: settings.msaa,
-        //             alpha_to_coverage: false,
-        //         }),
-        // );
+        let overdraw_pipeline = context.create_raster_pipeline(
+            "forward_overdraw_pipeline",
+            &graphics::RasterPipelineDesc::builder()
+                .vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/forward/forward.frag.spv"))
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: App::COLOR_FORMAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: Some(graphics::ColorBlendState {
+                        src_color_blend_factor: vk::BlendFactor::ONE,
+                        dst_color_blend_factor: vk::BlendFactor::ONE,
+                        color_blend_op: vk::BlendOp::ADD,
+                        src_alpha_blend_factor: vk::BlendFactor::ONE,
+                        dst_alpha_blend_factor: vk::BlendFactor::ONE,
+                        alpha_blend_op: vk::BlendOp::ADD,
+                    }),
+                }])
+                .depth_state(Some(graphics::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: graphics::PipelineState::Static(true),
+                    write: false,
+                    compare: vk::CompareOp::GREATER_OR_EQUAL,
+                }))
+                .multisample_state(graphics::MultisampleState {
+                    sample_count: settings.msaa,
+                    alpha_to_coverage: false,
+                }),
+        );
 
         let skybox_pipeline = context.create_raster_pipeline(
             "skybox_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/skybox.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/skybox.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/forward/skybox.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/forward/skybox.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     front_face: vk::FrontFace::CLOCKWISE,
                     ..Default::default()
@@ -812,8 +812,7 @@ impl ForwardRenderer {
             cmd.bind_index_buffer(&index_buffer, 0);
 
             if render_mode == RenderMode::Overdraw {
-                // cmd.bind_raster_pipeline(overdraw_pipeline);
-                cmd.bind_raster_pipeline(forward_pipeline);
+                cmd.bind_raster_pipeline(overdraw_pipeline);
             } else {
                 cmd.bind_raster_pipeline(forward_pipeline);
             }

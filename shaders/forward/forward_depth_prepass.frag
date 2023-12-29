@@ -1,8 +1,8 @@
 #version 460
 
-#include "include/common.glsl"
-#include "include/types.glsl"
-#include "include/functions.glsl"
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+#include "../include/functions.glsl"
 
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;
@@ -18,7 +18,6 @@ layout(location = 0) in VertexOutput {
     flat uint material_index;
     vec2 uv;
 } vout;
-
 
 layout(location = 0) out vec4 out_color;
 

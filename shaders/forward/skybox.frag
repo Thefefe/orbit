@@ -1,5 +1,5 @@
-#include "include/common.glsl"
-#include "include/types.glsl"
+#include "../include/common.glsl"
+#include "../include/types.glsl"
 
 layout(push_constant, std430) uniform PushConstants {
     mat4 matrix;

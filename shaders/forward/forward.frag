@@ -1,35 +1,15 @@
 #version 460
 
-#include "include/common.glsl"
-#include "include/types.glsl"
-#include "include/functions.glsl"
-#include "light_cluster/cluster_common.glsl"
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+#include "../include/functions.glsl"
+#include "../light_cluster/cluster_common.glsl"
+
+#include "forward_common.glsl"
 
 RegisterUintImageFormat(rg32ui);
 
-layout(push_constant, std430) uniform PushConstants {
-    uint per_frame_buffer;
-    uint vertex_buffer;
-    uint entity_buffer;
-    uint draw_commands;
-    uint materials_buffer;
-    uint cluster_buffer;
-    uint light_count;
-    uint light_data_buffer;
-    uint shadow_data_buffer;
-    uint shadow_settings_buffer;
-    uint selected_light;
-    uint brdf_integration_map_index;
-    uint jitter_texture_index;
-};
-
-layout(location = 0) in VertexOutput {
-    vec4 world_pos;
-    vec2 uv;
-    vec3 normal;
-    vec4 tangent;
-    flat uint material_index;
-} vout;
+layout(location = 0) in VERTEX_OUTPUT vout;
 
 layout(location = 0) out vec4 out_color;
 

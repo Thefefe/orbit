@@ -520,7 +520,7 @@ impl graphics::Context {
             match source {
                 ShaderSource::Spv(path) => {
                     let name = path.file_name().map(|c| c.to_string_lossy()).unwrap();
-                    let spv = utils::load_spv(path).unwrap();
+                    let spv = utils::load_spv(path).expect(&format!("couldn't open file {path:?}"));
                     let create_info = vk::ShaderModuleCreateInfo::builder().code(&spv);
                     let handle = unsafe { self.device.raw.create_shader_module(&create_info, None).unwrap() };
                     self.device.set_debug_name(handle, &name);

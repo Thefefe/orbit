@@ -1,32 +1,12 @@
 #version 460
 
-#include "include/common.glsl"
-#include "include/types.glsl"
-#include "include/functions.glsl"
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+#include "../include/functions.glsl"
 
-layout(push_constant, std430) uniform PushConstants {
-    uint per_frame_buffer;
-    uint vertex_buffer;
-    uint entity_buffer;
-    uint draw_commands;
-    uint materials_buffer;
-    uint cluster_buffer;
-    uint light_count;
-    uint light_data_buffer;
-    uint shadow_data_buffer;
-    uint shadow_settings_buffer;
-    uint selected_light;
-    uint brdf_integration_map_index;
-    uint jitter_texture_index;
-};
+#include "forward_common.glsl"
 
-layout(location = 0) out VertexOutput {
-    vec4 world_pos;
-    vec2 uv;
-    vec3 normal;
-    vec4 tangent;
-    flat uint material_index;
-} vout;
+layout(location = 0) out VERTEX_OUTPUT vout;
 
 void main() {
     MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex];

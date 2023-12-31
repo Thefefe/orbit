@@ -108,8 +108,29 @@ void main() {
     uint meshlet_index = dispatch.meshlet_offset + gl_LocalInvocationID.x;
 	MeshInfo mesh_info = GetBuffer(MeshInfoBuffer, mesh_info_buffer).mesh_infos[dispatch.mesh_index];
     Meshlet meshlet = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index];
+	CullInfo cull_info = GetBuffer(CullInfoBuffer, cull_info_buffer).cull_info;
+
+	vec4 model_space_bounding_sphere = vec4(
+		meshlet.bounding_sphere[0],
+		meshlet.bounding_sphere[1],
+		meshlet.bounding_sphere[2],
+		meshlet.bounding_sphere[3]
+	);
+	vec4 bounding_sphere_view_space = transform_sphere(
+		cull_info.view_matrix * GetBuffer(EntityBuffer, entity_buffer).entities[dispatch.entity_index].model_matrix,
+		model_space_bounding_sphere
+	);
 
     bool visible = true;
+
+	if (visible) {
+		for (uint i = 0; i < cull_info.cull_plane_count; i++) {
+			vec4 plane = cull_info.cull_planes[i];
+			float point_plane_distance = dot(plane.xyz, bounding_sphere_view_space.xyz) + plane.w;
+			bool inside_frustum = point_plane_distance > -bounding_sphere_view_space.w;
+			visible = visible && inside_frustum;
+		}
+	}
 
     if (visible) {
         uint data_offset = mesh_info.meshlet_data_offset + meshlet.data_offset;

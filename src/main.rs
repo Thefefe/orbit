@@ -50,7 +50,6 @@ use crate::passes::{
     post_process::render_post_process,
 };
 
-pub const MAX_DRAW_COUNT: usize = 1_000_000;
 pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
 
 /// An experimental Vulkan 1.3 renderer
@@ -993,72 +992,72 @@ impl App {
             let screen_to_world_matrix = self.frozen_camera.compute_matrix().inverse();
 
             for entity in self.scene.entities.iter() {
-                if let Some(model) = entity.model {
-                    let transform_matrix = entity.transform.compute_matrix();
-                    for submesh in self.gpu_assets.models[model].submeshes.iter() {
-                        if show_bounding_boxes {
-                            let aabb = self.gpu_assets.mesh_infos[submesh.mesh_handle].aabb;
+                let Some(mesh) = entity.mesh else {
+                    continue;
+                };
+
+                let transform_matrix = entity.transform.compute_matrix();
+                if show_bounding_boxes {
+                    let aabb = self.gpu_assets.mesh_infos[mesh].aabb;
+                    let corners = [
+                        vec3a(0.0, 0.0, 0.0),
+                        vec3a(1.0, 0.0, 0.0),
+                        vec3a(1.0, 1.0, 0.0),
+                        vec3a(0.0, 1.0, 0.0),
+                        vec3a(0.0, 0.0, 1.0),
+                        vec3a(1.0, 0.0, 1.0),
+                        vec3a(1.0, 1.0, 1.0),
+                        vec3a(0.0, 1.0, 1.0),
+                    ]
+                    .map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
+                    self.debug_renderer.draw_cube_with_corners(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                }
+
+                if show_bounding_spheres || show_screen_space_aabbs {
+                    let bounding_sphere = self.gpu_assets.mesh_infos[mesh].bounding_sphere;
+                    let position_world = transform_matrix.transform_point3a(bounding_sphere.into());
+                    let radius = bounding_sphere.w * entity.transform.scale.max_element();
+
+                    let p00 = projection_matrix.col(0)[0];
+                    let p11 = projection_matrix.col(1)[1];
+
+                    let mut position_view = view_matrix.transform_point3a(position_world);
+                    position_view.z = -position_view.z;
+
+                    let z_near = 0.01;
+
+                    if let Some(aabb) =
+                        math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11)
+                    {
+                        if show_bounding_spheres {
+                            self.debug_renderer.draw_sphere(
+                                position_world.into(),
+                                radius,
+                                vec4(0.0, 1.0, 0.0, 1.0),
+                            );
+                        }
+
+                        if show_screen_space_aabbs {
+                            let depth = z_near / (position_view.z - radius);
+
                             let corners = [
-                                vec3a(0.0, 0.0, 0.0),
-                                vec3a(1.0, 0.0, 0.0),
-                                vec3a(1.0, 1.0, 0.0),
-                                vec3a(0.0, 1.0, 0.0),
-                                vec3a(0.0, 0.0, 1.0),
-                                vec3a(1.0, 0.0, 1.0),
-                                vec3a(1.0, 1.0, 1.0),
-                                vec3a(0.0, 1.0, 1.0),
+                                vec2(aabb.x, aabb.y),
+                                vec2(aabb.x, aabb.w),
+                                vec2(aabb.z, aabb.w),
+                                vec2(aabb.z, aabb.y),
                             ]
-                            .map(|s| transform_matrix * (aabb.min + ((aabb.max - aabb.min) * s)).extend(1.0));
-                            self.debug_renderer.draw_cube_with_corners(&corners, vec4(1.0, 1.0, 1.0, 1.0));
+                            .map(|c| {
+                                let v = screen_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
+                                v / v.w
+                            });
+                            self.debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                         }
-
-                        if show_bounding_spheres || show_screen_space_aabbs {
-                            let bounding_sphere = self.gpu_assets.mesh_infos[submesh.mesh_handle].bounding_sphere;
-                            let position_world = transform_matrix.transform_point3a(bounding_sphere.into());
-                            let radius = bounding_sphere.w * entity.transform.scale.max_element();
-
-                            let p00 = projection_matrix.col(0)[0];
-                            let p11 = projection_matrix.col(1)[1];
-
-                            let mut position_view = view_matrix.transform_point3a(position_world);
-                            position_view.z = -position_view.z;
-
-                            let z_near = 0.01;
-
-                            if let Some(aabb) =
-                                math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11)
-                            {
-                                if show_bounding_spheres {
-                                    self.debug_renderer.draw_sphere(
-                                        position_world.into(),
-                                        radius,
-                                        vec4(0.0, 1.0, 0.0, 1.0),
-                                    );
-                                }
-
-                                if show_screen_space_aabbs {
-                                    let depth = z_near / (position_view.z - radius);
-
-                                    let corners = [
-                                        vec2(aabb.x, aabb.y),
-                                        vec2(aabb.x, aabb.w),
-                                        vec2(aabb.z, aabb.w),
-                                        vec2(aabb.z, aabb.y),
-                                    ]
-                                    .map(|c| {
-                                        let v = screen_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
-                                        v / v.w
-                                    });
-                                    self.debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
-                                }
-                            } else if show_bounding_spheres {
-                                self.debug_renderer.draw_sphere(
-                                    position_world.into(),
-                                    radius,
-                                    vec4(1.0, 0.0, 0.0, 1.0),
-                                );
-                            }
-                        }
+                    } else if show_bounding_spheres {
+                        self.debug_renderer.draw_sphere(
+                            position_world.into(),
+                            radius,
+                            vec4(1.0, 0.0, 0.0, 1.0),
+                        );
                     }
                 }
             }
@@ -1081,10 +1080,10 @@ impl App {
             self.debug_renderer.draw_line(pos, pos + vec3(0.0, 1.0, 0.0), vec4(0.0, 1.0, 0.0, 1.0));
             self.debug_renderer.draw_line(pos, pos + vec3(0.0, 0.0, 1.0), vec4(0.0, 0.0, 1.0, 1.0));
 
-            if let Some(model) = entity.model {
+            if let Some(mesh) = entity.mesh {
                 self.debug_renderer.draw_model_wireframe(
                     entity.transform.compute_matrix(),
-                    model,
+                    mesh,
                     vec4(1.0, 0.0, 1.0, 1.0),
                 );
             }

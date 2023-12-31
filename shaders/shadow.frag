@@ -6,6 +6,8 @@
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;
     uint vertex_buffer;
+    uint meshlet_buffer;
+    uint meshlet_data_buffer;
     uint entity_buffer;
     uint draw_commands_buffer;
     uint materials_buffer;

@@ -1,8 +1,10 @@
 layout(push_constant, std430) uniform PushConstants {
     uint per_frame_buffer;
     uint vertex_buffer;
+    uint meshlet_buffer;
+    uint meshlet_data_buffer;
     uint entity_buffer;
-    uint draw_commands;
+    uint draw_commands_buffer;
     uint materials_buffer;
     uint cluster_buffer;
     uint light_count;
@@ -20,4 +22,5 @@ layout(push_constant, std430) uniform PushConstants {
     vec3 normal;                     \
     vec4 tangent;                    \
     flat uint material_index;        \
+    flat uint meshlet_index;         \
 }

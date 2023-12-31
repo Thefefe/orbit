@@ -302,7 +302,7 @@ impl EguiRenderer {
                 cmd.begin_rendering(&rendering_info);
 
                 cmd.bind_raster_pipeline(pipeline);
-                cmd.bind_index_buffer(index_buffer, index_offset as u64);
+                cmd.bind_index_buffer(index_buffer, index_offset as u64, vk::IndexType::UINT32);
                 // cmd.bind_vertex_buffer(0, vertex_buffer, vertex_offset as u64);
 
                 for batch in clipped_batches.iter() {

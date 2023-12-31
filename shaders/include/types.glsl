@@ -73,9 +73,7 @@ struct DrawCommand {
     uint first_index;
     int  vertex_offset;
     uint first_instance;
-    
-    uint _debug_index; // for debuging only
-    
+
     // other per-draw data
     uint material_index;
 };
@@ -100,25 +98,79 @@ struct MaterialData {
     uint _padding[3];
 };
 
-struct Submesh {
+struct EntityDraw {
     uint entity_index;
     uint mesh_index;
-    uint material_index;
-    uint alpha_mode;
 };
 
+RegisterBuffer(EntityDrawBuffer, {
+    uint count;
+    EntityDraw draws[];
+});
+
 struct Aabb {
-    float min_pos[3];
-    float max_pos[3];  
+    vec4 min_pos;
+    vec4 max_pos;  
 };
 
 struct MeshInfo {
-    uint index_offset;
-    uint index_count;
-    int  vertex_offset;
+    vec4 bounding_sphere;
     Aabb aabb;
-    float bounding_sphere[4];
+    uint vertex_offset;
+    uint meshlet_data_offset;
+    uint meshlet_offset;
+    uint meshlet_count;
 };
+
+struct Meshlet {
+    vec4     bounding_sphere;
+    i8vec3   cone_axis;
+    int8_t   cone_cutoff;
+    uint32_t vertex_offset;
+    uint32_t data_offset;
+    uint16_t material_index;
+    uint8_t  vertex_count;
+    uint8_t  triangle_count;
+};
+
+RegisterBuffer(MeshletBuffer, {
+    Meshlet meshlets[];
+});
+
+RegisterBuffer(MeshletDataBuffer, {
+    uint vertex_indices[];
+});
+
+struct MeshletDispatch {
+    uint entity_index;
+    uint mesh_index;
+    uint meshlet_offset;
+    uint meshlet_count;
+};
+
+RegisterBuffer(MeshletDispatchBuffer, {
+    uint workgroup_count_x;
+    uint workgroup_count_y;
+    uint workgroup_count_z;
+    uint _padding;
+    MeshletDispatch dispatches[];
+});
+
+struct MeshletDrawCommand {
+    uint cmd_index_count;
+    uint cmd_instance_count;
+    uint cmd_first_index;
+    int  cmd_vertex_offset;
+    uint cmd_first_instance;
+
+    uint meshlet_vertex_offset;
+    uint meshlet_index;
+};
+
+RegisterBuffer(MeshletDrawCommandBuffer, {
+    uint count;
+    MeshletDrawCommand draws[];
+});
 
 struct CullInfo {
     mat4 view_matrix;
@@ -157,11 +209,6 @@ struct DebugMeshInstance {
     vec4 color;
 };
 
-struct ClusterVolume {
-    vec4 min_pos;
-    vec4 max_pos;
-};
-
 RegisterBuffer(ClusterLightIndices, {
     uint light_count;
     uint light_indices[];
@@ -178,7 +225,7 @@ RegisterBuffer(ClusterDepthBoundsBuffer, {
 });
 
 RegisterBuffer(ClusterVolumeBuffer, {
-    ClusterVolume clusters[];
+    Aabb clusters[];
 });
 
 RegisterBuffer(TileDepthSliceMask, {
@@ -230,18 +277,13 @@ RegisterBuffer(ShadowSettingsBuffer, {
 	ShadowSettings data;
 });
 
-RegisterBuffer(SubmeshBuffer, {
-	uint count;
-	Submesh submeshes[];
-});
-
 RegisterBuffer(MeshInfoBuffer, {
 	MeshInfo mesh_infos[];
 });
 
 RegisterBuffer(DrawCommandsBuffer, {
 	uint count;
-	DrawCommand commands[];
+	DrawCommand draws[];
 });
 
 RegisterBuffer(VertexBuffer, {

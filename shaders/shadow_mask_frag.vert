@@ -7,6 +7,8 @@ RegisterBuffer(ShadowMaskFragData, {
     mat4 view_projection_matrix;
     mat4 reprojection_matrix;
     uint vertex_buffer;
+    uint meshlet_buffer;
+    uint meshlet_data_buffer;
     uint entity_buffer;
     uint draw_commands_buffer;
     uint materials_buffer;
@@ -27,15 +29,19 @@ layout(location = 0) out VertexOutput {
 } vout;
 
 void main() {
-    float pos_array[3] = GetBuffer(VertexBuffer, GetBuffer(ShadowMaskFragData, data_buffer).vertex_buffer).vertices[gl_VertexIndex].position;
+    uint vertex_index =
+        GetBuffer(MeshletDrawCommandBuffer, GetBuffer(ShadowMaskFragData, data_buffer).draw_commands_buffer).draws[gl_DrawID].meshlet_vertex_offset +
+        GetBuffer(MeshletDataBuffer, GetBuffer(ShadowMaskFragData, data_buffer).meshlet_data_buffer).vertex_indices[gl_VertexIndex];
+    
+    float pos_array[3] = GetBuffer(VertexBuffer, GetBuffer(ShadowMaskFragData, data_buffer).vertex_buffer).vertices[vertex_index].position;
     vec3 pos = vec3(pos_array[0], pos_array[1], pos_array[2]);
     mat4 model_matrix = GetBuffer(EntityBuffer, GetBuffer(ShadowMaskFragData, data_buffer).entity_buffer).entities[gl_InstanceIndex].model_matrix;
     gl_Position = GetBuffer(ShadowMaskFragData, data_buffer).view_projection_matrix * model_matrix * vec4(pos, 1.0);
 
-    float uv_array[2] = GetBuffer(VertexBuffer, GetBuffer(ShadowMaskFragData, data_buffer).vertex_buffer).vertices[gl_VertexIndex].uv_coord;
+    float uv_array[2] = GetBuffer(VertexBuffer, GetBuffer(ShadowMaskFragData, data_buffer).vertex_buffer).vertices[vertex_index].uv_coord;
     vout.uv = vec2(uv_array[0], uv_array[1]);
-    vout.material_index = GetBuffer(DrawCommandsBuffer, GetBuffer(ShadowMaskFragData, data_buffer).draw_commands_buffer)
-        .commands[gl_DrawID].material_index;
+    uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, GetBuffer(ShadowMaskFragData, data_buffer).draw_commands_buffer).draws[gl_DrawID].meshlet_index;
+    vout.material_index = GetBuffer(MeshletBuffer, GetBuffer(ShadowMaskFragData, data_buffer).meshlet_buffer).meshlets[meshlet_index].material_index;
 
     vout.pos = gl_Position.xyz / gl_Position.w;
     vec4 camera_pos = GetBuffer(ShadowMaskFragData, data_buffer).reprojection_matrix * vec4(vout.pos, 1.0);

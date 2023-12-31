@@ -481,9 +481,14 @@ impl Device {
         }
         .unwrap();
 
-        let required_device_extensions: &[&CStr] = &[khr::Swapchain::name()];
+        let required_device_extensions: &[&CStr] = &[
+            khr::Swapchain::name(),
+            vk::ExtIndexTypeUint8Fn::name(),
+        ];
 
-        let optional_device_extensions: &[&CStr] = &[ext::MeshShader::name()];
+        let optional_device_extensions: &[&CStr] = &[
+            ext::MeshShader::name(),
+        ];
 
         let gpu = enumerate_gpus(&instance, &surface_fns, surface)
             .rev()
@@ -571,10 +576,13 @@ impl Device {
             .depth_bias_clamp(true)
             .depth_clamp(true)
             .shader_int64(true)
+            .shader_int16(true)
             .fragment_stores_and_atomics(true)
             .build();
 
-        let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder().shader_draw_parameters(true).build();
+        let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()
+            .shader_draw_parameters(true)
+            .storage_buffer16_bit_access(true);
 
         let mut vulkan12_features = vk::PhysicalDeviceVulkan12Features::builder()
             .runtime_descriptor_array(true)
@@ -593,14 +601,15 @@ impl Device {
             .uniform_and_storage_buffer8_bit_access(true)
             .draw_indirect_count(true)
             .host_query_reset(true)
-            .sampler_filter_minmax(true)
-            .build();
+            .sampler_filter_minmax(true);
 
         let mut vulkan13_features = vk::PhysicalDeviceVulkan13Features::builder()
             .dynamic_rendering(true)
             .synchronization2(true)
-            .maintenance4(true)
-            .build();
+            .maintenance4(true);
+
+        let mut index_type_uint8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::builder()
+            .index_type_uint8(true);
 
         let mut mesh_shader_features =
             vk::PhysicalDeviceMeshShaderFeaturesEXT::builder().mesh_shader(true).task_shader(true);
@@ -609,7 +618,8 @@ impl Device {
             .features(vulkan10_features)
             .push_next(&mut vulkan11_features)
             .push_next(&mut vulkan12_features)
-            .push_next(&mut vulkan13_features);
+            .push_next(&mut vulkan13_features)
+            .push_next(&mut index_type_uint8_features);
 
         let mesh_shading_available = enabled_device_extensions.contains(ext::MeshShader::name());
 
@@ -811,6 +821,8 @@ impl Device {
         for (i, descriptor_set) in descriptor_sets.iter().enumerate() {
             set_debug_name(vk::DescriptorSet::TYPE, descriptor_set.as_raw(), names[i]);
         }
+
+        log::info!("created device");
 
         Ok(Self {
             entry,

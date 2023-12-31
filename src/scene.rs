@@ -7,7 +7,7 @@ use glam::{vec2, vec3, vec3a, vec4, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    assets::{GpuAssets, ModelHandle},
+    assets::{GpuAssets, MeshHandle},
     graphics::{self, FRAME_COUNT},
     passes::shadow_renderer::{ShadowCommand, ShadowKind, ShadowRenderer},
 };
@@ -56,7 +56,7 @@ impl Transform {
 pub struct EntityData {
     pub name: Option<Cow<'static, str>>,
     pub transform: Transform,
-    pub model: Option<ModelHandle>,
+    pub mesh: Option<MeshHandle>,
     pub light: Option<Light>,
 }
 
@@ -112,27 +112,9 @@ pub struct GpuEntityData {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct GpuSubmeshData {
+pub struct GpuEntityDraw {
     instance_index: u32,
     mesh_index: u32,
-    material_index: u32,
-    alpha_mode: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
-pub struct GpuMeshDrawCommand {
-    // DrawIndiexedIndirectCommand
-    pub index_count: u32,
-    pub instance_count: u32,
-    pub first_index: u32,
-    pub vertex_offset: i32,
-    pub first_instance: u32,
-
-    pub _debug_index: u32,
-
-    // other per-draw data
-    pub material_index: u32,
 }
 
 #[repr(usize)]
@@ -297,8 +279,8 @@ pub struct GpuLightData {
 
 #[derive(Clone, Copy)]
 pub struct SceneGraphData {
-    pub submesh_count: usize,
-    pub submesh_buffer: graphics::GraphBufferHandle,
+    pub entity_draw_count: usize,
+    pub entity_draw_buffer: graphics::GraphBufferHandle,
     pub entity_buffer: graphics::GraphBufferHandle,
     pub light_count: usize, // temporary
     pub light_data_buffer: graphics::GraphHandle<graphics::BufferRaw>,
@@ -327,7 +309,7 @@ impl Buffers {
         let submesh_buffer = context.create_buffer(
             "submesh_buffer",
             &graphics::BufferDesc {
-                size: SUBMESH_BUFFER_SIZE * FRAME_COUNT,
+                size: ENTITY_DRAW_BUFFER_SIZE * FRAME_COUNT,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: MemoryLocation::GpuOnly,
             },
@@ -352,14 +334,14 @@ impl Buffers {
 
 pub struct SceneData {
     pub entities: Vec<EntityData>,
-    pub submesh_data_cache: Vec<GpuSubmeshData>,
+    pub entity_draw_cache: Vec<GpuEntityDraw>,
     pub entity_data_cache: Vec<GpuEntityData>,
     pub light_data_cache: Vec<GpuLightData>,
     frames: [Buffers; FRAME_COUNT],
 }
 
 const INSTANCE_BUFFER_SIZE: usize = MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityData>();
-const SUBMESH_BUFFER_SIZE: usize = MAX_INSTANCE_COUNT * std::mem::size_of::<GpuSubmeshData>() + 4;
+const ENTITY_DRAW_BUFFER_SIZE: usize = 4 + MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityDraw>();
 const LIGHT_DATA_BUFFER_SIZE: usize = MAX_LIGHT_COUNT * std::mem::size_of::<GpuLightData>();
 
 impl SceneData {
@@ -369,7 +351,7 @@ impl SceneData {
         Self {
             entities: Vec::new(),
     
-            submesh_data_cache: Vec::new(),
+            entity_draw_cache: Vec::new(),
             entity_data_cache: Vec::new(),
             light_data_cache: Vec::new(),
 
@@ -387,29 +369,32 @@ impl SceneData {
         &mut self,
         context: &graphics::Context,
         shadow_renderer: &mut ShadowRenderer,
-        assets: &GpuAssets,
+        _assets: &GpuAssets,
         luminance_cutoff: f32,
     ) {
         puffin::profile_function!();
 
-        self.submesh_data_cache.clear();
+        self.entity_draw_cache.clear();
         self.entity_data_cache.clear();
         self.light_data_cache.clear();
         shadow_renderer.clear_shadow_commands();
 
         for entity in self.entities.iter_mut() {
-            if let Some(model) = entity.model {
+            if let Some(mesh) = entity.mesh {
                 let instance_index = self.entity_data_cache.len() as u32;
                 self.entity_data_cache.push(entity.entity_gpu_data());
-
-                for submesh in assets.models[model].submeshes.iter() {
-                    self.submesh_data_cache.push(GpuSubmeshData {
-                        instance_index,
-                        mesh_index: submesh.mesh_handle.slot(),
-                        material_index: submesh.material_index.slot(),
-                        alpha_mode: assets.material_indices[submesh.material_index].alpha_mode.raw_index(),
-                    })
-                }
+                self.entity_draw_cache.push(GpuEntityDraw {
+                    instance_index,
+                    mesh_index: mesh.slot(),
+                });
+                // for submesh in assets.models[model].submeshes.iter() {
+                //     self.entity_draw_cache.push(GpuEntityDraw {
+                //         instance_index,
+                //         mesh_index: submesh.mesh_handle.slot(),
+                //         material_index: submesh.material_index.slot(),
+                //         alpha_mode: assets.material_indices[submesh.material_index].alpha_mode.raw_index(),
+                //     })
+                // }
             }
 
             let light_data = entity.light_gpu_data(luminance_cutoff);
@@ -437,7 +422,7 @@ impl SceneData {
             bytemuck::cast_slice(&self.entity_data_cache),
         );
 
-        let submesh_count = self.submesh_data_cache.len() as u32;
+        let submesh_count = self.entity_draw_cache.len() as u32;
         context.queue_write_buffer(
             &self.frames[context.frame_index()].submesh_buffer,
             0,
@@ -446,7 +431,7 @@ impl SceneData {
         context.queue_write_buffer(
             &self.frames[context.frame_index()].submesh_buffer,
             4,
-            bytemuck::cast_slice(&self.submesh_data_cache),
+            bytemuck::cast_slice(&self.entity_draw_cache),
         );
 
         context.queue_write_buffer(
@@ -458,8 +443,8 @@ impl SceneData {
 
     pub fn import_to_graph(&self, context: &mut graphics::Context) -> SceneGraphData {
         SceneGraphData {
-            submesh_count: self.submesh_data_cache.len(),
-            submesh_buffer: context.import(&self.frames[context.frame_index()].submesh_buffer),
+            entity_draw_count: self.entity_draw_cache.len(),
+            entity_draw_buffer: context.import(&self.frames[context.frame_index()].submesh_buffer),
             entity_buffer: context.import(&self.frames[context.frame_index()].entity_data_buffer),
             light_count: self.light_data_cache.len(),
             light_data_buffer: context.import(&self.frames[context.frame_index()].light_data_buffer),

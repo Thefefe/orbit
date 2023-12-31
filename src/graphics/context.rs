@@ -92,6 +92,10 @@ impl TransferQueue {
         graphics::BufferRaw::destroy_impl(device, &self.staging_buffer);
     }
 
+    fn remaining_size(&self) -> usize {
+        Self::STAGING_BUFFER_SIZE - self.staging_buffer_offset
+    }
+
     fn queue_write_buffer(&mut self, buffer: &graphics::BufferView, offset: usize, data: &[u8]) {
         if data.len() == 0 {
             return;
@@ -137,6 +141,7 @@ impl TransferQueue {
             cmd.signal_semaphore(semaphore, vk::PipelineStageFlags2::TRANSFER);
         }
         let cmd = cmd.record(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        cmd.begin_debug_label("async_transfer", Some([1.0, 1.0, 0.0, 1.0]));
         for buffer_copy in self.buffer_copies.drain(..) {
             cmd.copy_buffer(
                 self.staging_buffer.handle,
@@ -144,11 +149,16 @@ impl TransferQueue {
                 std::slice::from_ref(&buffer_copy.region),
             );
         }
+        cmd.end_debug_label();
         drop(cmd);
 
         let submit_info = self.command_pool.buffers()[0].submit_info();
 
         device.queue_submit(QueueType::AsyncTransfer, &[submit_info], self.fence);
+        unsafe {
+            puffin::profile_scope!("wait_for_trasnfer_fence");
+            device.raw.wait_for_fences(&[self.fence], false, u64::MAX).unwrap();
+        }
         self.staging_buffer_offset = 0;
 
         true
@@ -328,15 +338,33 @@ impl Context {
 
     #[track_caller]
     pub fn queue_write_buffer(&self, buffer: &graphics::BufferView, offset: usize, data: &[u8]) {
-        assert!(offset <= buffer.size as usize);
-        assert!(data.len() <= buffer.size as usize - offset);
-        self.transfer_queue.lock().queue_write_buffer(buffer, offset, data);
+        let data_size = data.len();
+        let buffer_size = buffer.size as usize;
+
+        assert!(offset <= buffer_size, "offset = {offset}, buffer_size = {buffer_size}");
+        assert!(
+            data_size <= buffer_size - offset,
+            "data_size = {data_size}, buffer_size = {buffer_size}, offset = {offset}"
+        );
+
+        let mut transfer_queue = self.transfer_queue.lock();
+
+        if transfer_queue.remaining_size() < data_size {
+            transfer_queue.submit(&self.device, None);
+            self.graph
+                .dont_wait_semaphores
+                .lock()
+                .insert(self.frames[self.frame_index].transfer_finished_semaphore.handle);
+        }
+
+        transfer_queue.queue_write_buffer(buffer, offset, data);
     }
 
     pub fn submit_pending(&mut self) {
         self.transfer_queue.get_mut().submit(&self.device, None);
         self.graph
             .dont_wait_semaphores
+            .get_mut()
             .insert(self.frames[self.frame_index].transfer_finished_semaphore.handle);
     }
 
@@ -689,6 +717,7 @@ impl Context {
         self.transfer_queue.get_mut().queue_write_buffer(&buffer, 0, data);
         self.graph
             .dont_wait_semaphores
+            .get_mut()
             .remove(&self.frames[self.frame_index].transfer_finished_semaphore.handle);
         self.frames[self.frame_index].uses_async_transfer = true;
 
@@ -993,7 +1022,7 @@ fn record_batch(
     );
 
     image_barriers.clear();
-    
+
     for BatchDependency {
         resource_index: resoure_index,
         src_access,

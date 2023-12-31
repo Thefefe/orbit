@@ -51,45 +51,81 @@ impl GpuMeshVertex {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMeshInfo {
-    index_offset: u32,
-    index_count: u32,
-    vertex_offset: u32,
+    bounding_sphere: Vec4,
     aabb: GpuAabb,
-    bounding_sphere: [f32; 4],
+    vertex_offset: u32,
+    meshlet_data_offset: u32,
+    meshlet_offset: u32,
+    meshlet_count: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct MeshInfo {
     pub vertex_range: BlockRange,
-    pub index_range: BlockRange,
+    pub meshlet_data_range: BlockRange,
+    pub meshlet_range: BlockRange,
+
     pub vertex_alloc_index: arena::Index,
-    pub index_alloc_index: arena::Index,
+    pub meshlet_data_alloc_index: arena::Index,
+    pub meshlet_alloc_index: arena::Index,
+
     pub aabb: Aabb,
     pub bounding_sphere: Vec4,
 }
 
 impl MeshInfo {
-    pub fn vertex_offset(&self) -> i32 {
-        self.vertex_range.start as i32
+    pub fn vertex_offset(&self) -> u32 {
+        self.vertex_range.start as u32
     }
 
-    pub fn index_offset(&self) -> u32 {
-        self.index_range.start as u32
+    pub fn meshlet_offset(&self) -> u32 {
+        self.meshlet_range.start as u32
     }
 
-    pub fn index_count(&self) -> u32 {
-        self.index_range.size() as u32
+    pub fn meshlet_count(&self) -> u32 {
+        self.meshlet_range.size() as u32
+    }
+
+    pub fn meshlet_data_offset(&self) -> u32 {
+        self.meshlet_data_range.start as u32
+    }
+
+    pub fn to_gpu(&self) -> GpuMeshInfo {
+        GpuMeshInfo {
+            bounding_sphere: self.bounding_sphere,
+            aabb: GpuAabb::from(self.aabb),
+            vertex_offset: self.vertex_offset(),
+            meshlet_data_offset: self.meshlet_data_offset(),
+            meshlet_offset: self.meshlet_offset(),
+            meshlet_count: self.meshlet_count(),
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Submesh {
-    pub mesh_handle: MeshHandle,
-    pub material_index: MaterialHandle,
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuMeshletDrawCommand {
+    pub cmd_index_count: u32,
+    pub cmd_instance_count: u32,
+    pub cmd_first_index: u32,
+    pub cmd_vertex_offset: i32,
+    pub cmd_first_instance: u32,
+
+    pub meshlet_vertex_offset: u32,
+    pub meshlet_index: u32,
 }
 
-pub struct ModelData {
-    pub submeshes: Vec<Submesh>,
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuMeshlet {
+    bounding_sphere: Vec4,
+    cone_axis: [i8; 3],
+    cone_cutoff: i8,
+    vertex_offset: u32,
+    data_offset: u32,
+    material_index: u16,
+    vertex_count: u8,
+    triangle_count: u8,
 }
 
 #[repr(usize)]
@@ -162,33 +198,41 @@ pub struct GpuMaterialData {
 }
 
 pub type MeshHandle = arena::Index;
-pub type ModelHandle = arena::Index;
 pub type TextureHandle = arena::Index;
 pub type MaterialHandle = arena::Index;
 
 const MAX_VERTEX_COUNT: usize = 4_000_000;
 const MAX_INDEX_COUNT: usize = 12_000_000;
 const MAX_MATERIAL_COUNT: usize = 1_000;
+const MAX_MESHLET_COUNT: usize = 64_000;
+// 64 (meshlet vertex index), 24 (approx. micro index)
+const MAX_MESHLET_DATA_COUNT: usize = MAX_MESHLET_COUNT * (64 + 24);
+
+pub const MAX_MESHLET_VERTICES: usize = 64;
+pub const MAX_MESHLET_TRIANGLES: usize = 64;
+pub const MESHLET_CONE_WEIGHT: f32 = 0.5;
 
 #[derive(Clone, Copy)]
 pub struct AssetGraphData {
     pub vertex_buffer: graphics::GraphBufferHandle,
-    pub index_buffer: graphics::GraphBufferHandle,
+    pub meshlet_data_buffer: graphics::GraphBufferHandle,
+    pub meshlet_buffer: graphics::GraphBufferHandle,
     pub mesh_info_buffer: graphics::GraphBufferHandle,
     pub materials_buffer: graphics::GraphBufferHandle,
 }
 
 pub struct GpuAssets {
     pub vertex_buffer: graphics::Buffer,
-    pub index_buffer: graphics::Buffer,
+    pub meshlet_data_buffer: graphics::Buffer,
+    pub meshlet_buffer: graphics::Buffer,
 
     // indices not bytes
     vertex_allocator: FreeListAllocator,
-    index_allocator: FreeListAllocator,
+    meshlet_data_allocator: FreeListAllocator,
+    meshlet_allocator: FreeListAllocator,
 
     pub mesh_info_buffer: graphics::Buffer,
     pub mesh_infos: arena::Arena<MeshInfo>,
-    pub models: arena::Arena<ModelData>,
 
     pub textures: arena::Arena<graphics::Image>,
 
@@ -207,11 +251,22 @@ impl GpuAssets {
             },
         );
 
-        let index_buffer = context.create_buffer(
-            "mesh_index_buffer",
+        let meshlet_data_buffer = context.create_buffer(
+            "meshlet_data_buffer",
             &graphics::BufferDesc {
-                size: MAX_INDEX_COUNT * std::mem::size_of::<u32>(),
-                usage: vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                size: MAX_MESHLET_DATA_COUNT * 4,
+                usage: vk::BufferUsageFlags::INDEX_BUFFER
+                    | vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+        );
+
+        let meshlet_buffer = context.create_buffer(
+            "meshlet_buffer",
+            &graphics::BufferDesc {
+                size: MAX_MESHLET_COUNT * std::mem::size_of::<GpuMeshlet>(),
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: MemoryLocation::GpuOnly,
             },
         );
@@ -236,14 +291,15 @@ impl GpuAssets {
 
         Self {
             vertex_buffer,
-            index_buffer,
+            meshlet_data_buffer,
+            meshlet_buffer,
 
             vertex_allocator: FreeListAllocator::new(MAX_VERTEX_COUNT),
-            index_allocator: FreeListAllocator::new(MAX_INDEX_COUNT),
+            meshlet_data_allocator: FreeListAllocator::new(MAX_MESHLET_DATA_COUNT),
+            meshlet_allocator: FreeListAllocator::new(MAX_MESHLET_COUNT),
 
             mesh_info_buffer,
             mesh_infos: arena::Arena::new(),
-            models: arena::Arena::new(),
 
             textures: arena::Arena::new(),
 
@@ -253,53 +309,53 @@ impl GpuAssets {
     }
 
     pub fn add_mesh(&mut self, context: &graphics::Context, mesh: &MeshData) -> MeshHandle {
-        let vertex_bytes: &[u8] = bytemuck::cast_slice(&mesh.vertices);
-        let index_bytes: &[u8] = bytemuck::cast_slice(&mesh.indices);
-
         let (vertex_alloc_index, vertex_range) = self.vertex_allocator.allocate(mesh.vertices.len()).unwrap();
-        let (index_alloc_index, index_range) = self.index_allocator.allocate(mesh.indices.len()).unwrap();
+        let (meshlet_data_alloc_index, meshlet_data_range) =
+            self.meshlet_data_allocator.allocate(mesh.meshlet_data.len()).unwrap();
+        let (meshlet_alloc_index, meshlet_range) = self.meshlet_allocator.allocate(mesh.meshlets.len()).unwrap();
 
-        context.immediate_write_buffer(
+        let vertex_bytes: &[u8] = bytemuck::cast_slice(&mesh.vertices);
+        let meshlet_data_bytes: &[u8] = bytemuck::cast_slice(&mesh.meshlet_data);
+        let meshlet_bytes: &[u8] = bytemuck::cast_slice(&mesh.meshlets);
+
+        context.queue_write_buffer(
             &self.vertex_buffer,
             vertex_range.start * std::mem::size_of::<GpuMeshVertex>(),
             vertex_bytes,
         );
-        context.immediate_write_buffer(
-            &self.index_buffer,
-            index_range.start * std::mem::size_of::<u32>(),
-            index_bytes,
+        context.queue_write_buffer(
+            &self.meshlet_data_buffer,
+            meshlet_data_range.start * 4,
+            meshlet_data_bytes,
+        );
+        context.queue_write_buffer(
+            &self.meshlet_buffer,
+            meshlet_range.start * std::mem::size_of::<GpuMeshlet>(),
+            meshlet_bytes,
         );
 
-        let mesh_block = MeshInfo {
+        let mesh_info = MeshInfo {
             vertex_range,
-            index_range,
+            meshlet_data_range,
+            meshlet_range,
+
             vertex_alloc_index,
-            index_alloc_index,
+            meshlet_data_alloc_index,
+            meshlet_alloc_index,
+
             aabb: mesh.aabb,
             bounding_sphere: mesh.bounding_sphere,
         };
-        let mesh_index = self.mesh_infos.insert(mesh_block);
+        let mesh_index = self.mesh_infos.insert(mesh_info);
 
-        let mesh_info = GpuMeshInfo {
-            index_offset: index_range.start as u32,
-            index_count: index_range.size() as u32,
-            vertex_offset: vertex_range.start as u32,
-            aabb: mesh.aabb.into(),
-            bounding_sphere: mesh.bounding_sphere.to_array(),
-        };
+        let gpu_mesh_info = mesh_info.to_gpu();
         context.queue_write_buffer(
             &self.mesh_info_buffer,
             std::mem::size_of::<GpuMeshInfo>() * mesh_index.slot() as usize,
-            bytemuck::bytes_of(&mesh_info),
+            bytemuck::bytes_of(&gpu_mesh_info),
         );
 
         mesh_index
-    }
-
-    pub fn add_model(&mut self, submeshes: &[Submesh]) -> ModelHandle {
-        self.models.insert(ModelData {
-            submeshes: submeshes.to_vec(),
-        })
     }
 
     pub fn import_texture(&mut self, image: graphics::Image) -> TextureHandle {
@@ -357,14 +413,11 @@ impl GpuAssets {
         index
     }
 
-    pub fn submesh_blocks(&self, model: ModelHandle) -> impl Iterator<Item = &MeshInfo> {
-        self.models[model].submeshes.iter().map(|submesh| &self.mesh_infos[submesh.mesh_handle])
-    }
-
     pub fn import_to_graph(&self, context: &mut graphics::Context) -> AssetGraphData {
         AssetGraphData {
             vertex_buffer: context.import(&self.vertex_buffer),
-            index_buffer: context.import(&self.index_buffer),
+            meshlet_data_buffer: context.import(&self.meshlet_data_buffer),
+            meshlet_buffer: context.import(&self.meshlet_buffer),
             mesh_info_buffer: context.import(&self.mesh_info_buffer),
             materials_buffer: context.import(&self.material_buffer),
         }
@@ -418,10 +471,20 @@ impl Iterator for SepVertexIter<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SubmeshData {
+    pub vertex_offset: usize,
+    pub vertex_count: usize,
+    pub index_offset: usize,
+    pub index_count: usize,
+    pub material: MaterialHandle,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MeshData {
     pub vertices: Vec<GpuMeshVertex>,
-    pub indices: Vec<u32>,
+    pub meshlet_data: Vec<u32>,
+    pub meshlets: Vec<GpuMeshlet>,
     pub aabb: Aabb,
     pub bounding_sphere: Vec4,
 }
@@ -430,7 +493,9 @@ impl MeshData {
     pub fn new() -> Self {
         Self {
             vertices: Vec::new(),
-            indices: Vec::new(),
+            meshlet_data: Vec::new(),
+            meshlets: Vec::new(),
+
             aabb: Aabb::default(),
             bounding_sphere: Vec4::ZERO,
         }
@@ -438,87 +503,153 @@ impl MeshData {
 
     pub fn clear(&mut self) {
         self.vertices.clear();
-        self.indices.clear();
+        self.meshlet_data.clear();
+        self.meshlets.clear();
     }
 
-    pub fn compute_normals(&mut self) {
-        compute_normals(&mut self.vertices, &self.indices);
-    }
+    pub fn add_submesh(&mut self, vertices: &[GpuMeshVertex], indices: &[u32], material: MaterialHandle) {
+        let vertex_offset = self.vertices.len();
+        self.vertices.extend(vertices);
 
-    pub fn compute_tangents(&mut self) {
-        compute_tangents(&mut self.vertices, &self.indices);
-    }
+        let meshlets = meshopt::build_meshlets(
+            indices,
+            &vertex_adapter(&vertices),
+            MAX_MESHLET_VERTICES,
+            MAX_MESHLET_TRIANGLES,
+            MESHLET_CONE_WEIGHT,
+        );
 
-    pub fn load_obj(path: &str) -> Result<Self, tobj::LoadError> {
-        let (mut models, _) = tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS)?;
-        if models.len() > 1 {
-            log::warn!("{path}: multiple models found, loading only the first");
+        for meshlet in meshlets.iter() {
+            let data_offset = self.meshlet_data.len();
+            self.meshlet_data.extend_from_slice(meshlet.vertices);
+            
+            let triangle_offset = self.meshlet_data.len() * 4;
+            self.meshlet_data.resize(self.meshlet_data.len() + meshlet.triangles.len().div_ceil(4), 0);
+            let triangle_slice: &mut [u8] = &mut bytemuck::cast_slice_mut::<_, u8>(&mut self.meshlet_data)
+                [triangle_offset..triangle_offset + meshlet.triangles.len()];
+            triangle_slice.clone_from_slice(&meshlet.triangles);
+
+            // self.meshlet_data.extend(meshlet.triangles.chunks(4).map(|chunk| {
+            //     let mut packed = 0u32;
+            //     for (i, u) in chunk.iter().enumerate() {
+            //         packed |= (*u << (8 * i)) as u32;
+            //     }
+            //     packed
+            // }));
+            let meshlet_bounds = meshopt::compute_meshlet_bounds(meshlet, &vertex_adapter(vertices));
+            self.meshlets.push(GpuMeshlet {
+                bounding_sphere: Vec4::from_array([
+                    meshlet_bounds.center[0],
+                    meshlet_bounds.center[1],
+                    meshlet_bounds.center[2],
+                    meshlet_bounds.radius,
+                ]),
+                cone_axis: meshlet_bounds.cone_axis_s8,
+                cone_cutoff: meshlet_bounds.cone_cutoff_s8,
+                vertex_offset: vertex_offset as u32,
+                data_offset: data_offset as u32,
+                material_index: material.slot() as u16,
+                vertex_count: meshlet.vertices.len() as u8,
+                triangle_count: meshlet.triangles.len() as u8 / 3,
+            });
         }
-        let mut mesh_data = Self::new();
+    }
 
-        if let Some(model) = models.first_mut() {
-            let name = &model.name;
-            let mesh = &mut model.mesh;
-
-            let have_uvs = !mesh.texcoords.is_empty();
-            let have_normals = !mesh.normals.is_empty();
-
-            if !have_uvs {
-                log::warn!("model '{name}' has no uv coordinates");
-            }
-
-            if !have_normals {
-                log::warn!("model '{name}' has no normals");
-            }
-
-            std::mem::swap(&mut mesh_data.indices, &mut mesh.indices);
-            mesh_data.vertices = SepVertexIter::new(&mesh.positions, &mesh.texcoords, &mesh.normals, &[]).collect();
-
-            if !have_normals {
-                log::info!("computing normals for '{name}'...");
-                mesh_data.compute_normals();
-            }
+    pub fn compute_bounds(&mut self) {
+        if self.vertices.is_empty() {
+            return;
         }
 
-        Ok(mesh_data)
+        self.aabb = Aabb {
+            min: Vec3A::from_array(self.vertices[0].position),
+            max: Vec3A::from_array(self.vertices[0].position),
+        };
+
+        for vertex in self.vertices.iter() {
+            let pos = Vec3A::from_array(vertex.position);
+            self.aabb.min = self.aabb.min.min(pos);
+            self.aabb.max = self.aabb.max.max(pos);
+        }
+
+        let sphere_center = (self.aabb.max + self.aabb.min) * 0.5;
+        let mut sqr_radius = 0.0f32;
+        for vertex in self.vertices.iter() {
+            let pos = Vec3A::from_array(vertex.position);
+            sqr_radius = sqr_radius.max(pos.distance_squared(sphere_center));
+        }
+        self.bounding_sphere = sphere_center.extend(sqr_radius.sqrt());
     }
 
-    pub fn optimize(&mut self) {
-        // TODO: use ffi to reduce unnecessary allocations
-        let (vertex_count, remap) = meshopt::generate_vertex_remap(&self.vertices, Some(&self.indices));
-        let indices = meshopt::remap_index_buffer(Some(&self.indices), vertex_count, &remap);
-        let vertices = meshopt::remap_vertex_buffer(&self.vertices, vertex_count, &remap);
-        
-        self.indices = indices;
-        self.vertices = vertices;
+    // pub fn load_obj(path: &str) -> Result<Self, tobj::LoadError> {
+    //     let (mut models, _) = tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS)?;
+    //     if models.len() > 1 {
+    //         log::warn!("{path}: multiple models found, loading only the first");
+    //     }
+    //     let mut mesh_data = Self::new();
 
-        meshopt::optimize_vertex_cache_in_place(&mut self.indices, vertex_count);
-        
-        let position_offset = bytemuck::offset_of!(GpuMeshVertex, position);
-        let vertex_stride = std::mem::size_of::<GpuMeshVertex>();
-        let vertex_adapter = meshopt::VertexDataAdapter::new(
-            bytemuck::cast_slice(&self.vertices),
-            vertex_stride,
-            position_offset
-        ).unwrap();
-        
-        meshopt::optimize_overdraw_in_place(&mut self.indices, &vertex_adapter, 1.05);
-        meshopt::optimize_vertex_fetch_in_place(&mut self.indices, &mut self.vertices);
-    }
+    //     if let Some(model) = models.first_mut() {
+    //         let name = &model.name;
+    //         let mesh = &mut model.mesh;
+
+    //         let have_uvs = !mesh.texcoords.is_empty();
+    //         let have_normals = !mesh.normals.is_empty();
+
+    //         if !have_uvs {
+    //             log::warn!("model '{name}' has no uv coordinates");
+    //         }
+
+    //         if !have_normals {
+    //             log::warn!("model '{name}' has no normals");
+    //         }
+
+    //         std::mem::swap(&mut mesh_data.indices, &mut mesh.indices);
+    //         mesh_data.vertices = SepVertexIter::new(&mesh.positions, &mesh.texcoords, &mesh.normals, &[]).collect();
+
+    //         if !have_normals {
+    //             log::info!("computing normals for '{name}'...");
+    //             mesh_data.compute_normals();
+    //         }
+    //     }
+
+    //     Ok(mesh_data)
+    // }
+}
+
+pub fn optimize_mesh(vertices: &mut Vec<GpuMeshVertex>, indices: &mut Vec<u32>) {
+    // TODO: use ffi to reduce unnecessary allocations
+    let (vertex_count, remap) = meshopt::generate_vertex_remap(vertices, Some(indices));
+    let remaped_vertices = meshopt::remap_vertex_buffer(vertices, vertex_count, &remap);
+    let remaped_indices = meshopt::remap_index_buffer(Some(indices), vertex_count, &remap);
+
+    *vertices = remaped_vertices;
+    *indices = remaped_indices;
+
+    // vertices.clone_from_slice(&remaped_vertices);
+    // indices.clone_from_slice(&remaped_indices);
+
+    meshopt::optimize_vertex_cache_in_place(indices, vertex_count);
+    meshopt::optimize_overdraw_in_place(indices, &vertex_adapter(vertices), 1.05);
+    meshopt::optimize_vertex_fetch_in_place(indices, vertices);
+}
+
+fn vertex_adapter(vertices: &[GpuMeshVertex]) -> meshopt::VertexDataAdapter {
+    let position_offset = bytemuck::offset_of!(GpuMeshVertex, position);
+    let vertex_stride = std::mem::size_of::<GpuMeshVertex>();
+    meshopt::VertexDataAdapter::new(bytemuck::cast_slice(vertices), vertex_stride, position_offset).unwrap()
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuAabb {
-    min: [f32; 3],
-    max: [f32; 3],
+    min: Vec4,
+    max: Vec4,
 }
 
 impl From<Aabb> for GpuAabb {
     fn from(value: Aabb) -> Self {
         Self {
-            min: value.min.to_array(),
-            max: value.max.to_array(),
+            min: value.min.extend(0.0),
+            max: value.max.extend(0.0),
         }
     }
 }
@@ -553,7 +684,7 @@ pub fn compute_normals(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
 /// Calculates the tangents for each vertex.
 ///
 /// Every vertex must have valid normals and uv coordinates
-fn compute_tangents(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
+pub fn compute_tangents(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
     let mut tan_vec = Vec::new();
     tan_vec.resize(vertices.len() * 2, Vec3::ZERO);
     let (tan1, tan2) = tan_vec.split_at_mut(vertices.len());

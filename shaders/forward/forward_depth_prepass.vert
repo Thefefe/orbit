@@ -6,6 +6,8 @@
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;
     uint vertex_buffer;
+    uint meshlet_buffer;
+    uint meshlet_data_buffer;
     uint entity_buffer;
     uint draw_commands_buffer;
     uint materials_buffer;
@@ -46,7 +48,10 @@ void unpack_normal_tangent(i8vec4 packed, out vec3 n, out vec4 t) {
 }
 
 void main() {
-    MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex];
+    uint vertex_index =
+        GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[gl_DrawID].meshlet_vertex_offset +
+        GetBuffer(MeshletDataBuffer, meshlet_data_buffer).vertex_indices[gl_VertexIndex];
+    MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[vertex_index];
     mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].model_matrix;
 
     gl_Position = view_proj * model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
@@ -58,6 +63,6 @@ void main() {
     unpack_normal_tangent(vertex.packed_normals, vout.normal, vout.tangent);
     vout.normal  = normalize(normal_matrix * vout.normal);
     vout.tangent = vec4(normalize(normal_matrix * vout.tangent.xyz), vout.tangent.w);
-
-    vout.material_index = GetBuffer(DrawCommandsBuffer, draw_commands_buffer).commands[gl_DrawID].material_index;
+    uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[gl_DrawID].meshlet_index;
+    vout.material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;
 }

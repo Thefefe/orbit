@@ -6,10 +6,14 @@ use gpu_allocator::MemoryLocation;
 use image::EncodableLayout;
 
 use crate::{
-    assets::{sep_vertex_merge, GpuAssets, MaterialData, MeshData, ModelHandle, Submesh, TextureHandle},
+    assets::{
+        compute_normals, compute_tangents, optimize_mesh, sep_vertex_merge, GpuAssets, MaterialData, MeshData,
+        MeshHandle, TextureHandle,
+    },
     graphics,
+    math::Aabb,
     scene::{EntityData, SceneData, Transform},
-    utils::OptionDefaultIterator, math::Aabb,
+    utils::OptionDefaultIterator,
 };
 
 fn dxgi_format_to_vk(format: ddsfile::DxgiFormat) -> Option<vk::Format> {
@@ -499,14 +503,18 @@ pub fn load_gltf(
         material_lookup_table.push(handle);
     }
 
-    let mut model_lookup_table = Vec::new();
+    let mut mesh_lookup_table = Vec::new();
     let mut mesh_data = MeshData::new();
-    let mut submeshes: Vec<Submesh> = Vec::new();
-    for mesh in document.meshes() {
-        submeshes.clear();
-        for (prim_index, primitive) in mesh.primitives().enumerate() {
-            mesh_data.clear();
+    // let mut submeshes: Vec<Submesh> = Vec::new();
 
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    for mesh in document.meshes() {
+        // submeshes.clear();
+        mesh_data.clear();
+
+        for (prim_index, primitive) in mesh.primitives().enumerate() {
             let material_index = material_lookup_table[primitive.material().index().unwrap()];
 
             assert_eq!(primitive.mode(), gltf::mesh::Mode::Triangles);
@@ -534,27 +542,33 @@ pub fn load_gltf(
 
             let tangents = OptionDefaultIterator::new(reader.read_tangents(), [0.0, 0.0, 0.0, 0.0]);
 
-            let vertices = sep_vertex_merge(reader.read_positions().unwrap(), tex_coords, normals, tangents);
-            let indices = reader.read_indices().unwrap().into_u32();
+            let vertex_iter = sep_vertex_merge(reader.read_positions().unwrap(), tex_coords, normals, tangents);
+            let index_iter = reader.read_indices().unwrap().into_u32();
 
-            mesh_data.vertices.extend(vertices);
-            mesh_data.indices.extend(indices);
-            mesh_data.optimize();
+            vertices.clear();
+            indices.clear();
+            vertices.extend(vertex_iter);
+            indices.extend(index_iter);
 
             if !have_normals {
                 log::info!("generating normals for model '{name}' primitive {prim_index}...");
-                mesh_data.compute_normals();
+                // mesh_data.compute_normals();
+                compute_normals(&mut vertices, &mut indices);
                 have_normals = true;
             }
 
             if !have_tangents {
                 if have_normals && have_uvs {
                     log::info!("generating tangents for model '{name}' primitive {prim_index}...");
-                    mesh_data.compute_tangents();
+                    // mesh_data.compute_tangents();
+                    compute_tangents(&mut vertices, &mut indices);
                 } else {
                     log::warn!("can't generate tangents for '{name}' primitive {prim_index}, becouse it hase no uv coordinates");
                 }
             }
+
+            optimize_mesh(&mut vertices, &mut indices);
+            mesh_data.add_submesh(&vertices, &indices, material_index);
 
             let bounding_box = primitive.bounding_box();
             mesh_data.aabb = Aabb::from_arrays(bounding_box.min, bounding_box.max);
@@ -567,20 +581,16 @@ pub fn load_gltf(
                     bounding_sphere_radius_sqr.max(bounding_sphere_center.distance_squared(position));
             }
             mesh_data.bounding_sphere = bounding_sphere_center.extend(bounding_sphere_radius_sqr.sqrt());
-
-            let mesh_handle = asset_store.add_mesh(context, &mesh_data);
-            submeshes.push(Submesh {
-                mesh_handle,
-                material_index,
-            });
         }
-        let model_handle = asset_store.add_model(submeshes.as_slice());
-        model_lookup_table.push(model_handle);
+
+        mesh_data.compute_bounds();
+        let mesh_handle = asset_store.add_mesh(context, &mesh_data);
+        mesh_lookup_table.push(mesh_handle);
     }
 
     fn add_gltf_node(
         scene: &mut SceneData,
-        model_lookup_table: &[ModelHandle],
+        model_lookup_table: &[MeshHandle],
         node: gltf::Node,
         parent: Option<&Mat4>,
     ) {
@@ -593,7 +603,12 @@ pub fn load_gltf(
         let model = node.mesh().map(|gltf_mesh| model_lookup_table[gltf_mesh.index()]);
         let name = node.name().map(|str| str.to_owned().into());
 
-        scene.add_entity(EntityData { name, transform, model, light: None });
+        scene.add_entity(EntityData {
+            name,
+            transform,
+            mesh: model,
+            light: None,
+        });
 
         for child in node.children() {
             add_gltf_node(scene, model_lookup_table, child, Some(&transform_matrix));
@@ -601,7 +616,7 @@ pub fn load_gltf(
     }
 
     for node in document.scenes().next().unwrap().nodes() {
-        add_gltf_node(scene, &model_lookup_table, node, None);
+        add_gltf_node(scene, &mesh_lookup_table, node, None);
     }
 
     Ok(())

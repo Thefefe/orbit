@@ -2,6 +2,7 @@
 
 #include "include/common.glsl"
 #include "include/types.glsl"
+#include "include/functions.glsl"
 
 #extension GL_EXT_debug_printf : enable
 
@@ -14,12 +15,11 @@
 #endif
 
 layout(push_constant, std430) uniform PushConstants {
-    uint submesh_buffer;
+    uint entity_draw_buffer;
 	uint mesh_info_buffer;
-	uint draw_commands_buffer;
+	uint meshlet_dispatch_buffer;
 	uint entity_buffer;
 	uint cull_info_buffer;
-	uint debug_print;
 };
 
 layout (local_size_x = 256) in;
@@ -101,17 +101,11 @@ vec4 project_sphere(vec4 sphere, float znear, float P00, float P11) {
 }
 
 void main() {
-	if (gl_GlobalInvocationID.x == 0) {
-		GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count = 0;
-	}
-
-	barrier();
-
     uint gID = gl_GlobalInvocationID.x;
-	if (gID < GetBuffer(SubmeshBuffer, submesh_buffer).count) {
-		Submesh submesh = GetBuffer(SubmeshBuffer, submesh_buffer).submeshes[gID];
-		MeshInfo mesh_info = GetBuffer(MeshInfoBuffer, mesh_info_buffer).mesh_infos[submesh.mesh_index];
-		EntityData entity_data = GetBuffer(EntityBuffer, entity_buffer).entities[submesh.entity_index];
+	if (gID < GetBuffer(EntityDrawBuffer, entity_draw_buffer).count) {
+		EntityDraw entity_draw = GetBuffer(EntityDrawBuffer, entity_draw_buffer).draws[gID];
+		MeshInfo mesh_info = GetBuffer(MeshInfoBuffer, mesh_info_buffer).mesh_infos[entity_draw.mesh_index];
+		EntityData entity_data = GetBuffer(EntityBuffer, entity_buffer).entities[entity_draw.entity_index];
 
 		CullInfo cull_info = GetBuffer(CullInfoBuffer, cull_info_buffer).cull_info;
 		
@@ -208,28 +202,40 @@ void main() {
 			}
 		}
 
-		bool should_draw = visible && bool((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag);
+		bool should_draw = true;
+			// visible && bool((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag);
 
 		// second occlusion pass: only proccess if submesh wasn't visible last frame
-		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4) &&
-		    !bool((1 << submesh.alpha_mode) & cull_info.noskip_alphamode)
+		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4)
+			// && !bool((1 << submesh.alpha_mode) & cull_info.noskip_alphamode)
 		) {
 			should_draw = visible && !visible_in_buffer;
 		}
 
 		// draw command fill
 		if (should_draw) {
-			DrawCommand draw_command;
-			draw_command.index_count 	  = mesh_info.index_count;
-			draw_command.instance_count   = 1;
-			draw_command.first_index      = mesh_info.index_offset;
-			draw_command.vertex_offset    = mesh_info.vertex_offset;
-			draw_command.first_instance   = submesh.entity_index;
-			draw_command.material_index   = submesh.material_index;
-			draw_command._debug_index     = gID;
+			// DrawCommand draw_command;
+			// draw_command.index_count 	  = mesh_info.index_count;
+			// draw_command.instance_count   = 1;
+			// draw_command.first_index      = mesh_info.index_offset;
+			// draw_command.vertex_offset    = mesh_info.vertex_offset;
+			// draw_command.first_instance   = submesh.entity_index;
+			// draw_command.material_index   = submesh.material_index;
+			// draw_command._debug_index     = gID;
+			// uint draw_index = atomicAdd(GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count, 1);
+			// GetBuffer(DrawCommandsBuffer, draw_commands_buffer).commands[draw_index] = draw_command;
 
-			uint draw_index = atomicAdd(GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count, 1);
-			GetBuffer(DrawCommandsBuffer, draw_commands_buffer).commands[draw_index] = draw_command;
+			uint dispatch_count = (mesh_info.meshlet_count + 32 - 1) / 32;
+			uint dispatch_offset = atomicAdd(GetBuffer(MeshletDispatchBuffer, meshlet_dispatch_buffer).workgroup_count_x, dispatch_count);
+
+			for (uint dispatch_index = 0; dispatch_index < dispatch_count; dispatch_index++) {
+				MeshletDispatch dispatch;
+    			dispatch.entity_index   = entity_draw.entity_index;
+    			dispatch.mesh_index     = entity_draw.mesh_index;
+    			dispatch.meshlet_offset = mesh_info.meshlet_offset + 32 * dispatch_index;
+    			dispatch.meshlet_count  = min(mesh_info.meshlet_count - 32 * dispatch_index, 32);
+				GetBuffer(MeshletDispatchBuffer, meshlet_dispatch_buffer).dispatches[dispatch_offset + dispatch_index] = dispatch;
+			}
 		}
 
 		// update visibility buffer, only on second occlusion pass

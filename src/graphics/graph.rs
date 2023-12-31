@@ -1,6 +1,7 @@
 use std::{borrow::Cow, collections::{HashMap, HashSet}, ops::Range};
 
 use ash::vk;
+use parking_lot::Mutex;
 
 use crate::{collections::arena, graphics};
 
@@ -114,7 +115,7 @@ pub struct RenderGraph {
     dependencies: Vec<DependencyData>,
 
     pub import_cache: HashMap<graphics::AnyResourceHandle, GraphResourceIndex>,
-    pub dont_wait_semaphores: HashSet<vk::Semaphore>,
+    pub dont_wait_semaphores: Mutex<HashSet<vk::Semaphore>>,
     pub dont_signal_semaphores: HashSet<vk::Semaphore>,
 }
 
@@ -125,7 +126,7 @@ impl RenderGraph {
             passes: arena::Arena::new(),
             dependencies: Vec::new(),
             import_cache: HashMap::new(),
-            dont_wait_semaphores: HashSet::new(),
+            dont_wait_semaphores: Mutex::new(HashSet::new()),
             dont_signal_semaphores: HashSet::new(),
         }
     }
@@ -135,7 +136,7 @@ impl RenderGraph {
         self.passes.clear();
         self.dependencies.clear();
         self.import_cache.clear();
-        self.dont_wait_semaphores.clear();
+        self.dont_wait_semaphores.get_mut().clear();
         self.dont_signal_semaphores.clear();
     }
 
@@ -461,7 +462,7 @@ impl RenderGraph {
 
                     if dependency.resource_version == 0 {
                         if let Some(semaphore) = resource_data.wait_semaphore.take() {
-                            if self.dont_wait_semaphores.insert(semaphore.handle) {
+                            if self.dont_wait_semaphores.get_mut().insert(semaphore.handle) {
                                 compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
                             }
                         }

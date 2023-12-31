@@ -1,5 +1,5 @@
-#include "../include/common.glsl"
-#include "../include/types.glsl"
+#include "include/common.glsl"
+#include "include/types.glsl"
 
 const vec3 VERTICES[36] = vec3[](
     vec3(-1.0, -1.0,  1.0),

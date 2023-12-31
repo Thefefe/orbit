@@ -8,17 +8,17 @@ use glam::Vec2Swizzles;
 use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 use crate::{
-    assets::{AssetGraphData, GpuAssets},
+    assets::{AssetGraphData, GpuAssets, GpuMeshletDrawCommand},
     gltf_loader::mip_levels_from_size,
     graphics::{self, FRAME_COUNT},
     math,
-    scene::{GpuMeshDrawCommand, SceneData, SceneGraphData},
-    Camera, Projection, MAX_DRAW_COUNT, MAX_SHADOW_CASCADE_COUNT,
+    scene::{SceneData, SceneGraphData},
+    Camera, Projection, MAX_SHADOW_CASCADE_COUNT,
 };
 
 use super::{
     debug_renderer::DebugRenderer,
-    draw_gen::{create_draw_commands, AlphaModeFlags, CullInfo, OcclusionCullInfo},
+    draw_gen::{create_draw_commands, AlphaModeFlags, CullInfo, OcclusionCullInfo, MAX_DRAW_COUNT},
 };
 
 #[repr(C)]
@@ -146,7 +146,7 @@ impl Default for ShadowDebugSettings {
     fn default() -> Self {
         Self {
             frustum_culling: true,
-            receiver_mask_culling: true,
+            receiver_mask_culling: false,
             receiver_mask_frag_mode: false,
 
             selected_shadow: None,
@@ -412,7 +412,8 @@ impl ShadowRenderer {
                 let shadow_map = graph.get_image(shadow_map);
 
                 let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-                let index_buffer = graph.get_buffer(assets.index_buffer);
+                let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
+                let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
                 let entity_buffer = graph.get_buffer(scene.entity_buffer);
                 let draw_commands_buffer = graph.get_buffer(draw_commands);
                 let materials_buffer = graph.get_buffer(assets.materials_buffer);
@@ -438,7 +439,7 @@ impl ShadowRenderer {
                 cmd.begin_rendering(&rendering_info);
 
                 cmd.bind_raster_pipeline(pipeline);
-                cmd.bind_index_buffer(&index_buffer, 0);
+                cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
 
                 // negative becouse of reverse-z projection
                 cmd.set_depth_bias(
@@ -450,6 +451,8 @@ impl ShadowRenderer {
                 cmd.build_constants()
                     .mat4(&view_projection)
                     .buffer(vertex_buffer)
+                    .buffer(meshlet_buffer)
+                    .buffer(meshlet_data_buffer)
                     .buffer(entity_buffer)
                     .buffer(draw_commands_buffer)
                     .buffer(materials_buffer);
@@ -460,7 +463,7 @@ impl ShadowRenderer {
                     draw_commands_buffer,
                     0,
                     MAX_DRAW_COUNT as u32,
-                    std::mem::size_of::<GpuMeshDrawCommand>() as u32,
+                    std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
                 );
 
                 cmd.end_rendering();
@@ -621,41 +624,39 @@ impl ShadowRenderer {
                     let projection_to_world_matrix = light_projection_matrix.inverse();
 
                     for entity in scene.entities.iter() {
-                        let Some(model) = entity.model else {
+                        let Some(mesh) = entity.mesh else {
                             continue;
                         };
 
                         let model_matrix = entity.transform.compute_matrix();
-                        for submesh in assets.models[model].submeshes.iter() {
-                            let bounding_sphere = assets.mesh_infos[submesh.mesh_handle].bounding_sphere;
-                            let bounding_sphere_light_space =
-                                math::transform_sphere(&(light_matrix * model_matrix), bounding_sphere);
+                        let bounding_sphere = assets.mesh_infos[mesh].bounding_sphere;
+                        let bounding_sphere_light_space =
+                            math::transform_sphere(&(light_matrix * model_matrix), bounding_sphere);
 
-                            let sphere_center = vec2(
-                                width_recip_2x * bounding_sphere_light_space.x,
-                                height_recip_2x * bounding_sphere_light_space.y,
-                            );
-                            let sphere_box_size =
-                                Vec2::splat(bounding_sphere_light_space.w) * vec2(width_recip_2x, height_recip_2x);
-                            let aabb = sphere_center.xyxy() + sphere_box_size.xyxy() * vec4(-1.0, -1.0, 1.0, 1.0);
-                            let aabb = aabb.clamp(Vec4::splat(-1.0), Vec4::splat(1.0));
+                        let sphere_center = vec2(
+                            width_recip_2x * bounding_sphere_light_space.x,
+                            height_recip_2x * bounding_sphere_light_space.y,
+                        );
+                        let sphere_box_size =
+                            Vec2::splat(bounding_sphere_light_space.w) * vec2(width_recip_2x, height_recip_2x);
+                        let aabb = sphere_center.xyxy() + sphere_box_size.xyxy() * vec4(-1.0, -1.0, 1.0, 1.0);
+                        let aabb = aabb.clamp(Vec4::splat(-1.0), Vec4::splat(1.0));
 
-                            let closest_z = bounding_sphere_light_space.z + bounding_sphere_light_space.w;
-                            let r = 1.0 / (far_clip - near_clip);
-                            let depth = closest_z * r + (r * far_clip);
+                        let closest_z = bounding_sphere_light_space.z + bounding_sphere_light_space.w;
+                        let r = 1.0 / (far_clip - near_clip);
+                        let depth = closest_z * r + (r * far_clip);
 
-                            let corners = [
-                                vec2(aabb.x, aabb.y),
-                                vec2(aabb.x, aabb.w),
-                                vec2(aabb.z, aabb.w),
-                                vec2(aabb.z, aabb.y),
-                            ]
-                            .map(|c| {
-                                let v = projection_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
-                                v / v.w
-                            });
-                            debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
-                        }
+                        let corners = [
+                            vec2(aabb.x, aabb.y),
+                            vec2(aabb.x, aabb.w),
+                            vec2(aabb.z, aabb.w),
+                            vec2(aabb.z, aabb.y),
+                        ]
+                        .map(|c| {
+                            let v = projection_to_world_matrix * vec4(c.x, c.y, depth, 1.0);
+                            v / v.w
+                        });
+                        debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                     }
                 }
             }
@@ -926,7 +927,8 @@ fn shadow_pass_with_mask(
             let shadow_map = graph.get_image(shadow_map);
 
             let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-            let index_buffer = graph.get_buffer(assets.index_buffer);
+            let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
+            let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
             let entity_buffer = graph.get_buffer(scene.entity_buffer);
             let draw_commands_buffer = graph.get_buffer(draw_commands);
             let materials_buffer = graph.get_buffer(assets.materials_buffer);
@@ -948,7 +950,7 @@ fn shadow_pass_with_mask(
             cmd.begin_rendering(&rendering_info);
 
             cmd.bind_raster_pipeline(pipeline);
-            cmd.bind_index_buffer(&index_buffer, 0);
+            cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
 
             // negative becouse of reverse-z projection
             cmd.set_depth_bias(
@@ -960,6 +962,8 @@ fn shadow_pass_with_mask(
             cmd.build_constants()
                 .mat4(&view_projection)
                 .buffer(vertex_buffer)
+                .buffer(meshlet_buffer)
+                .buffer(meshlet_data_buffer)
                 .buffer(entity_buffer)
                 .buffer(draw_commands_buffer)
                 .buffer(materials_buffer);
@@ -970,7 +974,7 @@ fn shadow_pass_with_mask(
                 draw_commands_buffer,
                 0,
                 MAX_DRAW_COUNT as u32,
-                std::mem::size_of::<GpuMeshDrawCommand>() as u32,
+                std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
             );
 
             cmd.end_rendering();
@@ -1027,7 +1031,8 @@ fn shadow_mask_pass_geom(
             let shadow_mask = graph.get_image(shadow_mask);
 
             let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-            let index_buffer = graph.get_buffer(assets.index_buffer);
+            let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
+            let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
             let entity_buffer = graph.get_buffer(scene.entity_buffer);
             let draw_commands_buffer = graph.get_buffer(draw_commands);
             let materials_buffer = graph.get_buffer(assets.materials_buffer);
@@ -1059,7 +1064,7 @@ fn shadow_mask_pass_geom(
             cmd.begin_rendering(&rendering_info);
 
             cmd.bind_raster_pipeline(pipeline);
-            cmd.bind_index_buffer(&index_buffer, 0);
+            cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
 
             // negative becouse of reverse-z projection
             cmd.set_depth_bias(
@@ -1071,6 +1076,8 @@ fn shadow_mask_pass_geom(
             cmd.build_constants()
                 .mat4(&view_projection)
                 .buffer(vertex_buffer)
+                .buffer(meshlet_buffer)
+                .buffer(meshlet_data_buffer)
                 .buffer(entity_buffer)
                 .buffer(draw_commands_buffer)
                 .buffer(materials_buffer);
@@ -1081,7 +1088,7 @@ fn shadow_mask_pass_geom(
                 draw_commands_buffer,
                 0,
                 MAX_DRAW_COUNT as u32,
-                std::mem::size_of::<GpuMeshDrawCommand>() as u32,
+                std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
             );
 
             cmd.end_rendering();
@@ -1109,12 +1116,13 @@ fn shadow_mask_pass_frag(
         view_projection_matrix: Mat4,
         reprojection_matrix: Mat4,
         vertex_buffer: u32,
+        meshlet_buffer: u32,
+        meshlet_data_buffer: u32,
         entity_buffer: u32,
         draw_commands_buffer: u32,
         materials_buffer: u32,
         camera_depth_buffer: u32,
         shadow_mask: u32,
-        _padding: [u32; 2],
     }
 
     let shadow_mask_frag_data = context.transient_storage_data(
@@ -1123,12 +1131,13 @@ fn shadow_mask_pass_frag(
             view_projection_matrix: light_view_projection_matrix.clone(),
             reprojection_matrix: reprojection_matrix.clone(),
             vertex_buffer: context.get_resource_descriptor_index(assets.vertex_buffer).unwrap(),
+            meshlet_buffer: context.get_resource_descriptor_index(assets.meshlet_buffer).unwrap(),
+            meshlet_data_buffer: context.get_resource_descriptor_index(assets.meshlet_data_buffer).unwrap(),
             entity_buffer: context.get_resource_descriptor_index(scene.entity_buffer).unwrap(),
             draw_commands_buffer: context.get_resource_descriptor_index(draw_commands).unwrap(),
             materials_buffer: context.get_resource_descriptor_index(assets.materials_buffer).unwrap(),
             camera_depth_buffer: context.get_resource_descriptor_index(camera_depth_buffer).unwrap(),
             shadow_mask: context.get_resource_descriptor_index(shadow_mask).unwrap(),
-            _padding: [0; 2],
         }),
     );
 
@@ -1162,7 +1171,7 @@ fn shadow_mask_pass_frag(
         .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
         .render(move |cmd, graph| {
             let shadow_map = graph.get_image(shadow_map);
-            let index_buffer = graph.get_buffer(assets.index_buffer);
+            let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
             let draw_commands_buffer = graph.get_buffer(draw_commands);
             let data_buffer = graph.get_buffer(shadow_mask_frag_data);
 
@@ -1183,7 +1192,7 @@ fn shadow_mask_pass_frag(
             cmd.begin_rendering(&rendering_info);
 
             cmd.bind_raster_pipeline(pipeline);
-            cmd.bind_index_buffer(&index_buffer, 0);
+            cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
 
             // negative becouse of reverse-z projection
             cmd.set_depth_bias(
@@ -1200,7 +1209,7 @@ fn shadow_mask_pass_frag(
                 draw_commands_buffer,
                 0,
                 MAX_DRAW_COUNT as u32,
-                std::mem::size_of::<GpuMeshDrawCommand>() as u32,
+                std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
             );
 
             cmd.end_rendering();

@@ -561,22 +561,11 @@ void main() {
         case 8: 
             float norm_light_count = clamp(light_count / 32.0, 0.0, 1.0);
             out_color.xyz = colormap(norm_light_count).xyz;
-            // out_color = vec4(DEBUG_COLORS[cluster_id.z % DEBUG_COLOR_COUNT], 1.0);
-            // out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 9:
-            uint tile_mask_index = GetBuffer(ClusterBuffer, cluster_buffer).tile_depth_slice_mask;
-            uvec3 cluster_count = GetBuffer(ClusterBuffer, cluster_buffer).cluster_count;
-            bool cluster_active = is_cluster_active(tile_mask_index, cluster_count, cluster_id);
-            if (cluster_active) {
-                out_color.xyz = vec3(0.0, 0.0, 1.0);
-            } else {
-                out_color.xyz = vec3(1.0, 0.0, 0.0);
-            }
-
-            // uint hash = hash(cluster_volume_index_from_id(GetBuffer(ClusterBuffer, cluster_buffer).cluster_count, cluster_id));
-            // vec3 mcolor = vec3(float(hash & 255), float((hash >> 8) & 255), float((hash >> 16) & 255)) / 255.0;
-            // out_color = vec4(mcolor, 1.0);
+            uint hash = hash(vout.meshlet_index);
+            vec3 mcolor = vec3(float(hash & 255), float((hash >> 8) & 255), float((hash >> 16) & 255)) / 255.0;
+            out_color = vec4(mcolor, 1.0);
             
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;

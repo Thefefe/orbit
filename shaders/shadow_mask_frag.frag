@@ -3,12 +3,14 @@
 #include "include/common.glsl"
 #include "include/types.glsl"
 
-RegisterImageFormat(r8);
+RegisterFloatImageFormat(r8);
 
 RegisterBuffer(ShadowMaskFragData, {
     mat4 view_projection_matrix;
     mat4 reprojection_matrix;
     uint vertex_buffer;
+    uint meshlet_buffer;
+    uint meshlet_data_buffer;
     uint entity_buffer;
     uint draw_commands_buffer;
     uint materials_buffer;

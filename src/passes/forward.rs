@@ -3,14 +3,14 @@ use glam::{Mat4, Vec3};
 use rand::prelude::Distribution;
 
 use crate::{
-    assets::{AssetGraphData, GpuAssets},
+    assets::{AssetGraphData, GpuAssets, GpuMeshletDrawCommand},
     graphics, math,
     passes::draw_gen::{create_draw_commands, AlphaModeFlags, CullInfo, OcclusionCullInfo},
-    scene::{GpuMeshDrawCommand, SceneData, SceneGraphData},
-    App, Camera, Settings, MAX_DRAW_COUNT,
+    scene::{SceneData, SceneGraphData},
+    App, Camera, Settings,
 };
 
-use super::{cluster::GraphClusterInfo, draw_gen::DepthPyramid, shadow_renderer::ShadowRenderer};
+use super::{cluster::GraphClusterInfo, draw_gen::{DepthPyramid, MAX_DRAW_COUNT}, shadow_renderer::ShadowRenderer};
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,7 +334,8 @@ impl ForwardRenderer {
                 let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
 
                 let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-                let index_buffer = graph.get_buffer(assets.index_buffer);
+                let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
+                let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
                 let entity_buffer = graph.get_buffer(scene.entity_buffer);
                 let draw_commands_buffer = graph.get_buffer(draw_commands);
                 let materials_buffer = graph.get_buffer(assets.materials_buffer);
@@ -382,11 +383,13 @@ impl ForwardRenderer {
                 cmd.begin_rendering(&rendering_info);
 
                 cmd.bind_raster_pipeline(depth_prepass_pipeline);
-                cmd.bind_index_buffer(&index_buffer, 0);
+                cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
 
                 cmd.build_constants()
                     .mat4(&camera_view_projection_matrix)
                     .buffer(vertex_buffer)
+                    .buffer(meshlet_buffer)
+                    .buffer(meshlet_data_buffer)
                     .buffer(entity_buffer)
                     .buffer(draw_commands_buffer)
                     .buffer(materials_buffer);
@@ -397,7 +400,7 @@ impl ForwardRenderer {
                     draw_commands_buffer,
                     0,
                     MAX_DRAW_COUNT as u32,
-                    std::mem::size_of::<GpuMeshDrawCommand>() as u32,
+                    std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
                 );
 
                 cmd.end_rendering();
@@ -455,7 +458,8 @@ impl ForwardRenderer {
                 let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
 
                 let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-                let index_buffer = graph.get_buffer(assets.index_buffer);
+                let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
+                let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
                 let entity_buffer = graph.get_buffer(scene.entity_buffer);
                 let draw_commands_buffer = graph.get_buffer(draw_commands);
                 let materials_buffer = graph.get_buffer(assets.materials_buffer);
@@ -503,11 +507,13 @@ impl ForwardRenderer {
                 cmd.begin_rendering(&rendering_info);
 
                 cmd.bind_raster_pipeline(depth_prepass_pipeline);
-                cmd.bind_index_buffer(&index_buffer, 0);
+                cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
 
                 cmd.build_constants()
                     .mat4(&camera_view_projection_matrix)
                     .buffer(vertex_buffer)
+                    .buffer(meshlet_buffer)
+                    .buffer(meshlet_data_buffer)
                     .buffer(entity_buffer)
                     .buffer(draw_commands_buffer)
                     .buffer(materials_buffer);
@@ -518,7 +524,7 @@ impl ForwardRenderer {
                     draw_commands_buffer,
                     0,
                     MAX_DRAW_COUNT as u32,
-                    std::mem::size_of::<GpuMeshDrawCommand>() as u32,
+                    std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
                 );
 
                 cmd.end_rendering();
@@ -671,8 +677,8 @@ impl ForwardRenderer {
         let skybox_pipeline = context.create_raster_pipeline(
             "skybox_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/forward/skybox.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/forward/skybox.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/skybox.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/skybox.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     front_face: vk::FrontFace::CLOCKWISE,
                     ..Default::default()
@@ -743,7 +749,8 @@ impl ForwardRenderer {
             let cluster_info_buffer = graph.get_buffer(cluster_info.info_buffer);
 
             let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-            let index_buffer = graph.get_buffer(assets.index_buffer);
+            let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
+            let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
             let materials_buffer = graph.get_buffer(assets.materials_buffer);
 
             let entity_buffer = graph.get_buffer(scene.entity_buffer);
@@ -809,7 +816,7 @@ impl ForwardRenderer {
                 cmd.draw(0..36, 0..1);
             }
 
-            cmd.bind_index_buffer(&index_buffer, 0);
+            cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
 
             if render_mode == RenderMode::Overdraw {
                 cmd.bind_raster_pipeline(overdraw_pipeline);
@@ -820,6 +827,8 @@ impl ForwardRenderer {
             cmd.build_constants()
                 .buffer(per_frame_data)
                 .buffer(vertex_buffer)
+                .buffer(meshlet_buffer)
+                .buffer(meshlet_data_buffer)
                 .buffer(entity_buffer)
                 .buffer(draw_commands_buffer)
                 .buffer(materials_buffer)
@@ -838,7 +847,7 @@ impl ForwardRenderer {
                 draw_commands_buffer,
                 0,
                 MAX_DRAW_COUNT as u32,
-                std::mem::size_of::<GpuMeshDrawCommand>() as u32,
+                std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
             );
 
             cmd.end_rendering();

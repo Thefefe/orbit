@@ -608,6 +608,7 @@ pub fn load_gltf(
             transform,
             mesh: model,
             light: None,
+            ..Default::default()
         });
 
         for child in node.children() {

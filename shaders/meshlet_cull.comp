@@ -5,7 +5,7 @@
 
 #extension GL_EXT_debug_printf : enable
 
-// #define USE_SUBGROUP_OPS
+#define USE_SUBGROUP_OPS
 
 #ifdef USE_SUBGROUP_OPS
 	#extension GL_KHR_shader_subgroup_vote : require
@@ -20,6 +20,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint draw_commands_buffer;
 	uint entity_buffer;
 	uint cull_info_buffer;
+	uint material_buffer;
 };
 
 layout (local_size_x = 32) in;
@@ -121,7 +122,18 @@ void main() {
 	vec3 cone_axis = (model_to_view_matrix * vec4(int(meshlet.cone_axis[0]) / 127.0, int(meshlet.cone_axis[1]) / 127.0, int(meshlet.cone_axis[2]) / 127.0, 0.0)).xyz;
 	float cone_cutoff = int(meshlet.cone_cutoff) / 127.0;
 
-    bool visible = true;
+	uint alpha_mode = GetBuffer(MaterialsBuffer, material_buffer).materials[meshlet.material_index].alpha_mode;
+	bool visible = true;
+	bool visible_in_buffer = true;
+	bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0;
+
+	if (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2) {
+		uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[dispatch.visibility_offset];
+		visible_in_buffer = (visibility_bitset & (1 << gl_LocalInvocationID.x)) > 0;
+	}
+
+	// first occlusion pass: only proccess if submesh was visible last frame
+	if (cull_info.occlusion_pass == 1) visible = visible_in_buffer;
 
 	if (visible) {
 		for (uint i = 0; i < cull_info.cull_plane_count; i++) {
@@ -143,20 +155,95 @@ void main() {
 			break;
 		}
 	}
+	
+	// occlusion cull
+	if (meshlet_occlusion_culling && cull_info.occlusion_pass == 2 && visible) {
+		bool cullable = true;
+		vec4 aabb;
+		float sphere_closest_depth;
+		float sampled_depth;
 
-    if (visible) {
-        uint data_offset = mesh_info.meshlet_data_offset + meshlet.data_offset;
-        uint vertex_offset = mesh_info.vertex_offset + meshlet.vertex_offset;
-        MeshletDrawCommand draw_command;
-        draw_command.cmd_first_instance    = dispatch.entity_index;
-        draw_command.cmd_instance_count    = 1;
-        draw_command.cmd_vertex_offset     = int(data_offset);
-        draw_command.cmd_first_index       = (data_offset + meshlet.vertex_count) * 4;
-        draw_command.cmd_index_count       = meshlet.triangle_count * 3;
-        draw_command.meshlet_vertex_offset = vertex_offset;
-        draw_command.meshlet_index         = meshlet_index;
+		switch (cull_info.projection_type) {
+			case 0: { // perspective
+				bounding_sphere_view_space.z = -bounding_sphere_view_space.z;
+				cullable = bounding_sphere_view_space.z >= bounding_sphere_view_space.w + cull_info.z_near;
+				aabb = project_sphere(
+					bounding_sphere_view_space,
+					cull_info.z_near,
+					cull_info.p00_or_width_recipx2,
+					cull_info.p11_or_height_recipx2
+				);
+				sphere_closest_depth = cull_info.z_near / (bounding_sphere_view_space.z - bounding_sphere_view_space.w);
+			} break;
+			case 1: { // orhographic
+				vec2 size_recip = vec2(cull_info.p00_or_width_recipx2);
+				vec2 sphere_center = bounding_sphere_view_space.xy * size_recip;
+				vec2 sphere_box_size = size_recip * bounding_sphere_view_space.w;
+				aabb = sphere_center.xyxy + sphere_box_size.xyxy * vec4(-1.0, -1.0, 1.0, 1.0);
+				aabb = clamp(aabb, -1.0, 1.0) * vec4(0.5f, -0.5f, 0.5f, -0.5f) + vec4(0.5f);
 
-        uint draw_index = atomicAdd(GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).count, 1);
-        GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[draw_index] = draw_command;
-    }
+				float closest_z = bounding_sphere_view_space.z + bounding_sphere_view_space.w;
+				float r = 1.0 / (cull_info.z_far - cull_info.z_near);
+				sphere_closest_depth = closest_z * r + (r * cull_info.z_far);
+			} break;
+		}
+
+		// occlusion culling
+		if (cullable) {
+			vec2 pyramid_size = textureSize(GetSampledTexture2D(cull_info.depth_pyramid), 0);
+			float width = (aabb.z - aabb.x) * pyramid_size.x;
+			float height = (aabb.w - aabb.y) * pyramid_size.y;
+
+			sampled_depth = textureLod(
+				sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
+				(aabb.xy + aabb.zw) * 0.5,
+				log2(max(width, height))
+			).x;
+			visible = sphere_closest_depth >= sampled_depth;
+		}
+	}
+	
+	bool should_draw = visible && bool((1 << alpha_mode) & cull_info.alpha_mode_flag);
+
+	// second occlusion pass: only proccess if submesh wasn't visible last frame
+	if ((cull_info.occlusion_pass == 2 && meshlet_occlusion_culling) && !bool((1 << alpha_mode) & cull_info.noskip_alphamode)
+	) {
+		should_draw = visible && !visible_in_buffer;
+	}
+
+	// draw command fill
+	if (should_draw) {
+		uint data_offset = mesh_info.meshlet_data_offset + meshlet.data_offset;
+		uint vertex_offset = mesh_info.vertex_offset + meshlet.vertex_offset;
+		MeshletDrawCommand draw_command;
+		draw_command.cmd_first_instance    = dispatch.entity_index;
+		draw_command.cmd_instance_count    = 1;
+		draw_command.cmd_vertex_offset     = int(data_offset);
+		draw_command.cmd_first_index       = (data_offset + meshlet.vertex_count) * 4;
+		draw_command.cmd_index_count       = meshlet.triangle_count * 3;
+		draw_command.meshlet_vertex_offset = vertex_offset;
+		draw_command.meshlet_index         = meshlet_index;
+
+		uint draw_index = atomicAdd(GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).count, 1);
+		GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[draw_index] = draw_command;
+	}
+
+	// update visibility buffer, only on second occlusion pass
+	if (cull_info.occlusion_pass == 2) {
+#ifdef USE_SUBGROUP_OPS
+		uvec4 visiblity_bitset = subgroupBallot(visible);
+		
+		if (subgroupElect()) {
+			for (uint i = 0; i < gl_SubgroupSize / 32; i++) {
+				GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer)
+					.entries[dispatch.visibility_offset + i] = visiblity_bitset[i];
+			}
+		}
+#else
+		GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[dispatch.visibility_offset] = 0;
+		barrier();
+		uint bitset = uint(visible) << gl_LocalInvocationID.x;
+		atomicOr(GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[dispatch.visibility_offset], bitset);
+#endif
+	}
 }

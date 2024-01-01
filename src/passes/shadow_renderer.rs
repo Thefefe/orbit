@@ -846,6 +846,7 @@ fn shadow_pass_with_mask(
             projection,
             occlusion_culling: OcclusionCullInfo::VisibilityRead {
                 visibility_buffer: camera_visibility_buffer,
+                meshlet_visibility_buffer: None,
             },
             alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
             debug_print: false,

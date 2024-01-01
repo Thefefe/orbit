@@ -11,7 +11,7 @@ use crate::{
     Projection,
 };
 
-pub const MAX_DRAW_COUNT: usize = 1_000_000;
+pub const MAX_DRAW_COUNT: usize = 8_000_000;
 pub const MAX_MESHLET_DISPATCH_COUNT: usize = 1_000_000;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,9 +20,11 @@ pub enum OcclusionCullInfo {
     None,
     VisibilityRead {
         visibility_buffer: graphics::GraphBufferHandle,
+        meshlet_visibility_buffer: Option<graphics::GraphBufferHandle>,
     },
     VisibilityWrite {
         visibility_buffer: graphics::GraphBufferHandle,
+        meshlet_visibility_buffer: Option<graphics::GraphBufferHandle>,
         depth_pyramid: graphics::GraphImageHandle,
         noskip_alphamode: AlphaModeFlags,
         aspect_ratio: f32,
@@ -37,6 +39,14 @@ pub enum OcclusionCullInfo {
 impl OcclusionCullInfo {
     fn visibility_buffer(&self) -> Option<graphics::GraphBufferHandle> {
         match self {
+            OcclusionCullInfo::VisibilityRead { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
+            OcclusionCullInfo::VisibilityWrite { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
+            _ => None,
+        }
+    }
+
+    fn meshlet_visibility_buffer(&self) -> Option<graphics::GraphBufferHandle> {
+        match self {
             OcclusionCullInfo::None => None,
             OcclusionCullInfo::VisibilityRead { visibility_buffer, .. } => Some(*visibility_buffer),
             OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => Some(*visibility_buffer),
@@ -47,7 +57,7 @@ impl OcclusionCullInfo {
     fn visibility_buffer_dependency(&self) -> Option<(graphics::GraphBufferHandle, AccessKind)> {
         match self {
             OcclusionCullInfo::None => None,
-            OcclusionCullInfo::VisibilityRead { visibility_buffer } => {
+            OcclusionCullInfo::VisibilityRead { visibility_buffer, .. } => {
                 Some((*visibility_buffer, AccessKind::ComputeShaderRead))
             }
             OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => {
@@ -56,6 +66,20 @@ impl OcclusionCullInfo {
             OcclusionCullInfo::ShadowMask { visibility_buffer, .. } => {
                 Some((*visibility_buffer, AccessKind::ComputeShaderReadGeneral))
             }
+        }
+    }
+
+    fn meshlet_visibility_buffer_dependency(&self) -> Option<(graphics::GraphBufferHandle, AccessKind)> {
+        match self {
+            OcclusionCullInfo::VisibilityRead {
+                meshlet_visibility_buffer,
+                ..
+            } => meshlet_visibility_buffer.map(|b| (b, AccessKind::ComputeShaderRead)),
+            OcclusionCullInfo::VisibilityWrite {
+                meshlet_visibility_buffer,
+                ..
+            } => meshlet_visibility_buffer.map(|b| (b, AccessKind::ComputeShaderWrite)),
+            _ => None,
         }
     }
 
@@ -106,14 +130,16 @@ pub struct GpuCullInfo {
 
     occlusion_pass: u32,
     visibility_buffer: u32,
+    meshlet_visibility_buffer: u32,
     depth_pyramid: u32,
     secondary_depth_pyramid: u32,
 
     projection_type: u32,
     p00_or_width_recip_x2: f32,
-    p11_or_height_recipx2: f32,
+    p11_or_height_recip_x2: f32,
     z_near: f32,
     z_far: f32,
+    _padding: [u32; 3],
 }
 
 pub fn create_draw_commands(
@@ -159,6 +185,11 @@ pub fn create_draw_commands(
         .occlusion_culling
         .visibility_buffer()
         .map(|b| context.get_resource_descriptor_index(b).unwrap());
+    
+    let meshlet_visibility_buffer_descriptor_index = cull_info
+        .occlusion_culling
+        .meshlet_visibility_buffer()
+        .map(|b| context.get_resource_descriptor_index(b).unwrap());
 
     let mut gpu_cull_info_data = GpuCullInfo {
         view_matrix: cull_info.view_matrix,
@@ -168,6 +199,7 @@ pub fn create_draw_commands(
 
         occlusion_pass: cull_info.occlusion_culling.pass_index(),
         visibility_buffer: visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
+        meshlet_visibility_buffer: meshlet_visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
         depth_pyramid: depth_pyramid_descriptor_index.unwrap_or(u32::MAX),
 
         ..Default::default()
@@ -183,17 +215,13 @@ pub fn create_draw_commands(
         }
     }
 
-    if let OcclusionCullInfo::ShadowMask {
-        aspect_ratio,
-        ..
-    } = cull_info.occlusion_culling
-    {
+    if let OcclusionCullInfo::ShadowMask { aspect_ratio, .. } = cull_info.occlusion_culling {
         match cull_info.projection {
             Projection::Perspective { fov, near_clip } => {
                 let f = 1.0 / f32::tan(0.5 * fov);
                 gpu_cull_info_data.projection_type = 0;
                 gpu_cull_info_data.p00_or_width_recip_x2 = f / aspect_ratio;
-                gpu_cull_info_data.p11_or_height_recipx2 = f;
+                gpu_cull_info_data.p11_or_height_recip_x2 = f;
                 gpu_cull_info_data.z_near = near_clip;
             }
             Projection::Orthographic {
@@ -205,7 +233,7 @@ pub fn create_draw_commands(
                 let height = width * aspect_ratio.recip();
                 gpu_cull_info_data.projection_type = 1;
                 gpu_cull_info_data.p00_or_width_recip_x2 = width.recip() * 2.0;
-                gpu_cull_info_data.p11_or_height_recipx2 = height.recip() * 2.0;
+                gpu_cull_info_data.p11_or_height_recip_x2 = height.recip() * 2.0;
                 gpu_cull_info_data.z_near = near_clip;
                 gpu_cull_info_data.z_far = far_clip;
             }
@@ -214,7 +242,7 @@ pub fn create_draw_commands(
 
     match cull_info.projection {
         Projection::Perspective { .. } => gpu_cull_info_data.projection_type = 0,
-        Projection::Orthographic {.. } => gpu_cull_info_data.projection_type = 1,
+        Projection::Orthographic { .. } => gpu_cull_info_data.projection_type = 1,
     }
 
     if let OcclusionCullInfo::VisibilityWrite {
@@ -230,7 +258,7 @@ pub fn create_draw_commands(
                 let f = 1.0 / f32::tan(0.5 * fov);
                 gpu_cull_info_data.projection_type = 0;
                 gpu_cull_info_data.p00_or_width_recip_x2 = f / aspect_ratio;
-                gpu_cull_info_data.p11_or_height_recipx2 = f;
+                gpu_cull_info_data.p11_or_height_recip_x2 = f;
                 gpu_cull_info_data.z_near = near_clip;
             }
             Projection::Orthographic {
@@ -242,7 +270,7 @@ pub fn create_draw_commands(
                 let height = width * aspect_ratio.recip();
                 gpu_cull_info_data.projection_type = 1;
                 gpu_cull_info_data.p00_or_width_recip_x2 = width.recip() * 2.0;
-                gpu_cull_info_data.p11_or_height_recipx2 = height.recip() * 2.0;
+                gpu_cull_info_data.p11_or_height_recip_x2 = height.recip() * 2.0;
                 gpu_cull_info_data.z_near = near_clip;
                 gpu_cull_info_data.z_far = far_clip;
             }
@@ -309,7 +337,7 @@ pub fn create_draw_commands(
         .with_dependency(meshlet_draw_command_buffer, AccessKind::ComputeShaderWrite)
         .with_dependency(meshlet_dispatch_buffer, AccessKind::IndirectBuffer)
         .with_dependency(cull_info_buffer, AccessKind::ComputeShaderRead)
-        .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
+        .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
         .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
         .render(move |cmd, graph| {
             let mesh_info_buffer = graph.get_buffer(assets.mesh_info_buffer);
@@ -318,6 +346,7 @@ pub fn create_draw_commands(
             let entity_buffer = graph.get_buffer(scene.entity_buffer);
             let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
             let cull_info_buffer = graph.get_buffer(cull_info_buffer);
+            let material_buffer = graph.get_buffer(assets.materials_buffer);
 
             cmd.bind_compute_pipeline(meshlet_cull_pipeline);
 
@@ -327,7 +356,8 @@ pub fn create_draw_commands(
                 .buffer(meshlet_buffer)
                 .buffer(meshlet_draw_command_buffer)
                 .buffer(entity_buffer)
-                .buffer(cull_info_buffer);
+                .buffer(cull_info_buffer)
+                .buffer(material_buffer);
 
             cmd.dispatch_indirect(meshlet_dispatch_buffer, 0);
         });

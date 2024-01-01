@@ -8,6 +8,10 @@ use gpu_allocator::MemoryLocation;
 
 use crate::{
     assets::{GpuAssets, MeshHandle},
+    collections::{
+        arena::Index,
+        freelist_alloc::{BlockRange, FreeListAllocator},
+    },
     graphics::{self, FRAME_COUNT},
     passes::shadow_renderer::{ShadowCommand, ShadowKind, ShadowRenderer},
 };
@@ -52,12 +56,19 @@ impl Transform {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct VisibilityBufferRange {
+    alloc_index: Index,
+    range: BlockRange,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct EntityData {
     pub name: Option<Cow<'static, str>>,
     pub transform: Transform,
     pub mesh: Option<MeshHandle>,
     pub light: Option<Light>,
+    pub visibility_buffer_range: Option<VisibilityBufferRange>,
 }
 
 impl EntityData {
@@ -84,19 +95,22 @@ impl EntityData {
         };
 
         match &light.params {
-            LightParams::Sky { irradiance, prefiltered } => {
+            LightParams::Sky {
+                irradiance,
+                prefiltered,
+            } => {
                 light_data.irradiance_map_index = irradiance.descriptor_index().unwrap();
                 light_data.prefiltered_map_index = prefiltered.descriptor_index().unwrap();
-            },
+            }
             LightParams::Directional { angular_size: size } => {
                 light_data.direction = -self.transform.orientation.mul_vec3(vec3(0.0, 0.0, -1.0));
                 light_data.inner_radius = *size;
-            },
+            }
             LightParams::Point { inner_radius: radius } => {
                 light_data.position = self.transform.position;
                 light_data.inner_radius = *radius;
                 light_data.outer_radius = light.outer_radius(luminance_cutoff)
-            },
+            }
         };
 
         Some(light_data)
@@ -115,6 +129,7 @@ pub struct GpuEntityData {
 pub struct GpuEntityDraw {
     instance_index: u32,
     mesh_index: u32,
+    visibility_offset: u32,
 }
 
 #[repr(usize)]
@@ -128,9 +143,9 @@ pub enum LightKind {
 impl LightKind {
     pub fn name(&self) -> &str {
         match self {
-            LightKind::Sky         => "Sky",
+            LightKind::Sky => "Sky",
             LightKind::Directional => "Directional",
-            LightKind::Point       => "Point",
+            LightKind::Point => "Point",
         }
     }
 }
@@ -152,9 +167,9 @@ pub enum LightParams {
 impl LightParams {
     fn default_from_kind(kind: LightKind) -> Self {
         match kind {
-            LightKind::Sky         => todo!(),
+            LightKind::Sky => todo!(),
             LightKind::Directional => Self::Directional { angular_size: 0.6 },
-            LightKind::Point       => Self::Point { inner_radius: 0.1 },
+            LightKind::Point => Self::Point { inner_radius: 0.1 },
         }
     }
 
@@ -163,12 +178,10 @@ impl LightParams {
 
         ui.horizontal(|ui| {
             ui.label("type");
-            egui::ComboBox::from_id_source("light_type")
-                .selected_text(kind.name())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut kind, LightKind::Directional, LightKind::Directional.name());
-                    ui.selectable_value(&mut kind, LightKind::Point, LightKind::Point.name());
-                });
+            egui::ComboBox::from_id_source("light_type").selected_text(kind.name()).show_ui(ui, |ui| {
+                ui.selectable_value(&mut kind, LightKind::Directional, LightKind::Directional.name());
+                ui.selectable_value(&mut kind, LightKind::Point, LightKind::Point.name());
+            });
         });
 
         if kind != self.kind() {
@@ -178,27 +191,27 @@ impl LightParams {
         match self {
             LightParams::Sky { .. } => {
                 ui.label("editing not yet implemented");
-            },
+            }
             LightParams::Directional { angular_size: size } => {
                 ui.horizontal(|ui| {
                     ui.label("angular size");
                     ui.add(egui::DragValue::new(size).speed(0.01).clamp_range(0.0..=16.0));
                 });
-            },
+            }
             LightParams::Point { inner_radius: radius } => {
                 ui.horizontal(|ui| {
                     ui.label("inner radius");
                     ui.add(egui::DragValue::new(radius).speed(0.01).clamp_range(0.0..=16.0));
                 });
-            },
+            }
         };
     }
 
     fn kind(&self) -> LightKind {
         match self {
-            LightParams::Sky { .. }         => LightKind::Sky,
+            LightParams::Sky { .. } => LightKind::Sky,
             LightParams::Directional { .. } => LightKind::Directional,
-            LightParams::Point { .. }       => LightKind::Point,
+            LightParams::Point { .. } => LightKind::Point,
         }
     }
 }
@@ -249,7 +262,7 @@ impl Light {
             ui.label("intensity");
             ui.add(egui::DragValue::new(&mut self.intensity).speed(0.01).clamp_range(0.0..=16.0));
         });
-        
+
         self.params.edit(ui);
         ui.horizontal(|ui| {
             ui.label("cast shadows");
@@ -284,6 +297,7 @@ pub struct SceneGraphData {
     pub entity_buffer: graphics::GraphBufferHandle,
     pub light_count: usize, // temporary
     pub light_data_buffer: graphics::GraphHandle<graphics::BufferRaw>,
+    pub meshlet_visibility_buffer: graphics::GraphBufferHandle,
 }
 
 const MAX_INSTANCE_COUNT: usize = 1_000_000;
@@ -332,28 +346,50 @@ impl Buffers {
     }
 }
 
+const INSTANCE_BUFFER_SIZE: usize = MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityData>();
+const ENTITY_DRAW_BUFFER_SIZE: usize = 4 + MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityDraw>();
+
+// avg. 256 meshlet per instance
+// 1 bit per meshlet, 4 byte per chunk
+const MESHLET_VISIBILITY_BUFFER_CHUNK_COUNT: usize = MAX_INSTANCE_COUNT * 256 / 32;
+
+const LIGHT_DATA_BUFFER_SIZE: usize = MAX_LIGHT_COUNT * std::mem::size_of::<GpuLightData>();
+
 pub struct SceneData {
     pub entities: Vec<EntityData>,
     pub entity_draw_cache: Vec<GpuEntityDraw>,
     pub entity_data_cache: Vec<GpuEntityData>,
     pub light_data_cache: Vec<GpuLightData>,
+
+    meshlet_visibility_buffer: graphics::Buffer,
+    // chunks, not bytes
+    meshlet_visibility_allocator: FreeListAllocator,
+
     frames: [Buffers; FRAME_COUNT],
 }
-
-const INSTANCE_BUFFER_SIZE: usize = MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityData>();
-const ENTITY_DRAW_BUFFER_SIZE: usize = 4 + MAX_INSTANCE_COUNT * std::mem::size_of::<GpuEntityDraw>();
-const LIGHT_DATA_BUFFER_SIZE: usize = MAX_LIGHT_COUNT * std::mem::size_of::<GpuLightData>();
 
 impl SceneData {
     pub fn new(context: &graphics::Context) -> Self {
         let frames = std::array::from_fn(|_| Buffers::new(context));
 
+        let meshlet_visibility_buffer = context.create_buffer(
+            "meshlet_visibility_buffer",
+            &graphics::BufferDesc {
+                size: MESHLET_VISIBILITY_BUFFER_CHUNK_COUNT * 4,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                memory_location: MemoryLocation::GpuOnly,
+            },
+        );
+
         Self {
             entities: Vec::new(),
-    
+
             entity_draw_cache: Vec::new(),
             entity_data_cache: Vec::new(),
             light_data_cache: Vec::new(),
+
+            meshlet_visibility_buffer,
+            meshlet_visibility_allocator: FreeListAllocator::new(MESHLET_VISIBILITY_BUFFER_CHUNK_COUNT),
 
             frames,
         }
@@ -369,7 +405,7 @@ impl SceneData {
         &mut self,
         context: &graphics::Context,
         shadow_renderer: &mut ShadowRenderer,
-        _assets: &GpuAssets,
+        assets: &GpuAssets,
         luminance_cutoff: f32,
     ) {
         puffin::profile_function!();
@@ -382,10 +418,22 @@ impl SceneData {
         for entity in self.entities.iter_mut() {
             if let Some(mesh) = entity.mesh {
                 let instance_index = self.entity_data_cache.len() as u32;
+                let visibility_offset = if let Some(v) = entity.visibility_buffer_range {
+                    v.range.start
+                } else {
+                    let meshlet_count = assets.mesh_infos[mesh].meshlet_range.size();
+                    let (alloc_index, range) =
+                        self.meshlet_visibility_allocator.allocate(meshlet_count.div_ceil(32)).unwrap();
+                    entity.visibility_buffer_range = Some(VisibilityBufferRange { alloc_index, range });
+
+                    range.start
+                };
+
                 self.entity_data_cache.push(entity.entity_gpu_data());
                 self.entity_draw_cache.push(GpuEntityDraw {
                     instance_index,
                     mesh_index: mesh.slot(),
+                    visibility_offset: visibility_offset as u32,
                 });
                 // for submesh in assets.models[model].submeshes.iter() {
                 //     self.entity_draw_cache.push(GpuEntityDraw {
@@ -408,7 +456,8 @@ impl SceneData {
                                 orientation: entity.transform.orientation,
                             },
                         });
-                        light_data.shadow_data_index = (shadow_index + ShadowRenderer::MAX_SHADOW_COMMANDS * context.frame_index()) as u32;
+                        light_data.shadow_data_index =
+                            (shadow_index + ShadowRenderer::MAX_SHADOW_COMMANDS * context.frame_index()) as u32;
                     }
                 }
 
@@ -448,6 +497,7 @@ impl SceneData {
             entity_buffer: context.import(&self.frames[context.frame_index()].entity_data_buffer),
             light_count: self.light_data_cache.len(),
             light_data_buffer: context.import(&self.frames[context.frame_index()].light_data_buffer),
+            meshlet_visibility_buffer: context.import(&self.meshlet_visibility_buffer),
         }
     }
 }

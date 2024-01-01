@@ -111,11 +111,13 @@ void main() {
 		
 		bool visible = true;
 		bool visible_in_buffer = true;
+		bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0;
 
 		if (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4) {
-			uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID / 32];
+			uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).entries[gID / 32];
 			visible_in_buffer = (visibility_bitset & (1 << (gID % 32))) > 0;
 		}
+
 
 		// first occlusion pass: only proccess if submesh was visible last frame
 		if (cull_info.occlusion_pass == 1) visible = visible_in_buffer;
@@ -206,7 +208,9 @@ void main() {
 			// visible && bool((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag);
 
 		// second occlusion pass: only proccess if submesh wasn't visible last frame
-		if ((cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4)
+		// if meshlet occlusion culling is enabled, also draw entities that were visible in the early pass
+		// so their newly visible meshlets can be rendered
+		if (((cull_info.occlusion_pass == 2 && !meshlet_occlusion_culling) || cull_info.occlusion_pass == 4)
 			// && !bool((1 << submesh.alpha_mode) & cull_info.noskip_alphamode)
 		) {
 			should_draw = visible && !visible_in_buffer;
@@ -214,27 +218,20 @@ void main() {
 
 		// draw command fill
 		if (should_draw) {
-			// DrawCommand draw_command;
-			// draw_command.index_count 	  = mesh_info.index_count;
-			// draw_command.instance_count   = 1;
-			// draw_command.first_index      = mesh_info.index_offset;
-			// draw_command.vertex_offset    = mesh_info.vertex_offset;
-			// draw_command.first_instance   = submesh.entity_index;
-			// draw_command.material_index   = submesh.material_index;
-			// draw_command._debug_index     = gID;
-			// uint draw_index = atomicAdd(GetBuffer(DrawCommandsBuffer, draw_commands_buffer).count, 1);
-			// GetBuffer(DrawCommandsBuffer, draw_commands_buffer).commands[draw_index] = draw_command;
-
 			uint dispatch_count = (mesh_info.meshlet_count + 32 - 1) / 32;
 			uint dispatch_offset = atomicAdd(GetBuffer(MeshletDispatchBuffer, meshlet_dispatch_buffer).workgroup_count_x, dispatch_count);
+			uint visibility_offset = entity_draw.visibility_offset;
 
 			for (uint dispatch_index = 0; dispatch_index < dispatch_count; dispatch_index++) {
 				MeshletDispatch dispatch;
-    			dispatch.entity_index   = entity_draw.entity_index;
-    			dispatch.mesh_index     = entity_draw.mesh_index;
-    			dispatch.meshlet_offset = mesh_info.meshlet_offset + 32 * dispatch_index;
-    			dispatch.meshlet_count  = min(mesh_info.meshlet_count - 32 * dispatch_index, 32);
+    			dispatch.entity_index       = entity_draw.entity_index;
+    			dispatch.mesh_index         = entity_draw.mesh_index;
+    			dispatch.meshlet_offset     = mesh_info.meshlet_offset + 32 * dispatch_index;
+    			dispatch.meshlet_count      = min(mesh_info.meshlet_count - 32 * dispatch_index, 32);
+    			dispatch.visibility_offset  = visibility_offset;
 				GetBuffer(MeshletDispatchBuffer, meshlet_dispatch_buffer).dispatches[dispatch_offset + dispatch_index] = dispatch;
+
+				visibility_offset += dispatch.meshlet_count / 32;
 			}
 		}
 
@@ -246,7 +243,7 @@ void main() {
 			if (subgroupElect()) {
 				for (uint i = 0; i < gl_SubgroupSize / 32; i++) {
 					GetBuffer(VisibilityBuffer, cull_info.visibility_buffer)
-						.submeshes[gID / gl_SubgroupSize + i] = visiblity_bitset.x;
+						.entries[gID / gl_SubgroupSize + i] = visiblity_bitset.x;
 				}
 			}
 #else

@@ -85,7 +85,7 @@ pub struct ForwardRenderer {
     jitter_offset_texture: graphics::Image,
 
     pub depth_pyramid: DepthPyramid,
-    pub visibility_buffer: graphics::Buffer,
+    pub entity_visibility_buffer: graphics::Buffer,
     is_visibility_buffer_initialized: bool,
 
     normal_buffer: graphics::GraphImageHandle,
@@ -189,7 +189,7 @@ impl ForwardRenderer {
         Self {
             brdf_integration_map,
             jitter_offset_texture: create_jittered_offset_texture(context, 16, 8),
-            visibility_buffer,
+            entity_visibility_buffer: visibility_buffer,
             is_visibility_buffer_initialized: false,
             depth_pyramid,
             normal_buffer: graphics::GraphImageHandle::uninit(),
@@ -226,7 +226,7 @@ impl ForwardRenderer {
 
         let visibility_buffer = context.import_with(
             "visibility_buffer",
-            &self.visibility_buffer,
+            &self.entity_visibility_buffer,
             graphics::GraphResourceImportDesc {
                 initial_access: if self.is_visibility_buffer_initialized {
                     graphics::AccessKind::ComputeShaderWrite
@@ -236,6 +236,8 @@ impl ForwardRenderer {
                 ..Default::default()
             },
         );
+
+        let meshlet_visibility_buffer = Some(scene.meshlet_visibility_buffer);
 
         if !camera_frozen {
             self.depth_pyramid.resize([screen_extent.width, screen_extent.height]);
@@ -255,7 +257,7 @@ impl ForwardRenderer {
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
                 projection: frozen_camera.projection,
                 occlusion_culling: occlusion_culling
-                    .then_some(OcclusionCullInfo::VisibilityRead { visibility_buffer })
+                    .then_some(OcclusionCullInfo::VisibilityRead { visibility_buffer, meshlet_visibility_buffer })
                     .unwrap_or_default(),
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                 debug_print: false,
@@ -428,6 +430,7 @@ impl ForwardRenderer {
                 occlusion_culling: occlusion_culling
                     .then_some(OcclusionCullInfo::VisibilityWrite {
                         visibility_buffer,
+                        meshlet_visibility_buffer,
                         depth_pyramid,
                         // noskip_alphamode: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                         noskip_alphamode: AlphaModeFlags::empty(),
@@ -592,7 +595,7 @@ impl ForwardRenderer {
 
         let visibility_buffer = context.import_with(
             "visibility_buffer",
-            &self.visibility_buffer,
+            &self.entity_visibility_buffer,
             graphics::GraphResourceImportDesc {
                 initial_access: if self.is_visibility_buffer_initialized {
                     graphics::AccessKind::ComputeShaderWrite
@@ -602,6 +605,8 @@ impl ForwardRenderer {
                 ..Default::default()
             },
         );
+
+        let meshlet_visibility_buffer = Some(scene.meshlet_visibility_buffer);
 
         let projection_matrix = frozen_camera.compute_projection_matrix();
         let view_matrix = frozen_camera.transform.compute_matrix().inverse();
@@ -617,7 +622,7 @@ impl ForwardRenderer {
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
                 projection: frozen_camera.projection,
                 occlusion_culling: occlusion_culling
-                    .then_some(OcclusionCullInfo::VisibilityRead { visibility_buffer })
+                    .then_some(OcclusionCullInfo::VisibilityRead { visibility_buffer, meshlet_visibility_buffer })
                     .unwrap_or_default(),
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                 debug_print: false,

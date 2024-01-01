@@ -486,10 +486,10 @@ impl App {
         // let mut rng = rand::thread_rng();
 
         // let prefab = scene.entities.pop().unwrap();
-        // let pos_range = 0.0..=32.0;
+        // let pos_range = 0.0..=128.0;
         // let rot_range = 0.0..=2.0 * PI;
 
-        // for _ in 0..2048 * 8 {
+        // for _ in 0..20_000 {
         //     let mut entity = prefab.clone();
 
         //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));
@@ -923,7 +923,7 @@ impl App {
             &self.frozen_camera,
         );
 
-        let camera_visibility_buffer = context.import(&self.forward_renderer.visibility_buffer);
+        let camera_visibility_buffer = context.import(&self.forward_renderer.entity_visibility_buffer);
 
         self.shadow_renderer.render_shadows(
             context,

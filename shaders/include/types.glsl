@@ -101,6 +101,7 @@ struct MaterialData {
 struct EntityDraw {
     uint entity_index;
     uint mesh_index;
+    uint visibility_offset;
 };
 
 RegisterBuffer(EntityDrawBuffer, {
@@ -146,13 +147,13 @@ struct MeshletDispatch {
     uint mesh_index;
     uint meshlet_offset;
     uint meshlet_count;
+    uint visibility_offset;
 };
 
 RegisterBuffer(MeshletDispatchBuffer, {
     uint workgroup_count_x;
     uint workgroup_count_y;
     uint workgroup_count_z;
-    uint _padding;
     MeshletDispatch dispatches[];
 });
 
@@ -183,6 +184,7 @@ struct CullInfo {
 
     uint  occlusion_pass;
     uint  visibility_buffer;
+    uint  meshlet_visibility_buffer;
     uint  depth_pyramid;
     uint  secondary_depth_pyramid;
 
@@ -246,7 +248,7 @@ RegisterBuffer(DebugMeshInstanceBuffer, {
 });
 
 RegisterBuffer(VisibilityBuffer, {
-    uint32_t submeshes[];
+    uint32_t entries[];
 });
 
 RegisterBuffer(CullInfoBuffer, {

@@ -721,6 +721,12 @@ impl ShadowRenderer {
 
             let culling_planes = if frustum_culling { culling_planes } else { &[] };
 
+            let projection = Projection::Orthographic {
+                half_width: radius,
+                near_clip,
+                far_clip,
+            };
+
             if receiver_mask_culling {
                 // light projection to camera projection
                 let reprojection_matrix = camera_view_projection_matrix * light_projection_matrix.inverse();
@@ -730,11 +736,7 @@ impl ShadowRenderer {
                     &shadow_map_name,
                     shadow_map,
                     &self.settings,
-                    Projection::Orthographic {
-                        half_width: radius,
-                        near_clip,
-                        far_clip,
-                    },
+                    projection,
                     &light_matrix,
                     &light_projection_matrix,
                     culling_planes,
@@ -754,6 +756,7 @@ impl ShadowRenderer {
                     &CullInfo {
                         view_matrix: light_matrix,
                         view_space_cull_planes: culling_planes,
+                        projection,
                         occlusion_culling: OcclusionCullInfo::None,
                         alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                         debug_print: false,
@@ -840,6 +843,7 @@ fn shadow_pass_with_mask(
         &CullInfo {
             view_matrix: light_view_matrix.clone(),
             view_space_cull_planes: culling_planes,
+            projection,
             occlusion_culling: OcclusionCullInfo::VisibilityRead {
                 visibility_buffer: camera_visibility_buffer,
             },
@@ -889,10 +893,10 @@ fn shadow_pass_with_mask(
         &CullInfo {
             view_matrix: light_view_matrix.clone(),
             view_space_cull_planes: culling_planes,
+            projection,
             occlusion_culling: OcclusionCullInfo::ShadowMask {
                 visibility_buffer: camera_visibility_buffer,
                 shadow_mask,
-                projection,
                 aspect_ratio: 1.0,
             },
             alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,

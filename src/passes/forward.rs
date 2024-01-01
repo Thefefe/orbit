@@ -253,6 +253,7 @@ impl ForwardRenderer {
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
+                projection: frozen_camera.projection,
                 occlusion_culling: occlusion_culling
                     .then_some(OcclusionCullInfo::VisibilityRead { visibility_buffer })
                     .unwrap_or_default(),
@@ -423,6 +424,7 @@ impl ForwardRenderer {
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
+                projection: frozen_camera.projection,
                 occlusion_culling: occlusion_culling
                     .then_some(OcclusionCullInfo::VisibilityWrite {
                         visibility_buffer,
@@ -430,7 +432,6 @@ impl ForwardRenderer {
                         // noskip_alphamode: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                         noskip_alphamode: AlphaModeFlags::empty(),
                         aspect_ratio: frozen_camera.aspect_ratio,
-                        projection: frozen_camera.projection,
                     })
                     .unwrap_or_default(),
                 alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
@@ -614,6 +615,7 @@ impl ForwardRenderer {
             &CullInfo {
                 view_matrix,
                 view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
+                projection: frozen_camera.projection,
                 occlusion_culling: occlusion_culling
                     .then_some(OcclusionCullInfo::VisibilityRead { visibility_buffer })
                     .unwrap_or_default(),

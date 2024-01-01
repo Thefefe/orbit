@@ -25,13 +25,11 @@ pub enum OcclusionCullInfo {
         visibility_buffer: graphics::GraphBufferHandle,
         depth_pyramid: graphics::GraphImageHandle,
         noskip_alphamode: AlphaModeFlags,
-        projection: Projection,
         aspect_ratio: f32,
     },
     ShadowMask {
         visibility_buffer: graphics::GraphBufferHandle,
         shadow_mask: graphics::GraphImageHandle,
-        projection: Projection,
         aspect_ratio: f32,
     },
 }
@@ -87,6 +85,7 @@ impl OcclusionCullInfo {
 pub struct CullInfo<'a> {
     pub view_matrix: Mat4,
     pub view_space_cull_planes: &'a [Vec4],
+    pub projection: Projection,
     pub occlusion_culling: OcclusionCullInfo,
     pub alpha_mode_filter: AlphaModeFlags,
     pub debug_print: bool,
@@ -185,12 +184,11 @@ pub fn create_draw_commands(
     }
 
     if let OcclusionCullInfo::ShadowMask {
-        projection,
         aspect_ratio,
         ..
     } = cull_info.occlusion_culling
     {
-        match projection {
+        match cull_info.projection {
             Projection::Perspective { fov, near_clip } => {
                 let f = 1.0 / f32::tan(0.5 * fov);
                 gpu_cull_info_data.projection_type = 0;
@@ -214,8 +212,12 @@ pub fn create_draw_commands(
         }
     }
 
+    match cull_info.projection {
+        Projection::Perspective { .. } => gpu_cull_info_data.projection_type = 0,
+        Projection::Orthographic {.. } => gpu_cull_info_data.projection_type = 1,
+    }
+
     if let OcclusionCullInfo::VisibilityWrite {
-        projection,
         aspect_ratio,
         noskip_alphamode,
         ..
@@ -223,7 +225,7 @@ pub fn create_draw_commands(
     {
         gpu_cull_info_data.noskip_alpha_mode = noskip_alphamode.0;
 
-        match projection {
+        match cull_info.projection {
             Projection::Perspective { fov, near_clip } => {
                 let f = 1.0 / f32::tan(0.5 * fov);
                 gpu_cull_info_data.projection_type = 0;

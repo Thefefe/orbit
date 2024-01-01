@@ -100,6 +100,10 @@ vec4 project_sphere(vec4 sphere, float znear, float P00, float P11) {
 	return aabb;
 }
 
+bool coneCull(vec3 center, float radius, vec3 cone_axis, float cone_cutoff, vec3 camera_position) {
+	return dot(center - camera_position, cone_axis) >= cone_cutoff * length(center - camera_position) + radius;
+}
+
 void main() {
     MeshletDispatch dispatch = GetBuffer(MeshletDispatchBuffer, meshlet_dispatch_buffer).dispatches[gl_GlobalInvocationID.x / 32];
 
@@ -110,16 +114,12 @@ void main() {
     Meshlet meshlet = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index];
 	CullInfo cull_info = GetBuffer(CullInfoBuffer, cull_info_buffer).cull_info;
 
-	vec4 model_space_bounding_sphere = vec4(
-		meshlet.bounding_sphere[0],
-		meshlet.bounding_sphere[1],
-		meshlet.bounding_sphere[2],
-		meshlet.bounding_sphere[3]
-	);
-	vec4 bounding_sphere_view_space = transform_sphere(
-		cull_info.view_matrix * GetBuffer(EntityBuffer, entity_buffer).entities[dispatch.entity_index].model_matrix,
-		model_space_bounding_sphere
-	);
+	mat4 model_to_view_matrix = cull_info.view_matrix *
+		GetBuffer(EntityBuffer, entity_buffer).entities[dispatch.entity_index].model_matrix;
+
+	vec4 bounding_sphere_view_space = transform_sphere(model_to_view_matrix, meshlet.bounding_sphere);
+	vec3 cone_axis = (model_to_view_matrix * vec4(int(meshlet.cone_axis[0]) / 127.0, int(meshlet.cone_axis[1]) / 127.0, int(meshlet.cone_axis[2]) / 127.0, 0.0)).xyz;
+	float cone_cutoff = int(meshlet.cone_cutoff) / 127.0;
 
     bool visible = true;
 
@@ -129,6 +129,18 @@ void main() {
 			float point_plane_distance = dot(plane.xyz, bounding_sphere_view_space.xyz) + plane.w;
 			bool inside_frustum = point_plane_distance > -bounding_sphere_view_space.w;
 			visible = visible && inside_frustum;
+		}
+	}
+
+	if (visible) {
+		switch (cull_info.projection_type) {
+			case 0: { // perspective
+				visible = !coneCull(bounding_sphere_view_space.xyz, bounding_sphere_view_space.w, cone_axis, cone_cutoff, vec3(0, 0, 0));
+			} break;
+			case 1: { // orhographic
+				visible = !coneCull(bounding_sphere_view_space.xyz, bounding_sphere_view_space.w, cone_axis, cone_cutoff, bounding_sphere_view_space.xyz - vec3(0.0, 0.0, -1.0));
+			}
+			break;
 		}
 	}
 

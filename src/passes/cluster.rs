@@ -26,7 +26,7 @@ impl Default for ClusterSettings {
             px_size_power: 3, // 2^3 = 8
             screen_resolution: [0; 2],
             z_slice_count: 32,
-            far_plane: 100.0,
+            far_plane: 200.0,
             luminance_cutoff: 0.25,
         }
     }
@@ -45,9 +45,14 @@ impl ClusterSettings {
         self.screen_resolution.map(|n| n.div_ceil(self.tile_px_size()) as usize)
     }
 
-    pub fn cluster_linear_count(&self) -> usize {
+    pub fn linear_cluster_count(&self) -> usize {
         let tile_counts = self.tile_counts();
         tile_counts[0] * tile_counts[1] * self.z_slice_count as usize
+    }
+
+    pub fn linear_max_allocated_cluster_count(&self) -> usize {
+        let tile_counts = self.tile_counts();
+        tile_counts[0] * tile_counts[1] * MAX_ALLOCATED_DEPTH_SLICES.max(self.z_slice_count as usize)
     }
 
     pub fn cluster_counts(&self) -> [usize; 3] {
@@ -88,6 +93,8 @@ impl ClusterSettings {
         });
     }
 }
+
+const MAX_ALLOCATED_DEPTH_SLICES: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ClusterDebugSettings {
@@ -174,6 +181,29 @@ fn compute_cluster_aabb(
     let max = min_point_near.max(min_point_far).max(max_point_near).max(max_point_far);
 
     Aabb { min, max }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+struct ClusterCullInfo {
+    world_to_view_matrix: Mat4,
+	screen_to_view_matrix: Mat4,
+    
+    cluster_count: [u32; 3],
+	tile_size_px: u32,
+
+    screen_size: [u32; 2],
+	z_near: f32,
+	z_far: f32,
+    
+    unique_cluster_buffer: u32,
+    cluster_offset_image: u32,
+    light_index_buffer: u32,
+    depth_bounds_buffer: u32,
+
+    global_light_count: u32,
+    global_light_list: u32,
+    _padding: [u32; 2],
 }
 
 fn compute_cluster_volume_corners(
@@ -344,16 +374,14 @@ pub fn compute_clusters(
 ) -> GraphClusterInfo {
     let (active_cluster_mask, depth_bounds) = mark_active_clusters(context, &settings, depth_buffer, &camera);
     let unique_cluster_buffer = compact_active_clusters(context, &settings, active_cluster_mask);
-    let cluster_volume_buffer =
-        generate_cluster_volumes(context, &settings, &camera, unique_cluster_buffer, depth_bounds);
 
     let (light_offset_image, light_index_list) = cluster_light_assignment(
         context,
-        &settings,
-        unique_cluster_buffer,
-        cluster_volume_buffer,
+        settings,
+        camera,
         scene,
-        &camera.compute_view_matrix(),
+        unique_cluster_buffer,
+        depth_bounds,
     );
 
     let data = GpuClusterInfoBuffer::new(
@@ -373,8 +401,6 @@ pub fn compute_clusters(
         info_buffer,
     }
 }
-
-const CLUSTER_VOLUME_SIZE: usize = 32;
 
 pub fn mark_active_clusters(
     context: &mut graphics::Context,
@@ -401,7 +427,7 @@ pub fn mark_active_clusters(
     let cluster_depth_bounds_buffer = context.create_transient_buffer(
         "cluster_depth_bounds_buffer",
         graphics::BufferDesc {
-            size: settings.cluster_linear_count() * 8,
+            size: settings.linear_cluster_count() * 8,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
         },
@@ -413,7 +439,7 @@ pub fn mark_active_clusters(
     let (z_scale, z_bias) = settings.cluster_grid_info(z_near);
 
     let cluster_count = settings.cluster_counts().map(|x| x as u32);
-    let cluster_linear_count = settings.cluster_linear_count();
+    let cluster_linear_count = settings.linear_cluster_count();
     let screen_resolution = settings.screen_resolution;
 
     context
@@ -478,7 +504,7 @@ pub fn compact_active_clusters(
     let unique_cluster_buffer = context.create_transient_buffer(
         "unique_cluster_buffer",
         graphics::BufferDesc {
-            size: 16 + settings.cluster_linear_count() * 4,
+            size: 16 + settings.linear_max_allocated_cluster_count() * 4,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::INDIRECT_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST,
@@ -513,70 +539,13 @@ pub fn compact_active_clusters(
     unique_cluster_buffer
 }
 
-pub fn generate_cluster_volumes(
-    context: &mut graphics::Context,
-    settings: &ClusterSettings,
-    camera: &Camera,
-    unique_cluster_buffer: graphics::GraphBufferHandle,
-    depth_bounds_buffer: graphics::GraphBufferHandle,
-) -> graphics::GraphBufferHandle {
-    let pipeline = context.create_compute_pipeline(
-        "cluster_gen_pipeline",
-        graphics::ShaderSource::spv("shaders/light_cluster/cluster_gen.comp.spv"),
-    );
-
-    let cluster_volume_buffer = context.create_transient_buffer(
-        "cluster_volume_buffer",
-        graphics::BufferDesc {
-            size: settings.cluster_linear_count() * CLUSTER_VOLUME_SIZE,
-            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-            memory_location: MemoryLocation::GpuOnly,
-        },
-    );
-
-    let screen_to_view_matrix = camera.compute_projection_matrix().inverse();
-    let tile_size_px = settings.tile_px_size();
-    let z_near = camera.z_near();
-    let z_far = settings.far_plane;
-
-    let cluster_counts = settings.cluster_counts();
-    let screen_size = settings.screen_resolution;
-
-    context
-        .add_pass("cluster_volume_generation")
-        .with_dependency(unique_cluster_buffer, AccessKind::IndirectBuffer)
-        .with_dependency(depth_bounds_buffer, AccessKind::ComputeShaderRead)
-        .with_dependency(cluster_volume_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
-            let cluster_volume_buffer = graph.get_buffer(cluster_volume_buffer);
-            let unique_cluster_buffer = graph.get_buffer(unique_cluster_buffer);
-            let depth_bounds_buffer = graph.get_buffer(depth_bounds_buffer);
-
-            cmd.bind_compute_pipeline(pipeline);
-            cmd.build_constants()
-                .mat4(&screen_to_view_matrix)
-                .uvec3(cluster_counts.map(|x| x as u32))
-                .uint(tile_size_px)
-                .uvec2(screen_size)
-                .float(z_near)
-                .float(z_far)
-                .buffer(unique_cluster_buffer)
-                .buffer(depth_bounds_buffer)
-                .buffer(cluster_volume_buffer);
-
-            cmd.dispatch_indirect(unique_cluster_buffer, 0);
-        });
-
-    cluster_volume_buffer
-}
-
 pub fn cluster_light_assignment(
     context: &mut graphics::Context,
     settings: &ClusterSettings,
-    unique_cluster_buffer: graphics::GraphBufferHandle,
-    cluster_volume_buffer: graphics::GraphBufferHandle,
+    camera: &Camera,
     scene: SceneGraphData,
-    world_to_view_matrix: &Mat4,
+    unique_cluster_buffer: graphics::GraphBufferHandle,
+    depth_bounds_buffer: graphics::GraphBufferHandle,
 ) -> (graphics::GraphImageHandle, graphics::GraphBufferHandle) {
     let pipeline = context.create_compute_pipeline(
         "cluster_light_assingment_pipeline",
@@ -600,14 +569,33 @@ pub fn cluster_light_assignment(
     let light_index_buffer = context.create_transient_buffer(
         "light_index_buffer",
         graphics::BufferDesc {
-            size: 4 + settings.cluster_linear_count() as usize * 32 * 4,
+            size: 4 + settings.linear_max_allocated_cluster_count() as usize * 32 * 4,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
         },
     );
 
-    let cluster_count = settings.cluster_counts().map(|x| x as u32);
-    let world_to_view_matrix = world_to_view_matrix.clone();
+    let cluster_cull_data = ClusterCullInfo {
+        world_to_view_matrix: camera.compute_view_matrix(),
+        screen_to_view_matrix: camera.compute_projection_matrix().inverse(),
+        cluster_count: settings.cluster_counts().map(|x| x as u32),
+        tile_size_px: settings.tile_px_size(),
+        screen_size: settings.screen_resolution,
+        z_near: camera.z_near(),
+        z_far: settings.far_plane,
+        unique_cluster_buffer: context.get_resource_descriptor_index(unique_cluster_buffer).unwrap(),
+        cluster_offset_image: context.get_resource_descriptor_index(light_offset_image).unwrap(),
+        light_index_buffer: context.get_resource_descriptor_index(light_index_buffer).unwrap(),
+        depth_bounds_buffer: context.get_resource_descriptor_index(depth_bounds_buffer).unwrap(),
+        global_light_count: scene.light_count as u32,
+        global_light_list: context.get_resource_descriptor_index(scene.light_data_buffer).unwrap(),
+        _padding: [0; 2],
+    };
+
+    let cluster_cull_info_buffer = context.transient_storage_data(
+        "cluster_cull_info_buffer",
+        bytemuck::bytes_of(&cluster_cull_data),
+    );
 
     context
         .add_pass("clear_light_index_buffer")
@@ -619,28 +607,16 @@ pub fn cluster_light_assignment(
 
     context
         .add_pass("cluster_light_assingment")
-        .with_dependency(cluster_volume_buffer, AccessKind::ComputeShaderRead)
         .with_dependency(unique_cluster_buffer, AccessKind::IndirectBuffer)
+        .with_dependency(depth_bounds_buffer, AccessKind::ComputeShaderRead)
         .with_dependency(light_offset_image, AccessKind::ComputeShaderWrite)
         .with_dependency(light_index_buffer, AccessKind::ComputeShaderWrite)
         .render(move |cmd, graph| {
             let unique_cluster_buffer = graph.get_buffer(unique_cluster_buffer);
-            let cluster_volume_buffer = graph.get_buffer(cluster_volume_buffer);
-            let light_index_buffer = graph.get_buffer(light_index_buffer);
-            let light_offset_image = graph.get_image(light_offset_image);
-            let global_light_list = graph.get_buffer(scene.light_data_buffer);
+            let cull_info_buffer = graph.get_buffer(cluster_cull_info_buffer);
 
             cmd.bind_compute_pipeline(pipeline);
-            cmd.build_constants()
-                .mat4(&world_to_view_matrix)
-                .uvec3(cluster_count)
-                .buffer(unique_cluster_buffer)
-                .buffer(cluster_volume_buffer)
-                .storage_image(light_offset_image)
-                .buffer(light_index_buffer)
-                .uint(scene.light_count as u32)
-                .buffer(global_light_list);
-
+            cmd.build_constants().buffer(cull_info_buffer);
             cmd.dispatch_indirect(unique_cluster_buffer, 0);
         });
 

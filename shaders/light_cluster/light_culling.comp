@@ -7,18 +7,89 @@
 
 RegisterUintImageFormat(rg32ui);
 
-layout(push_constant, std430) uniform PushConstants {
+RegisterBuffer(ClusterLightCullInfoBuffer, { 
     mat4 world_to_view_matrix;
+	mat4 screen_to_view_matrix;    
     
     uvec3 cluster_count;
+	uint  tile_size_px;
+    
+    uvec2  screen_size;
+	float  z_near;
+	float  z_far;
+    
     uint unique_cluster_buffer;
-    uint cluster_volume_buffer;
-
     uint cluster_offset_image;
     uint light_index_buffer;
+    uint depth_bounds_buffer;
+    
     uint global_light_count;
     uint global_light_list;
+});
+
+layout(push_constant, std430) uniform PushConstants {
+    uint cull_info_buffer;
 };
+
+#define input_buffer GetBuffer(ClusterLightCullInfoBuffer, cull_info_buffer)
+
+vec4 screen_to_view(vec4 screen_pos){
+    //Convert to NDC
+    vec2 tex_coord = screen_pos.xy / input_buffer.screen_size.xy;
+
+    //Convert to clipSpace
+    vec4 clip = vec4(vec2(tex_coord.x, 1.0 - tex_coord.y)* 2.0 - 1.0, screen_pos.z, screen_pos.w);
+
+    //View space transform
+    vec4 view = input_buffer.screen_to_view_matrix * clip;
+
+    //Perspective projection
+    view = view / view.w;
+
+    return view;
+}
+
+vec3 line_intersection_to_z_plane(vec3 a, vec3 b, float z_distance){
+    //all clusters planes are aligned in the same z direction
+    vec3 normal = vec3(0.0, 0.0, -1.0);
+    //getting the line from the eye to the tile
+    vec3 ab =  b - a;
+    //Computing the intersection length for the line and the plane
+    float t = (z_distance - dot(normal, a)) / dot(normal, ab);
+    //Computing the actual xyz position of the point along the line
+    vec3 result = a + t * ab;
+    return result;
+}
+
+Aabb compute_cluster_volume(uint cluster_index) {
+    uvec3 cluster_id = cluster_id_from_volume_index(input_buffer.cluster_count, cluster_index);
+    const vec3 eye_pos = vec3(0.0);
+    
+    vec2 min_bounds_screen_space = cluster_id.xy * input_buffer.tile_size_px;
+    vec2 max_bounds_screen_space = min(min_bounds_screen_space + input_buffer.tile_size_px, input_buffer.screen_size);
+
+    vec3 min_bounds_view_space = screen_to_view(vec4(min_bounds_screen_space, 1.0, 1.0)).xyz;
+    vec3 max_bounds_view_space = screen_to_view(vec4(max_bounds_screen_space, 1.0, 1.0)).xyz;
+
+    float min_depth = 1.0 - uintBitsToFloat(GetBuffer(ClusterDepthBoundsBuffer, input_buffer.depth_bounds_buffer).clusters[cluster_index].min_depth);
+    float max_depth = uintBitsToFloat(GetBuffer(ClusterDepthBoundsBuffer, input_buffer.depth_bounds_buffer).clusters[cluster_index].max_depth);
+
+    float cluster_near  = input_buffer.z_near / max_depth;
+    float cluster_far   = input_buffer.z_near / min_depth;
+
+    vec3 minPointNear = line_intersection_to_z_plane(eye_pos, min_bounds_view_space, cluster_near);
+    vec3 minPointFar  = line_intersection_to_z_plane(eye_pos, min_bounds_view_space, cluster_far );
+    vec3 maxPointNear = line_intersection_to_z_plane(eye_pos, max_bounds_view_space, cluster_near);
+    vec3 maxPointFar  = line_intersection_to_z_plane(eye_pos, max_bounds_view_space, cluster_far );
+
+    vec3 minPointAABB = min(min(minPointNear, minPointFar), min(maxPointNear, maxPointFar));
+    vec3 maxPointAABB = max(max(minPointNear, minPointFar), max(maxPointNear, maxPointFar));
+
+    Aabb aabb;
+    aabb.min_pos  = vec4(minPointAABB, 0.0);
+    aabb.max_pos  = vec4(maxPointAABB, 0.0);
+    return aabb;
+}
 
 float aabb_point_sqr_dist(vec3 aabb_min, vec3 aabb_max, vec3 point) {
     float sqr_dist = 0.0;
@@ -37,10 +108,10 @@ bool aabb_sphere_test(vec3 aabb_min, vec3 aabb_max, vec4 sphere) {
 layout (local_size_x = 256) in;
 
 bool is_light_in_cluster(vec3 cluster_aabb_min, vec3 cluster_aabb_max, uint light_index) {
-    switch (GetBuffer(LightDataBuffer, global_light_list).lights[light_index].light_type) {
+    switch (GetBuffer(LightDataBuffer, input_buffer.global_light_list).lights[light_index].light_type) {
         case LIGHT_TYPE_POINT: {
-            vec3 center = (world_to_view_matrix * vec4(GetBuffer(LightDataBuffer, global_light_list).lights[light_index].position, 1.0)).xyz;
-            float radius = GetBuffer(LightDataBuffer, global_light_list).lights[light_index].outer_radius;
+            vec3 center = (input_buffer.world_to_view_matrix * vec4(GetBuffer(LightDataBuffer, input_buffer.global_light_list).lights[light_index].position, 1.0)).xyz;
+            float radius = GetBuffer(LightDataBuffer, input_buffer.global_light_list).lights[light_index].outer_radius;
             return aabb_sphere_test(cluster_aabb_min, cluster_aabb_max, vec4(center, radius));
         } break;
         default: {
@@ -51,32 +122,32 @@ bool is_light_in_cluster(vec3 cluster_aabb_min, vec3 cluster_aabb_max, uint ligh
 
 void main() {
     uint unique_index = gl_GlobalInvocationID.x;
-    if (unique_index >= GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_count) return;
+    if (unique_index >= GetBuffer(CompactedClusterIndexList, input_buffer.unique_cluster_buffer).cluster_count) return;
 
-    ClusterVolume cluster_volume = GetBuffer(ClusterVolumeBuffer, cluster_volume_buffer).clusters[unique_index];
-    uint cluster_index = GetBuffer(CompactedClusterIndexList, unique_cluster_buffer).cluster_indices[unique_index];
+    uint cluster_index = GetBuffer(CompactedClusterIndexList, input_buffer.unique_cluster_buffer).cluster_indices[unique_index];
+    Aabb cluster_volume = compute_cluster_volume(cluster_index);
 
     uint light_count = 0;
-    for (uint light_index = 0; light_index < global_light_count; light_index++) {
+    for (uint light_index = 0; light_index < input_buffer.global_light_count; light_index++) {
         if (is_light_in_cluster(cluster_volume.min_pos.xyz, cluster_volume.max_pos.xyz, light_index)) {
             light_count += 1;
         }
     }
 
     light_count = min(light_count, 256);
-    uint light_offset = atomicAdd(GetBuffer(ClusterLightIndices, light_index_buffer).light_count, light_count);
+    uint light_offset = atomicAdd(GetBuffer(ClusterLightIndices, input_buffer.light_index_buffer).light_count, light_count);
 
     uint light_counter = 0;
     uint light_index = 0;
     while (light_counter < light_count) {
         if (is_light_in_cluster(cluster_volume.min_pos.xyz, cluster_volume.max_pos.xyz, light_index)) {
-            GetBuffer(ClusterLightIndices, light_index_buffer).light_indices[light_offset + light_counter] = light_index;
+            GetBuffer(ClusterLightIndices, input_buffer.light_index_buffer).light_indices[light_offset + light_counter] = light_index;
             light_counter += 1;
         }
 
         light_index += 1;
     }
 
-    uvec3 cluster_id = cluster_id_from_volume_index(cluster_count, cluster_index);
-    imageStore(GetImage3D(rg32ui, cluster_offset_image), ivec3(cluster_id), uvec4(light_offset, light_count, 0, 0));
+    uvec3 cluster_id = cluster_id_from_volume_index(input_buffer.cluster_count, cluster_index);
+    imageStore(GetImage3D(rg32ui, input_buffer.cluster_offset_image), ivec3(cluster_id), uvec4(light_offset, light_count, 0, 0));
 }

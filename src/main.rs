@@ -341,6 +341,8 @@ impl CameraDebugSettings {
 }
 
 struct App {
+    allocator_visualizer: gpu_allocator::vulkan::AllocatorVisualizer,
+
     gpu_assets: GpuAssets,
     scene: SceneData,
 
@@ -374,6 +376,7 @@ struct App {
     open_settings: bool,
     open_shadow_debug_settings: bool,
     open_cluster_settings: bool,
+    open_allocator_visualizer: bool,
 }
 
 impl App {
@@ -559,6 +562,8 @@ impl App {
         context.swapchain.set_present_mode(settings.present_mode);
 
         Self {
+            allocator_visualizer: gpu_allocator::vulkan::AllocatorVisualizer::new(),
+
             gpu_assets,
             scene,
 
@@ -591,6 +596,7 @@ impl App {
             open_settings: false,
             open_shadow_debug_settings: false,
             open_cluster_settings: false,
+            open_allocator_visualizer: false,
         }
     }
 
@@ -652,6 +658,9 @@ impl App {
         }
         if input.key_pressed(KeyCode::F7) {
             self.open_cluster_settings = !self.open_cluster_settings;
+        }
+        if input.key_pressed(KeyCode::F8) {
+            self.open_allocator_visualizer = !self.open_allocator_visualizer;
         }
 
         fn drag_vec4(ui: &mut egui::Ui, label: &str, vec: &mut Vec4, speed: f32) {
@@ -780,6 +789,16 @@ impl App {
                 self.settings.edit_general(&context.device, ui);
             });
             self.shadow_renderer.update_settings(&self.settings.shadow_settings);
+        }
+
+        if self.open_allocator_visualizer {
+            let allocator_stuff = context.device.allocator_stuff.lock();
+            let allocator = &allocator_stuff.allocator;
+            self.allocator_visualizer.render_breakdown_window(egui_ctx, &allocator, &mut self.open_allocator_visualizer);
+            egui::Window::new("Allocator Memory Blocks")
+                .open(&mut self.open_allocator_visualizer)
+                .show(egui_ctx, |ui| self.allocator_visualizer.render_memory_block_ui(ui, &allocator));
+            self.allocator_visualizer.render_memory_block_visualization_windows(egui_ctx, &allocator);
         }
 
         context.swapchain.set_present_mode(self.settings.present_mode);

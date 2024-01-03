@@ -4,13 +4,13 @@ use ash::{
     extensions::{ext, khr},
     vk::{self, Handle},
 };
+use parking_lot::Mutex;
 
 use std::{
     collections::HashSet,
     ffi::{c_void, CStr, CString},
     mem::ManuallyDrop,
     ptr::NonNull,
-    sync::Mutex,
 };
 
 use gpu_allocator::{
@@ -328,9 +328,9 @@ impl AllocIndex {
     }
 }
 
-struct AllocatorStuff {
-    allocator: ManuallyDrop<Allocator>,
-    allocations: arena::Arena<Allocation>,
+pub struct AllocatorStuff {
+    pub allocator: ManuallyDrop<Allocator>,
+    pub allocations: arena::Arena<Allocation>,
 }
 
 pub struct Queue {
@@ -361,7 +361,7 @@ pub struct Device {
     pub queue_family_count: u32,
     queue_family_indices: [u32; 3],
 
-    allocator_stuff: Mutex<AllocatorStuff>,
+    pub allocator_stuff: Mutex<AllocatorStuff>,
 
     pub swapchain_fns: khr::Swapchain,
     pub mesh_shader_fns: Option<ext::MeshShader>,
@@ -916,7 +916,7 @@ impl Device {
         alloc_desc: &AllocationCreateDesc,
     ) -> (AllocIndex, vk::DeviceMemory, u64, Option<NonNull<u8>>) {
         puffin::profile_function!(alloc_desc.name);
-        let mut allocator_stuff = self.allocator_stuff.lock().unwrap();
+        let mut allocator_stuff = self.allocator_stuff.lock();
         let allocation = allocator_stuff.allocator.allocate(alloc_desc).expect("failed to allocate memory");
 
         let memory = unsafe { allocation.memory() };
@@ -930,7 +930,7 @@ impl Device {
 
     pub fn deallocate(&self, AllocIndex(index): AllocIndex) {
         puffin::profile_function!();
-        let mut allocator_stuff = self.allocator_stuff.lock().unwrap();
+        let mut allocator_stuff = self.allocator_stuff.lock();
         if let Some(allocation) = allocator_stuff.allocations.remove(index) {
             allocator_stuff.allocator.free(allocation).expect("failed to deallocate memory");
         }
@@ -1024,7 +1024,7 @@ impl Drop for Device {
                 self.raw.destroy_descriptor_set_layout(*descriptor_layout, None);
             }
 
-            ManuallyDrop::drop(&mut self.allocator_stuff.lock().unwrap().allocator);
+            ManuallyDrop::drop(&mut self.allocator_stuff.lock().allocator);
 
             self.raw.destroy_device(None);
 

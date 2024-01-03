@@ -201,8 +201,8 @@ pub type MeshHandle = arena::Index;
 pub type TextureHandle = arena::Index;
 pub type MaterialHandle = arena::Index;
 
+const MAX_MESH_COUNT: usize = 10_000;
 const MAX_VERTEX_COUNT: usize = 4_000_000;
-const MAX_INDEX_COUNT: usize = 12_000_000;
 const MAX_MATERIAL_COUNT: usize = 1_000;
 const MAX_MESHLET_COUNT: usize = 64_000;
 // 64 (meshlet vertex index), 24 (approx. micro index)
@@ -274,7 +274,7 @@ impl GpuAssets {
         let mesh_info_buffer = context.create_buffer(
             "mesh_info_buffer",
             &graphics::BufferDesc {
-                size: MAX_INDEX_COUNT * std::mem::size_of::<GpuMeshInfo>(),
+                size: MAX_MESH_COUNT * std::mem::size_of::<GpuMeshInfo>(),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: MemoryLocation::GpuOnly,
             },

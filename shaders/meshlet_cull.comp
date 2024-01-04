@@ -15,7 +15,6 @@
 
 layout(push_constant, std430) uniform PushConstants {
     uint meshlet_dispatch_buffer;
-	uint mesh_info_buffer;
 	uint meshlet_buffer;
     uint draw_commands_buffer;
 	uint entity_buffer;
@@ -111,7 +110,6 @@ void main() {
 	if (gl_LocalInvocationID.x >= dispatch.meshlet_count) return;
 
     uint meshlet_index = dispatch.meshlet_offset + gl_LocalInvocationID.x;
-	MeshInfo mesh_info = GetBuffer(MeshInfoBuffer, mesh_info_buffer).mesh_infos[dispatch.mesh_index];
     Meshlet meshlet = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index];
 	CullInfo cull_info = GetBuffer(CullInfoBuffer, cull_info_buffer).cull_info;
 
@@ -213,8 +211,10 @@ void main() {
 
 	// draw command fill
 	if (should_draw) {
-		uint data_offset = mesh_info.meshlet_data_offset + meshlet.data_offset;
-		uint vertex_offset = mesh_info.vertex_offset + meshlet.vertex_offset;
+		// uint data_offset = mesh_info.meshlet_data_offset + meshlet.data_offset;
+		// uint vertex_offset = mesh_info.vertex_offset + meshlet.vertex_offset;
+		uint data_offset = meshlet.data_offset;
+		uint vertex_offset = meshlet.vertex_offset;
 		MeshletDrawCommand draw_command;
 		draw_command.cmd_first_instance    = dispatch.entity_index;
 		draw_command.cmd_instance_count    = 1;

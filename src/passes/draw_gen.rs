@@ -340,7 +340,6 @@ pub fn create_draw_commands(
         .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
         .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
         .render(move |cmd, graph| {
-            let mesh_info_buffer = graph.get_buffer(assets.mesh_info_buffer);
             let meshlet_draw_command_buffer = graph.get_buffer(meshlet_draw_command_buffer);
             let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
             let entity_buffer = graph.get_buffer(scene.entity_buffer);
@@ -352,7 +351,6 @@ pub fn create_draw_commands(
 
             cmd.build_constants()
                 .buffer(meshlet_dispatch_buffer)
-                .buffer(mesh_info_buffer)
                 .buffer(meshlet_buffer)
                 .buffer(meshlet_draw_command_buffer)
                 .buffer(entity_buffer)

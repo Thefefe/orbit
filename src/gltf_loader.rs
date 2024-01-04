@@ -7,8 +7,8 @@ use image::EncodableLayout;
 
 use crate::{
     assets::{
-        compute_normals, compute_tangents, optimize_mesh, sep_vertex_merge, GpuAssets, MaterialData, MeshData,
-        MeshHandle, TextureHandle,
+        mesh::{compute_normals, compute_tangents, optimize_mesh, sep_vertex_merge, MeshData},
+        GpuAssets, MaterialData, MeshHandle, TextureHandle,
     },
     graphics,
     math::Aabb,
@@ -507,8 +507,11 @@ pub fn load_gltf(
     let mut mesh_data = MeshData::new();
     // let mut submeshes: Vec<Submesh> = Vec::new();
 
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
+    let mut input_vertices = Vec::new();
+    let mut input_indices = Vec::new();
+    let mut optimized_vertices = Vec::new();
+    let mut optimized_indices = Vec::new();
+    let mut remap_buffer = Vec::new();
 
     for mesh in document.meshes() {
         // submeshes.clear();
@@ -545,15 +548,16 @@ pub fn load_gltf(
             let vertex_iter = sep_vertex_merge(reader.read_positions().unwrap(), tex_coords, normals, tangents);
             let index_iter = reader.read_indices().unwrap().into_u32();
 
-            vertices.clear();
-            indices.clear();
-            vertices.extend(vertex_iter);
-            indices.extend(index_iter);
+            input_vertices.clear();
+            input_indices.clear();
+
+            input_vertices.extend(vertex_iter);
+            input_indices.extend(index_iter);
 
             if !have_normals {
                 log::info!("generating normals for model '{name}' primitive {prim_index}...");
                 // mesh_data.compute_normals();
-                compute_normals(&mut vertices, &mut indices);
+                compute_normals(&mut input_vertices, &mut input_indices);
                 have_normals = true;
             }
 
@@ -561,14 +565,14 @@ pub fn load_gltf(
                 if have_normals && have_uvs {
                     log::info!("generating tangents for model '{name}' primitive {prim_index}...");
                     // mesh_data.compute_tangents();
-                    compute_tangents(&mut vertices, &mut indices);
+                    compute_tangents(&mut input_vertices, &mut input_indices);
                 } else {
-                    log::warn!("can't generate tangents for '{name}' primitive {prim_index}, becouse it hase no uv coordinates");
+                    log::warn!("can't generate tangents for '{name}' primitive {prim_index}, because it has no uv coordinates");
                 }
             }
 
-            optimize_mesh(&mut vertices, &mut indices);
-            mesh_data.add_submesh(&vertices, &indices, material_index);
+            optimize_mesh(&input_vertices, &input_indices, &mut remap_buffer, &mut optimized_vertices, &mut optimized_indices);
+            mesh_data.add_submesh(&optimized_vertices, &optimized_indices, material_index);
 
             let bounding_box = primitive.bounding_box();
             mesh_data.aabb = Aabb::from_arrays(bounding_box.min, bounding_box.max);

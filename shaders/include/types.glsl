@@ -144,7 +144,6 @@ RegisterBuffer(MeshletDataBuffer, {
 
 struct MeshletDispatch {
     uint entity_index;
-    uint mesh_index;
     uint meshlet_offset;
     uint meshlet_count;
     uint visibility_offset;

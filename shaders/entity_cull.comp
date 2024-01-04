@@ -225,7 +225,6 @@ void main() {
 			for (uint dispatch_index = 0; dispatch_index < dispatch_count; dispatch_index++) {
 				MeshletDispatch dispatch;
     			dispatch.entity_index       = entity_draw.entity_index;
-    			dispatch.mesh_index         = entity_draw.mesh_index;
     			dispatch.meshlet_offset     = mesh_info.meshlet_offset + 32 * dispatch_index;
     			dispatch.meshlet_count      = min(mesh_info.meshlet_count - 32 * dispatch_index, 32);
     			dispatch.visibility_offset  = visibility_offset;

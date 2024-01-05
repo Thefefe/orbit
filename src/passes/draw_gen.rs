@@ -11,8 +11,8 @@ use crate::{
     Projection,
 };
 
-pub const MAX_DRAW_COUNT: usize = 1_000_000;
-pub const MAX_MESHLET_DISPATCH_COUNT: usize = 1_000_000 / 32;
+pub const MAX_DRAW_COUNT: usize = 2_000_000;
+pub const MAX_MESHLET_DISPATCH_COUNT: usize = 1_000_000;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum OcclusionCullInfo {
@@ -39,8 +39,14 @@ pub enum OcclusionCullInfo {
 impl OcclusionCullInfo {
     fn visibility_buffer(&self) -> Option<graphics::GraphBufferHandle> {
         match self {
-            OcclusionCullInfo::VisibilityRead { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
-            OcclusionCullInfo::VisibilityWrite { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
+            OcclusionCullInfo::VisibilityRead {
+                meshlet_visibility_buffer,
+                ..
+            } => *meshlet_visibility_buffer,
+            OcclusionCullInfo::VisibilityWrite {
+                meshlet_visibility_buffer,
+                ..
+            } => *meshlet_visibility_buffer,
             _ => None,
         }
     }
@@ -115,6 +121,111 @@ pub struct CullInfo<'a> {
     pub debug_print: bool,
 }
 
+impl CullInfo<'_> {
+    pub fn to_gpu(&self, context: &graphics::Context) -> GpuCullInfo {
+        let depth_pyramid_descriptor_index =
+            self.occlusion_culling.depth_pyramid().map(|i| context.get_resource_descriptor_index(i).unwrap());
+
+        let visibility_buffer_descriptor_index = self
+            .occlusion_culling
+            .visibility_buffer()
+            .map(|b| context.get_resource_descriptor_index(b).unwrap());
+
+        let meshlet_visibility_buffer_descriptor_index = self
+            .occlusion_culling
+            .meshlet_visibility_buffer()
+            .map(|b| context.get_resource_descriptor_index(b).unwrap());
+
+        let mut gpu_data = GpuCullInfo {
+            view_matrix: self.view_matrix,
+            cull_plane_count: self.view_space_cull_planes.len() as u32,
+
+            alpha_mode_flags: self.alpha_mode_filter.0,
+
+            occlusion_pass: self.occlusion_culling.pass_index(),
+            visibility_buffer: visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
+            meshlet_visibility_buffer: meshlet_visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
+            depth_pyramid: depth_pyramid_descriptor_index.unwrap_or(u32::MAX),
+
+            ..Default::default()
+        };
+
+        if self.view_space_cull_planes.len() > 0 {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    self.view_space_cull_planes.as_ptr(),
+                    gpu_data.cull_planes.as_mut_ptr(),
+                    self.view_space_cull_planes.len(),
+                );
+            }
+        }
+
+        if let OcclusionCullInfo::ShadowMask { aspect_ratio, .. } = self.occlusion_culling {
+            match self.projection {
+                Projection::Perspective { fov, near_clip } => {
+                    let f = 1.0 / f32::tan(0.5 * fov);
+                    gpu_data.projection_type = 0;
+                    gpu_data.p00_or_width_recip_x2 = f / aspect_ratio;
+                    gpu_data.p11_or_height_recip_x2 = f;
+                    gpu_data.z_near = near_clip;
+                }
+                Projection::Orthographic {
+                    half_width,
+                    near_clip,
+                    far_clip,
+                } => {
+                    let width = half_width * 2.0;
+                    let height = width * aspect_ratio.recip();
+                    gpu_data.projection_type = 1;
+                    gpu_data.p00_or_width_recip_x2 = width.recip() * 2.0;
+                    gpu_data.p11_or_height_recip_x2 = height.recip() * 2.0;
+                    gpu_data.z_near = near_clip;
+                    gpu_data.z_far = far_clip;
+                }
+            }
+        }
+
+        match self.projection {
+            Projection::Perspective { .. } => gpu_data.projection_type = 0,
+            Projection::Orthographic { .. } => gpu_data.projection_type = 1,
+        }
+
+        if let OcclusionCullInfo::VisibilityWrite {
+            aspect_ratio,
+            noskip_alphamode,
+            ..
+        } = self.occlusion_culling
+        {
+            gpu_data.noskip_alpha_mode = noskip_alphamode.0;
+
+            match self.projection {
+                Projection::Perspective { fov, near_clip } => {
+                    let f = 1.0 / f32::tan(0.5 * fov);
+                    gpu_data.projection_type = 0;
+                    gpu_data.p00_or_width_recip_x2 = f / aspect_ratio;
+                    gpu_data.p11_or_height_recip_x2 = f;
+                    gpu_data.z_near = near_clip;
+                }
+                Projection::Orthographic {
+                    half_width,
+                    near_clip,
+                    far_clip,
+                } => {
+                    let width = half_width * 2.0;
+                    let height = width * aspect_ratio.recip();
+                    gpu_data.projection_type = 1;
+                    gpu_data.p00_or_width_recip_x2 = width.recip() * 2.0;
+                    gpu_data.p11_or_height_recip_x2 = height.recip() * 2.0;
+                    gpu_data.z_near = near_clip;
+                    gpu_data.z_far = far_clip;
+                }
+            }
+        };
+
+        gpu_data
+    }
+}
+
 const MAX_CULL_PLANES: usize = 12;
 
 #[repr(C)]
@@ -176,106 +287,7 @@ pub fn create_draw_commands(
         )
     });
 
-    let depth_pyramid_descriptor_index = cull_info
-        .occlusion_culling
-        .depth_pyramid()
-        .map(|i| context.get_resource_descriptor_index(i).unwrap());
-
-    let visibility_buffer_descriptor_index = cull_info
-        .occlusion_culling
-        .visibility_buffer()
-        .map(|b| context.get_resource_descriptor_index(b).unwrap());
-    
-    let meshlet_visibility_buffer_descriptor_index = cull_info
-        .occlusion_culling
-        .meshlet_visibility_buffer()
-        .map(|b| context.get_resource_descriptor_index(b).unwrap());
-
-    let mut gpu_cull_info_data = GpuCullInfo {
-        view_matrix: cull_info.view_matrix,
-        cull_plane_count: cull_info.view_space_cull_planes.len() as u32,
-
-        alpha_mode_flags: cull_info.alpha_mode_filter.0,
-
-        occlusion_pass: cull_info.occlusion_culling.pass_index(),
-        visibility_buffer: visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
-        meshlet_visibility_buffer: meshlet_visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
-        depth_pyramid: depth_pyramid_descriptor_index.unwrap_or(u32::MAX),
-
-        ..Default::default()
-    };
-
-    if cull_info.view_space_cull_planes.len() > 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                cull_info.view_space_cull_planes.as_ptr(),
-                gpu_cull_info_data.cull_planes.as_mut_ptr(),
-                cull_info.view_space_cull_planes.len(),
-            );
-        }
-    }
-
-    if let OcclusionCullInfo::ShadowMask { aspect_ratio, .. } = cull_info.occlusion_culling {
-        match cull_info.projection {
-            Projection::Perspective { fov, near_clip } => {
-                let f = 1.0 / f32::tan(0.5 * fov);
-                gpu_cull_info_data.projection_type = 0;
-                gpu_cull_info_data.p00_or_width_recip_x2 = f / aspect_ratio;
-                gpu_cull_info_data.p11_or_height_recip_x2 = f;
-                gpu_cull_info_data.z_near = near_clip;
-            }
-            Projection::Orthographic {
-                half_width,
-                near_clip,
-                far_clip,
-            } => {
-                let width = half_width * 2.0;
-                let height = width * aspect_ratio.recip();
-                gpu_cull_info_data.projection_type = 1;
-                gpu_cull_info_data.p00_or_width_recip_x2 = width.recip() * 2.0;
-                gpu_cull_info_data.p11_or_height_recip_x2 = height.recip() * 2.0;
-                gpu_cull_info_data.z_near = near_clip;
-                gpu_cull_info_data.z_far = far_clip;
-            }
-        }
-    }
-
-    match cull_info.projection {
-        Projection::Perspective { .. } => gpu_cull_info_data.projection_type = 0,
-        Projection::Orthographic { .. } => gpu_cull_info_data.projection_type = 1,
-    }
-
-    if let OcclusionCullInfo::VisibilityWrite {
-        aspect_ratio,
-        noskip_alphamode,
-        ..
-    } = cull_info.occlusion_culling
-    {
-        gpu_cull_info_data.noskip_alpha_mode = noskip_alphamode.0;
-
-        match cull_info.projection {
-            Projection::Perspective { fov, near_clip } => {
-                let f = 1.0 / f32::tan(0.5 * fov);
-                gpu_cull_info_data.projection_type = 0;
-                gpu_cull_info_data.p00_or_width_recip_x2 = f / aspect_ratio;
-                gpu_cull_info_data.p11_or_height_recip_x2 = f;
-                gpu_cull_info_data.z_near = near_clip;
-            }
-            Projection::Orthographic {
-                half_width,
-                near_clip,
-                far_clip,
-            } => {
-                let width = half_width * 2.0;
-                let height = width * aspect_ratio.recip();
-                gpu_cull_info_data.projection_type = 1;
-                gpu_cull_info_data.p00_or_width_recip_x2 = width.recip() * 2.0;
-                gpu_cull_info_data.p11_or_height_recip_x2 = height.recip() * 2.0;
-                gpu_cull_info_data.z_near = near_clip;
-                gpu_cull_info_data.z_far = far_clip;
-            }
-        }
-    }
+    let gpu_cull_info_data = cull_info.to_gpu(context);
 
     let cull_info_buffer = context.transient_storage_data(
         format!("{draw_commands_name}_cull_data"),
@@ -291,8 +303,6 @@ pub fn create_draw_commands(
         "meshlet_cull_pipeline",
         graphics::ShaderSource::spv("shaders/meshlet_cull.comp.spv"),
     );
-
-    // let debug_print: u32 = if cull_info.debug_print { 1 } else { 0 };
 
     context
         .add_pass(format!("clearing_{draw_commands_name}_culling_buffer"))

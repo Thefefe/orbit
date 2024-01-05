@@ -380,7 +380,7 @@ impl ShadowRenderer {
         let mut pipeline_desc = graphics::RasterPipelineDesc::builder()
             .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
             .rasterizer(graphics::RasterizerDesc {
-                depth_clamp: true,
+                depth_clamp: false,
                 ..Default::default()
             })
             .depth_bias_dynamic()
@@ -912,7 +912,7 @@ fn shadow_pass_with_mask(
             .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
             .fragment_shader(graphics::ShaderSource::spv("shaders/shadow.frag.spv"))
             .rasterizer(graphics::RasterizerDesc {
-                depth_clamp: true,
+                depth_clamp: false,
                 ..Default::default()
             })
             .depth_bias_dynamic()
@@ -1013,7 +1013,7 @@ fn shadow_mask_pass_geom(
                 ..Default::default()
             }])
             .rasterizer(graphics::RasterizerDesc {
-                depth_clamp: true,
+                depth_clamp: false,
                 ..Default::default()
             })
             .depth_bias_dynamic()
@@ -1152,7 +1152,7 @@ fn shadow_mask_pass_frag(
             .vertex_shader(graphics::ShaderSource::spv("shaders/shadow_mask_frag.vert.spv"))
             .fragment_shader(graphics::ShaderSource::spv("shaders/shadow_mask_frag.frag.spv"))
             .rasterizer(graphics::RasterizerDesc {
-                depth_clamp: true,
+                depth_clamp: false,
                 ..Default::default()
             })
             .depth_bias_dynamic()

@@ -95,13 +95,23 @@ impl Iterator for SepVertexIter<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SubmeshData {
     pub vertex_offset: usize,
     pub vertex_count: usize,
     pub index_offset: usize,
     pub index_count: usize,
     pub material: MaterialHandle,
+}
+
+impl SubmeshData {
+    pub fn vertex_range(&self) -> std::ops::Range<usize> {
+        self.vertex_offset..self.vertex_offset+self.vertex_count
+    }
+
+    pub fn index_range(&self) -> std::ops::Range<usize> {
+        self.index_offset..self.index_offset+self.index_count
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -147,15 +157,6 @@ impl MeshData {
         });
 
         submesh_index
-    }
-
-    pub fn submeshes(&self) -> impl Iterator<Item = (&[GpuMeshVertex], &[u32], u32, MaterialHandle)> {
-        self.submeshes.iter().map(|submesh_data| (
-            &self.vertices[submesh_data.vertex_offset..submesh_data.vertex_offset+submesh_data.vertex_count],
-            &self.indices[submesh_data.index_offset..submesh_data.index_offset+submesh_data.index_count],
-            submesh_data.vertex_offset as u32,
-            submesh_data.material
-        ))
     }
 
     pub fn compute_bounds(&mut self) {

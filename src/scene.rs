@@ -300,12 +300,12 @@ pub struct SceneGraphData {
     pub meshlet_visibility_buffer: graphics::GraphBufferHandle,
 }
 
-const MAX_INSTANCE_COUNT: usize = 1_000_000;
+const MAX_INSTANCE_COUNT: usize = 100_000;
 const MAX_LIGHT_COUNT: usize = 2_000;
 
 struct Buffers {
     entity_data_buffer: graphics::Buffer,
-    submesh_buffer: graphics::Buffer,
+    entity_draw_buffer: graphics::Buffer,
     light_data_buffer: graphics::Buffer,
 }
 
@@ -340,7 +340,7 @@ impl Buffers {
 
         Self {
             entity_data_buffer,
-            submesh_buffer,
+            entity_draw_buffer: submesh_buffer,
             light_data_buffer,
         }
     }
@@ -471,14 +471,14 @@ impl SceneData {
             bytemuck::cast_slice(&self.entity_data_cache),
         );
 
-        let submesh_count = self.entity_draw_cache.len() as u32;
+        let entity_draw_count = self.entity_draw_cache.len() as u32;
         context.queue_write_buffer(
-            &self.frames[context.frame_index()].submesh_buffer,
+            &self.frames[context.frame_index()].entity_draw_buffer,
             0,
-            bytemuck::bytes_of(&submesh_count),
+            bytemuck::bytes_of(&entity_draw_count),
         );
         context.queue_write_buffer(
-            &self.frames[context.frame_index()].submesh_buffer,
+            &self.frames[context.frame_index()].entity_draw_buffer,
             4,
             bytemuck::cast_slice(&self.entity_draw_cache),
         );
@@ -493,7 +493,7 @@ impl SceneData {
     pub fn import_to_graph(&self, context: &mut graphics::Context) -> SceneGraphData {
         SceneGraphData {
             entity_draw_count: self.entity_draw_cache.len(),
-            entity_draw_buffer: context.import(&self.frames[context.frame_index()].submesh_buffer),
+            entity_draw_buffer: context.import(&self.frames[context.frame_index()].entity_draw_buffer),
             entity_buffer: context.import(&self.frames[context.frame_index()].entity_data_buffer),
             light_count: self.light_data_cache.len(),
             light_data_buffer: context.import(&self.frames[context.frame_index()].light_data_buffer),

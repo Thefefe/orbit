@@ -22,5 +22,4 @@ layout(push_constant, std430) uniform PushConstants {
     vec3 normal;                     \
     vec4 tangent;                    \
     flat uint material_index;        \
-    flat uint meshlet_index;         \
 }

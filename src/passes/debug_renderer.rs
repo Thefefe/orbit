@@ -5,7 +5,7 @@ use glam::{vec3, Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    assets::{GpuAssets, GpuMeshletDrawCommand}, collections::arena::Index, graphics, math, App, Camera, Settings,
+    assets::GpuAssets, collections::arena::Index, graphics::{self, GpuDrawIndiexedIndirectCommand}, math, App, Camera, Settings,
 };
 
 #[repr(C)]
@@ -38,7 +38,7 @@ pub struct DebugRenderer {
     line_vertices: Vec<GpuDebugLineVertex>,
     mesh_instances: Vec<GpuDebugMeshInstance>,
     mesh_draw_commands: Vec<DebugMeshDrawCommand>,
-    mesh_expanded_draw_commands: Vec<GpuMeshletDrawCommand>,
+    mesh_expanded_draw_commands: Vec<GpuDrawIndiexedIndirectCommand>,
 
     line_vertex_buffer: graphics::Buffer,
     mesh_instance_buffer: graphics::Buffer,
@@ -47,8 +47,8 @@ pub struct DebugRenderer {
 
 impl DebugRenderer {
     pub const MAX_VERTEX_COUNT: usize = 1_000_000;
-    pub const MAX_MESH_INSTANCE_COUNT: usize = 1_000_000;
-    pub const MAX_MESH_DRAW_COMMANDS: usize = 1_000_000;
+    pub const MAX_MESH_INSTANCE_COUNT: usize = 1_000;
+    pub const MAX_MESH_DRAW_COMMANDS: usize = 32_000;
     const CIRCLE_LINE_SEGMENTS: usize = 24;
 
     pub fn new(context: &mut graphics::Context) -> Self {
@@ -73,7 +73,7 @@ impl DebugRenderer {
         let mesh_draw_commands_buffer = context.create_buffer(
             "debug_mesh_draw_commands_buffer",
             &graphics::BufferDesc {
-                size: graphics::FRAME_COUNT * Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuMeshletDrawCommand>(),
+                size: graphics::FRAME_COUNT * Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuDrawIndiexedIndirectCommand>(),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::INDIRECT_BUFFER,
@@ -416,21 +416,21 @@ impl DebugRenderer {
 
         let mesh_instance_offset = Self::MAX_MESH_INSTANCE_COUNT * context.frame_index();
         let mesh_draw_commands_buffer_byte_offset =
-            Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuMeshletDrawCommand>() * context.frame_index();
+            Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuDrawIndiexedIndirectCommand>() * context.frame_index();
 
         self.mesh_expanded_draw_commands.clear();
         for draw_command in self.mesh_draw_commands.iter().copied() {
             // TODO: do the same, but with meshlets
-            // for submesh in assets.submesh_blocks(draw_command.model) {
-            //     self.mesh_expanded_draw_commands.push(GpuMeshDrawCommand {
-            //         index_count: submesh.index_count(),
-            //         instance_count: draw_command.instance_count,
-            //         first_index: submesh.index_offset(),
-            //         vertex_offset: submesh.vertex_offset(),
-            //         first_instance: mesh_instance_offset as u32 + draw_command.instance_start,
-            //         ..Default::default()
-            //     })
-            // }
+            for submesh in assets.mesh_infos[draw_command.mesh].submesh_infos.iter() {
+                self.mesh_expanded_draw_commands.push(GpuDrawIndiexedIndirectCommand {
+                    index_count: submesh.index_count,
+                    instance_count: draw_command.instance_count,
+                    first_index: submesh.index_offset,
+                    vertex_offset: submesh.vertex_offset as i32,
+                    first_instance: mesh_instance_offset as u32 + draw_command.instance_start,
+                    ..Default::default()
+                })
+            }
         }
 
         context.queue_write_buffer(
@@ -445,7 +445,7 @@ impl DebugRenderer {
         );
         context.queue_write_buffer(
             &self.mesh_draw_commands_buffer,
-            Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuMeshletDrawCommand>() * context.frame_index(),
+            Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuDrawIndiexedIndirectCommand>() * context.frame_index(),
             bytemuck::cast_slice(&self.mesh_expanded_draw_commands),
         );
         context.submit_pending();
@@ -583,42 +583,42 @@ impl DebugRenderer {
 
                 // meshes
                 if mesh_draw_commands_count > 0 {
-                    // let index_buffer = graph.get_buffer(assets.index_buffer);
-                    // let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
+                    let index_buffer = graph.get_buffer(assets.index_buffer);
+                    let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
 
-                    // let instance_buffer = graph.get_buffer(mesh_instance_buffer);
-                    // let draw_commands_buffer = graph.get_buffer(mesh_draw_commands_buffer);
+                    let instance_buffer = graph.get_buffer(mesh_instance_buffer);
+                    let draw_commands_buffer = graph.get_buffer(mesh_draw_commands_buffer);
 
-                    // cmd.bind_raster_pipeline(mesh_wireframe_pipeline);
-                    // cmd.bind_index_buffer(index_buffer, 0);
+                    cmd.bind_raster_pipeline(mesh_wireframe_pipeline);
+                    cmd.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
 
-                    // // back
-                    // // cmd.build_constants()
-                    // //     .mat4(&view_projection)
-                    // //     .buffer(vertex_buffer)
-                    // //     .buffer(instance_buffer)
-                    // //     .float(0.1);
-                    // // cmd.set_depth_test_enable(false);
-                    // // cmd.draw_indexed_indirect(
-                    // //     draw_commands_buffer,
-                    // //     0,
-                    // //     mesh_draw_commands_count as u32,
-                    // //     size_of::<GpuMeshDrawCommand>() as u32,
-                    // // );
-
-                    // // front
+                    // back
                     // cmd.build_constants()
                     //     .mat4(&view_projection_matrix)
                     //     .buffer(vertex_buffer)
                     //     .buffer(instance_buffer)
-                    //     .float(1.0);
-                    // cmd.set_depth_test_enable(true);
+                    //     .float(0.1);
+                    // cmd.set_depth_test_enable(false);
                     // cmd.draw_indexed_indirect(
                     //     draw_commands_buffer,
                     //     mesh_draw_commands_buffer_byte_offset as u64,
                     //     mesh_draw_commands_count as u32,
-                    //     size_of::<GpuMeshDrawCommand>() as u32,
+                    //     size_of::<GpuDrawIndiexedIndirectCommand>() as u32,
                     // );
+
+                    // front
+                    cmd.build_constants()
+                        .mat4(&view_projection_matrix)
+                        .buffer(vertex_buffer)
+                        .buffer(instance_buffer)
+                        .float(1.0);
+                    cmd.set_depth_test_enable(true);
+                    cmd.draw_indexed_indirect(
+                        draw_commands_buffer,
+                        mesh_draw_commands_buffer_byte_offset as u64,
+                        mesh_draw_commands_count as u32,
+                        size_of::<GpuDrawIndiexedIndirectCommand>() as u32,
+                    );
                 }
 
                 cmd.end_rendering();

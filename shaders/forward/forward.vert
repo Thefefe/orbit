@@ -26,6 +26,7 @@ void main() {
     vout.normal  = normalize(normal_matrix * vout.normal);
     vout.tangent = vec4(normalize(normal_matrix * vout.tangent.xyz), vout.tangent.w);
 
-    vout.meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[gl_DrawID].meshlet_index;
-    vout.material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[vout.meshlet_index].material_index;
+    uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[gl_DrawID].meshlet_index;
+    uint material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;
+    vout.material_index = GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode == 9 ? meshlet_index : material_index;
 }

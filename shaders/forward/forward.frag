@@ -263,10 +263,17 @@ float calc_mip_level(vec2 texture_coord) {
 }
 
 void main() {
-    uint render_mode = GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode;
+    if (GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode == 9) {
+        // reusing material_index as meshlet_index
+        uint hash = hash(vout.material_index);
+        vec3 mcolor = vec3(float(hash & 255), float((hash >> 8) & 255), float((hash >> 16) & 255)) / 255.0;
+        out_color = vec4(mcolor, 1.0);
+        
+        out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
+        return;
+    }
 
     out_color = vec4(1.0);
-
     uint alpha_mode;
     vec4  base_color;
     vec3  normal;
@@ -336,7 +343,7 @@ void main() {
     }
     
     // overdraw visualization
-    if (render_mode == 7) {
+    if (GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode == 7) {
         if (base_color.a < alpha_cutoff) {
             out_color = vec4(0.0);
         } else {
@@ -359,7 +366,7 @@ void main() {
     uint light_offset = cluster_slice.x;
     uint light_count = clamp(cluster_slice.y, 0, 256);
 
-    switch (render_mode) {
+    switch (GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode) {
         case 0:
             vec3 view_direction = normalize(GetBuffer(PerFrameBuffer, per_frame_buffer).view_pos - vout.world_pos.xyz);
             
@@ -561,13 +568,6 @@ void main() {
         case 8: 
             float norm_light_count = clamp(light_count / 32.0, 0.0, 1.0);
             out_color.xyz = colormap(norm_light_count).xyz;
-            break;
-        case 9:
-            uint hash = hash(vout.meshlet_index);
-            vec3 mcolor = vec3(float(hash & 255), float((hash >> 8) & 255), float((hash >> 16) & 255)) / 255.0;
-            out_color = vec4(mcolor, 1.0);
-            
-            out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
     }
 }

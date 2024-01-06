@@ -195,7 +195,7 @@ void main() {
 			sampled_depth = textureLod(
 				sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
 				(aabb.xy + aabb.zw) * 0.5,
-				log2(max(width, height))
+				floor(log2(max(width, height)))
 			).x;
 			visible = sphere_closest_depth >= sampled_depth;
 		}

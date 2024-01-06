@@ -6,13 +6,25 @@
 
 #extension GL_EXT_mesh_shader : require
 
-#include "forward_common.glsl"
-
 // TODO: use spec constants
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 64) out;
 
-layout(location = 0) out VERTEX_OUTPUT vout[];
+layout(push_constant) uniform PushConstants {
+    mat4 view_proj;
+    uint draw_command_buffer;
+    uint cull_info_buffer;
+    uint vertex_buffer;
+    uint meshlet_buffer;
+    uint meshlet_data_buffer;
+    uint entity_buffer;
+    uint materials_buffer;
+};
+
+layout(location = 0) out VertexOutput {
+    vec2 uv;
+    flat uint material_index;
+} vout[];
 
 taskPayloadSharedEXT MeshTaskPayload payload;
 
@@ -27,21 +39,13 @@ void main() {
     for (uint vi = gl_LocalInvocationID.x; vi < meshlet.vertex_count; vi += gl_WorkGroupSize.x) {
         uint vertex_index = meshlet.vertex_offset + GetBuffer(MeshletDataBuffer, meshlet_data_buffer).vertex_indices[meshlet.data_offset + vi];
         MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[vertex_index];
-        mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[entity_index].model_matrix;
-        vout[vi].world_pos = model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
-
-        gl_MeshVerticesEXT[vi].gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).view_projection * vout[vi].world_pos;
+        gl_MeshVerticesEXT[vi].gl_Position =
+            view_proj *
+            GetBuffer(EntityBuffer, entity_buffer).entities[entity_index].model_matrix * 
+            vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
         vout[vi].uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
-        
-        mat3 normal_matrix = mat3(GetBuffer(EntityBuffer, entity_buffer).entities[entity_index].normal_matrix);
-
-        unpack_normal_tangent(vertex.packed_normals, vout[vi].normal, vout[vi].tangent);
-        vout[vi].normal  = normalize(normal_matrix * vout[vi].normal);
-        vout[vi].tangent = vec4(normalize(normal_matrix * vout[vi].tangent.xyz), vout[vi].tangent.w);
-
-        uint material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;
-        vout[vi].material_index = GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode == 9 ? meshlet_index : material_index;
+        vout[vi].material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;
     }
 
     for (uint ti = gl_LocalInvocationID.x; ti < meshlet.triangle_count; ti += gl_WorkGroupSize.x) {

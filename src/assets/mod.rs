@@ -355,7 +355,7 @@ impl GpuAssets {
         context.queue_write_buffer(
             &self.index_buffer,
             index_range.start * 4,
-            index_bytes,
+            index_bytes ,
         );
         context.queue_write_buffer(
             &self.meshlet_data_buffer,

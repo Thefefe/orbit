@@ -142,6 +142,10 @@ RegisterBuffer(MeshletDataBuffer, {
     uint vertex_indices[];
 });
 
+RegisterBuffer(MeshletTriangleDataBuffer, {
+    uint8_t indices[];
+});
+
 struct MeshletDispatch {
     uint entity_index;
     uint meshlet_offset;
@@ -171,6 +175,12 @@ RegisterBuffer(MeshletDrawCommandBuffer, {
     uint count;
     MeshletDrawCommand draws[];
 });
+    
+struct MeshTaskPayload {
+    uint entity_index;
+    uint meshlet_offset;
+    uint8_t meshlet_indices[32];
+};
 
 struct CullInfo {
     mat4 view_matrix;

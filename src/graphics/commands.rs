@@ -453,6 +453,25 @@ impl<'a> CommandRecorder<'a> {
     }
 
     #[inline(always)]
+    pub fn draw_mesh_tasks_indirect(
+        &self,
+        indirect_buffer: &graphics::BufferView,
+        indirect_buffer_offset: vk::DeviceSize,
+        draw_count: u32,
+        stride: u32,
+    ) {
+        unsafe {
+            self.device.mesh_shader_fns.as_ref().expect("mesh shading isn't supported").cmd_draw_mesh_tasks_indirect(
+                self.buffer(),
+                indirect_buffer.handle,
+                indirect_buffer_offset,
+                draw_count,
+                stride
+            );
+        }
+    }
+
+    #[inline(always)]
     pub fn bind_compute_pipeline(&self, pipeline: graphics::ComputePipeline) {
         unsafe {
             self.device.raw.cmd_bind_pipeline(self.buffer(), vk::PipelineBindPoint::COMPUTE, pipeline.handle);

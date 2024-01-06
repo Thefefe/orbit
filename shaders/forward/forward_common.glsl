@@ -1,10 +1,12 @@
 layout(push_constant, std430) uniform PushConstants {
+    uint draw_command_buffer;
+	uint cull_info_buffer;
+
     uint per_frame_buffer;
     uint vertex_buffer;
     uint meshlet_buffer;
     uint meshlet_data_buffer;
     uint entity_buffer;
-    uint draw_commands_buffer;
     uint materials_buffer;
     uint cluster_buffer;
     uint light_count;

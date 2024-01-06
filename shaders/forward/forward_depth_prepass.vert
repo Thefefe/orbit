@@ -5,19 +5,18 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;
+    uint draw_command_buffer;
+    uint cull_info_buffer;
     uint vertex_buffer;
     uint meshlet_buffer;
     uint meshlet_data_buffer;
     uint entity_buffer;
-    uint draw_commands_buffer;
     uint materials_buffer;
 };
 
 layout(location = 0) out VertexOutput {
-    vec4 tangent;
-    vec3 normal;
-    flat uint material_index;
     vec2 uv;
+    flat uint material_index;
 } vout;
 
 // https://graphics.pixar.com/library/OrthonormalB/paper.pdf
@@ -49,7 +48,7 @@ void unpack_normal_tangent(i8vec4 packed, out vec3 n, out vec4 t) {
 
 void main() {
     uint vertex_index =
-        GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[gl_DrawID].meshlet_vertex_offset +
+        GetBuffer(MeshletDrawCommandBuffer, draw_command_buffer).draws[gl_DrawID].meshlet_vertex_offset +
         GetBuffer(MeshletDataBuffer, meshlet_data_buffer).vertex_indices[gl_VertexIndex];
     MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[vertex_index];
     mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].model_matrix;
@@ -57,12 +56,7 @@ void main() {
     gl_Position = view_proj * model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
     vout.uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
-    
-    mat3 normal_matrix = mat3(GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].normal_matrix);
 
-    unpack_normal_tangent(vertex.packed_normals, vout.normal, vout.tangent);
-    vout.normal  = normalize(normal_matrix * vout.normal);
-    vout.tangent = vec4(normalize(normal_matrix * vout.tangent.xyz), vout.tangent.w);
-    uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[gl_DrawID].meshlet_index;
+    uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_command_buffer).draws[gl_DrawID].meshlet_index;
     vout.material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;
 }

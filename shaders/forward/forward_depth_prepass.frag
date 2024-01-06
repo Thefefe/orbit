@@ -6,19 +6,18 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;
+    uint draw_command_buffer;
+    uint cull_info_buffer;
     uint vertex_buffer;
     uint meshlet_buffer;
     uint meshlet_data_buffer;
     uint entity_buffer;
-    uint draw_commands_buffer;
     uint materials_buffer;
 };
 
 layout(location = 0) in VertexOutput {
-    vec4 tangent;
-    vec3 normal;
-    flat uint material_index;
     vec2 uv;
+    flat uint material_index;
 } vout;
 
 layout(location = 0) out vec4 out_color;
@@ -34,7 +33,7 @@ float calc_mip_level(vec2 texture_coord) {
 }
 
 void main() {
-    out_color = vec4(vout.normal * 0.5 + 0.5, 1.0);
+    out_color = vec4(1.0);
 
     if (GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index].alpha_mode == 1) {
         float alpha_cutoff = GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index].alpha_cutoff;

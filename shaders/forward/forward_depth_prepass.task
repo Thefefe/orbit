@@ -6,8 +6,6 @@
 
 #extension GL_EXT_mesh_shader : require
 
-#include "forward_common.glsl"
-
 // #define USE_SUBGROUP_OPS
 
 #ifdef USE_SUBGROUP_OPS
@@ -99,9 +97,20 @@ bool coneCull(vec3 center, float radius, vec3 cone_axis, float cone_cutoff, vec3
 	return dot(center - camera_position, cone_axis) >= cone_cutoff * length(center - camera_position) + radius;
 }
 
-shared uint task_mesh_count;
+layout(push_constant) uniform PushConstants {
+    mat4 view_proj;
+    uint draw_command_buffer;
+    uint cull_info_buffer;
+    uint vertex_buffer;
+    uint meshlet_buffer;
+    uint meshlet_data_buffer;
+    uint entity_buffer;
+    uint materials_buffer;
+};
 
 taskPayloadSharedEXT MeshTaskPayload payload;
+
+shared uint task_mesh_count;
 
 void main() {
     MeshletDispatch dispatch = GetBuffer(MeshletDispatchBuffer, draw_command_buffer).dispatches[gl_GlobalInvocationID.x / 32];

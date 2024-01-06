@@ -373,6 +373,147 @@ pub fn create_draw_commands(
     meshlet_draw_command_buffer
 }
 
+pub fn create_meshlet_dispatch_command(
+    context: &mut graphics::Context,
+    draw_commands_name: Cow<'static, str>,
+    assets: AssetGraphData,
+    scene: SceneGraphData,
+    cull_info: &CullInfo,
+) -> (graphics::GraphBufferHandle, graphics::GraphBufferHandle) {
+    assert!(cull_info.view_space_cull_planes.len() <= MAX_CULL_PLANES);
+
+    let meshlet_dispatch_buffer = context.create_transient(
+        format!("{draw_commands_name}_meshlet_dispatch_buffer"),
+        graphics::BufferDesc {
+            size: MAX_MESHLET_DISPATCH_COUNT * 16,
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::INDIRECT_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_DST,
+            memory_location: MemoryLocation::GpuOnly,
+        },
+    );
+
+    let gpu_cull_info_data = cull_info.to_gpu(context);
+
+    let cull_info_buffer = context.transient_storage_data(
+        format!("{draw_commands_name}_cull_data"),
+        bytemuck::bytes_of(&gpu_cull_info_data),
+    );
+
+    let entity_cull_pipeline = context.create_compute_pipeline(
+        "entity_cull_pipeline",
+        graphics::ShaderSource::spv("shaders/entity_cull.comp.spv"),
+    );
+
+    context
+        .add_pass(format!("clearing_{draw_commands_name}_culling_buffer"))
+        .with_dependency(meshlet_dispatch_buffer, AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
+            cmd.fill_buffer(meshlet_dispatch_buffer, 0, 4, 0);
+            cmd.fill_buffer(meshlet_dispatch_buffer, 4, 8, 1);
+        });
+
+    context
+        .add_pass(format!("{draw_commands_name}_entity_culling"))
+        .with_dependency(scene.entity_draw_buffer, AccessKind::ComputeShaderRead)
+        .with_dependency(meshlet_dispatch_buffer, AccessKind::ComputeShaderWrite)
+        .with_dependency(cull_info_buffer, AccessKind::ComputeShaderRead)
+        .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
+        .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
+        .render(move |cmd, graph| {
+            let mesh_info_buffer = graph.get_buffer(assets.mesh_info_buffer);
+            let entity_draw_buffer = graph.get_buffer(scene.entity_draw_buffer);
+            let entity_buffer = graph.get_buffer(scene.entity_buffer);
+            let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
+            let cull_info_buffer = graph.get_buffer(cull_info_buffer);
+
+            cmd.bind_compute_pipeline(entity_cull_pipeline);
+
+            cmd.build_constants()
+                .buffer(entity_draw_buffer)
+                .buffer(mesh_info_buffer)
+                .buffer(meshlet_dispatch_buffer)
+                .buffer(entity_buffer)
+                .buffer(cull_info_buffer);
+
+            cmd.dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
+        });
+
+    (cull_info_buffer, meshlet_dispatch_buffer)
+}
+
+pub fn create_meshlet_draw_commands(
+    context: &mut graphics::Context,
+    draw_commands_name: Cow<'static, str>,
+    assets: AssetGraphData,
+    scene: SceneGraphData,
+    cull_info: &CullInfo,
+    meshlet_dispatch_buffer: graphics::GraphBufferHandle,
+) -> graphics::GraphBufferHandle {
+    assert!(cull_info.view_space_cull_planes.len() <= MAX_CULL_PLANES);
+
+    let meshlet_draw_command_buffer = context.create_transient(
+        draw_commands_name.clone(),
+        graphics::BufferDesc {
+            size: MAX_DRAW_COUNT * std::mem::size_of::<GpuMeshletDrawCommand>(),
+            usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::INDIRECT_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_DST,
+            memory_location: MemoryLocation::GpuOnly,
+        },
+    );
+
+    let gpu_cull_info_data = cull_info.to_gpu(context);
+    let cull_info_buffer = context.transient_storage_data(
+        format!("{draw_commands_name}_cull_data"),
+        bytemuck::bytes_of(&gpu_cull_info_data),
+    );
+
+    let meshlet_cull_pipeline = context.create_compute_pipeline(
+        "meshlet_cull_pipeline",
+        graphics::ShaderSource::spv("shaders/meshlet_cull.comp.spv"),
+    );
+
+    context
+        .add_pass(format!("clearing_{draw_commands_name}_culling_buffer"))
+        .with_dependency(meshlet_draw_command_buffer, AccessKind::ComputeShaderWrite)
+        .render(move |cmd, graph| {
+            let meshlet_draw_command_buffer = graph.get_buffer(meshlet_draw_command_buffer);
+            cmd.fill_buffer(meshlet_draw_command_buffer, 0, 4, 0);
+        });
+
+    context
+        .add_pass(format!("{draw_commands_name}_meshlet_culling"))
+        .with_dependency(meshlet_draw_command_buffer, AccessKind::ComputeShaderWrite)
+        .with_dependency(meshlet_dispatch_buffer, AccessKind::IndirectBuffer)
+        .with_dependency(cull_info_buffer, AccessKind::ComputeShaderRead)
+        .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
+        .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
+        .render(move |cmd, graph| {
+            let meshlet_draw_command_buffer = graph.get_buffer(meshlet_draw_command_buffer);
+            let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
+            let entity_buffer = graph.get_buffer(scene.entity_buffer);
+            let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
+            let cull_info_buffer = graph.get_buffer(cull_info_buffer);
+            let material_buffer = graph.get_buffer(assets.materials_buffer);
+
+            cmd.bind_compute_pipeline(meshlet_cull_pipeline);
+
+            cmd.build_constants()
+                .buffer(meshlet_dispatch_buffer)
+                .buffer(meshlet_buffer)
+                .buffer(meshlet_draw_command_buffer)
+                .buffer(entity_buffer)
+                .buffer(cull_info_buffer)
+                .buffer(material_buffer);
+
+            cmd.dispatch_indirect(meshlet_dispatch_buffer, 0);
+        });
+
+    meshlet_draw_command_buffer
+}
+
 pub struct DepthPyramid {
     pub pyramid: graphics::Image,
     pub usable: bool,

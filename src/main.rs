@@ -205,6 +205,8 @@ pub struct Settings {
     pub msaa: graphics::MultisampleCount,
     pub shadow_settings: ShadowSettings,
 
+    pub use_mesh_shading: bool,
+
     pub camera_debug_settings: CameraDebugSettings,
     pub cluster_settings: ClusterSettings,
     pub cluster_debug_settings: ClusterDebugSettings,
@@ -216,6 +218,8 @@ impl Default for Settings {
             present_mode: vk::PresentModeKHR::IMMEDIATE,
             msaa: Default::default(),
             shadow_settings: Default::default(),
+
+            use_mesh_shading: false,
 
             camera_debug_settings: Default::default(),
             cluster_settings: Default::default(),
@@ -253,6 +257,8 @@ impl Settings {
                 }
             });
         });
+
+        ui.add_enabled(device.mesh_shader_fns.is_some(), egui::Checkbox::new(&mut self.use_mesh_shading, "use mesh shading"));
 
         ui.heading("Shadow Settings");
         self.shadow_settings.edit(ui);
@@ -391,8 +397,12 @@ impl App {
         let mut gpu_assets = GpuAssets::new(context);
         let mut scene = SceneData::new(context);
 
-        let settings = Settings::default();
+        let mut settings = Settings::default();
         let mut shadow_renderer = ShadowRenderer::new(context, settings.shadow_settings);
+
+        if context.device.mesh_shader_fns.is_some() {
+            settings.use_mesh_shading = true;
+        }
 
         let sun_light_entity_index = scene.add_entity(EntityData {
             name: Some("sun".into()),
@@ -928,7 +938,7 @@ impl App {
                     .edit(ui, self.forward_renderer.depth_pyramid.pyramid.mip_level())
             });
 
-        self.forward_renderer.normal_depth_prepass(
+        self.forward_renderer.render_depth_prepass(
             context,
             &self.settings,
             assets,

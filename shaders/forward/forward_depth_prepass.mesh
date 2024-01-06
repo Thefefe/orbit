@@ -36,13 +36,11 @@ void main() {
 
     SetMeshOutputsEXT(meshlet.vertex_count, meshlet.triangle_count);
 
+    mat4 mvp_matrix = view_proj * GetBuffer(EntityBuffer, entity_buffer).entities[entity_index].model_matrix;
     for (uint vi = gl_LocalInvocationID.x; vi < meshlet.vertex_count; vi += gl_WorkGroupSize.x) {
         uint vertex_index = meshlet.vertex_offset + GetBuffer(MeshletDataBuffer, meshlet_data_buffer).vertex_indices[meshlet.data_offset + vi];
         MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[vertex_index];
-        gl_MeshVerticesEXT[vi].gl_Position =
-            view_proj *
-            GetBuffer(EntityBuffer, entity_buffer).entities[entity_index].model_matrix * 
-            vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+        gl_MeshVerticesEXT[vi].gl_Position = mvp_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
         vout[vi].uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
         vout[vi].material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;

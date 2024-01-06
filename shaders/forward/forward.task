@@ -214,12 +214,7 @@ void main() {
 
         // draw command fill
         if (should_draw) {
-#ifdef USE_SUBGROUP_OPS
-            // uint payload_index = subgroupInclusiveAdd(1);
             uint payload_index = atomicAdd(task_mesh_count, 1);
-#else
-            uint payload_index = atomicAdd(task_mesh_count, 1);
-#endif
             payload.meshlet_indices[payload_index] = uint8_t(gl_LocalInvocationID.x);
         }
     }

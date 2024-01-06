@@ -360,12 +360,14 @@ impl ForwardRenderer {
                 cmd.end_rendering();
             });
 
-        if !camera_frozen {
-            self.depth_pyramid.update(
-                context,
-                target_attachments.depth_resolve.unwrap_or(target_attachments.depth_target),
-            );
+        if camera_frozen || !occlusion_culling {
+            return;
         }
+
+        self.depth_pyramid.update(
+            context,
+            target_attachments.depth_resolve.unwrap_or(target_attachments.depth_target),
+        );
 
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
@@ -373,16 +375,14 @@ impl ForwardRenderer {
             view_matrix,
             view_space_cull_planes: if frustum_culling { &frustum_planes[0..5] } else { &[] },
             projection: frozen_camera.projection,
-            occlusion_culling: occlusion_culling
-                .then_some(OcclusionCullInfo::VisibilityWrite {
-                    visibility_buffer,
-                    meshlet_visibility_buffer,
-                    depth_pyramid,
-                    // noskip_alphamode: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
-                    noskip_alphamode: AlphaModeFlags::empty(),
-                    aspect_ratio: frozen_camera.aspect_ratio,
-                })
-                .unwrap_or_default(),
+            occlusion_culling: OcclusionCullInfo::VisibilityWrite {
+                visibility_buffer,
+                meshlet_visibility_buffer,
+                depth_pyramid,
+                // noskip_alphamode: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+                noskip_alphamode: AlphaModeFlags::empty(),
+                aspect_ratio: frozen_camera.aspect_ratio,
+            },
             alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
             debug_print: false,
         };

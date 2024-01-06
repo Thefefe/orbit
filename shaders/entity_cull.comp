@@ -204,16 +204,13 @@ void main() {
 			}
 		}
 
-		bool should_draw = true;
-			// visible && bool((1 << submesh.alpha_mode) & cull_info.alpha_mode_flag);
+		bool should_draw = visible;
 
 		// second occlusion pass: only proccess if submesh wasn't visible last frame
 		// if meshlet occlusion culling is enabled, also draw entities that were visible in the early pass
 		// so their newly visible meshlets can be rendered
-		if (((cull_info.occlusion_pass == 2 && !meshlet_occlusion_culling) || cull_info.occlusion_pass == 4)
-			// && !bool((1 << submesh.alpha_mode) & cull_info.noskip_alphamode)
-		) {
-			should_draw = visible && !visible_in_buffer;
+		if (cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4) {
+			should_draw = visible && (!visible_in_buffer || meshlet_occlusion_culling);
 		}
 
 		// draw command fill

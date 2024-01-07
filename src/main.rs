@@ -948,13 +948,9 @@ impl App {
             &self.frozen_camera,
         );
 
-        let camera_visibility_buffer = context.import(&self.forward_renderer.entity_visibility_buffer);
-
         self.shadow_renderer.render_shadows(
             context,
             &self.frozen_camera,
-            camera_visibility_buffer,
-            target_attachments.non_msaa_depth_target(),
             &self.gpu_assets,
             &self.scene,
             &mut self.debug_renderer,

@@ -123,9 +123,9 @@ void main() {
 	uint alpha_mode = GetBuffer(MaterialsBuffer, material_buffer).materials[meshlet.material_index].alpha_mode;
 	bool visible = true;
 	bool visible_in_buffer = true;
-	bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0;
+	bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0xFFFFFFFF;
 
-	if (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2) {
+	if ((cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2) && meshlet_occlusion_culling) {
 		uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[dispatch.visibility_offset];
 		visible_in_buffer = (visibility_bitset & (1 << gl_LocalInvocationID.x)) > 0;
 	}
@@ -229,7 +229,7 @@ void main() {
 	}
 
 	// update visibility buffer, only on second occlusion pass
-	if (cull_info.occlusion_pass == 2) {
+	if (cull_info.occlusion_pass == 2 && meshlet_occlusion_culling) {
 #ifdef USE_SUBGROUP_OPS
 		uvec4 visiblity_bitset = subgroupBallot(visible);
 		

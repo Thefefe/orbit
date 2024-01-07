@@ -39,24 +39,25 @@ pub enum OcclusionCullInfo {
 impl OcclusionCullInfo {
     fn visibility_buffer(&self) -> Option<graphics::GraphBufferHandle> {
         match self {
+            OcclusionCullInfo::None => None,
             OcclusionCullInfo::VisibilityRead {
-                meshlet_visibility_buffer,
+                visibility_buffer,
                 ..
-            } => *meshlet_visibility_buffer,
+            } => Some(*visibility_buffer),
             OcclusionCullInfo::VisibilityWrite {
-                meshlet_visibility_buffer,
+                visibility_buffer,
                 ..
-            } => *meshlet_visibility_buffer,
-            _ => None,
+            } => Some(*visibility_buffer),
+            OcclusionCullInfo::ShadowMask { visibility_buffer, .. } => Some(*visibility_buffer),
         }
     }
 
     fn meshlet_visibility_buffer(&self) -> Option<graphics::GraphBufferHandle> {
         match self {
             OcclusionCullInfo::None => None,
-            OcclusionCullInfo::VisibilityRead { visibility_buffer, .. } => Some(*visibility_buffer),
-            OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => Some(*visibility_buffer),
-            OcclusionCullInfo::ShadowMask { visibility_buffer, .. } => Some(*visibility_buffer),
+            OcclusionCullInfo::VisibilityRead { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
+            OcclusionCullInfo::VisibilityWrite { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
+            OcclusionCullInfo::ShadowMask { .. } => None,
         }
     }
 

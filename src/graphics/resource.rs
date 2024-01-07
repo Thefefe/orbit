@@ -77,8 +77,6 @@ impl AnyResource {
             return;
         }
 
-        log::info!("renaming {:?} to {:?}", self.name(), new_name.as_ref());
-
         match self {
             graphics::AnyResource::BufferOwned(buffer) => {
                 buffer.name = new_name;

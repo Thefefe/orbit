@@ -835,22 +835,23 @@ fn shadow_pass_with_mask(
         },
     );
 
+    let cull_info = CullInfo {
+        view_matrix: light_view_matrix.clone(),
+        view_space_cull_planes: culling_planes,
+        projection,
+        occlusion_culling: OcclusionCullInfo::VisibilityRead {
+            visibility_buffer: camera_visibility_buffer,
+            meshlet_visibility_buffer: None,
+        },
+        alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+        debug_print: false,
+    };
     let draw_commands = create_draw_commands(
         context,
         format!("{name}_mask_draw_commands").into(),
         assets,
         scene,
-        &CullInfo {
-            view_matrix: light_view_matrix.clone(),
-            view_space_cull_planes: culling_planes,
-            projection,
-            occlusion_culling: OcclusionCullInfo::VisibilityRead {
-                visibility_buffer: camera_visibility_buffer,
-                meshlet_visibility_buffer: None,
-            },
-            alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
-            debug_print: false,
-        },
+        &cull_info,
         None,
     );
 
@@ -886,23 +887,24 @@ fn shadow_pass_with_mask(
 
     shadow_mask_mip_reduce(context, shadow_mask);
 
+    let cull_info = CullInfo {
+        view_matrix: light_view_matrix.clone(),
+        view_space_cull_planes: culling_planes,
+        projection,
+        occlusion_culling: OcclusionCullInfo::ShadowMask {
+            visibility_buffer: camera_visibility_buffer,
+            shadow_mask,
+            aspect_ratio: 1.0,
+        },
+        alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+        debug_print: false,
+    };
     let draw_commands = create_draw_commands(
         context,
         format!("{name}_shadow_draw_commands").into(),
         assets,
         scene,
-        &CullInfo {
-            view_matrix: light_view_matrix.clone(),
-            view_space_cull_planes: culling_planes,
-            projection,
-            occlusion_culling: OcclusionCullInfo::ShadowMask {
-                visibility_buffer: camera_visibility_buffer,
-                shadow_mask,
-                aspect_ratio: 1.0,
-            },
-            alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
-            debug_print: false,
-        },
+        &cull_info,
         None,
     );
 

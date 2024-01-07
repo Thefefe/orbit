@@ -148,6 +148,8 @@ impl ForwardRenderer {
         );
 
         context.record_and_submit(|cmd| {
+            cmd.fill_buffer(&visibility_buffer, 0, MAX_DRAW_COUNT as _, 0);
+
             cmd.barrier(
                 &[],
                 &[graphics::image_barrier(
@@ -270,7 +272,7 @@ impl ForwardRenderer {
 
         let (cull_info_buffer, mut draw_commands_buffer) = create_meshlet_dispatch_command(
             context,
-            "early_forward_depth_prepass_meshlet_dispatch_command".into(),
+            "early_forward_depth_prepass".into(),
             assets,
             scene,
             &cull_info,
@@ -279,7 +281,7 @@ impl ForwardRenderer {
         if !mesh_shading {
             draw_commands_buffer = create_meshlet_draw_commands(
                 context,
-                "early_forward_depth_prepass_meshlet_draw_commands".into(),
+                "early_forward_depth_prepass".into(),
                 assets,
                 scene,
                 &cull_info,
@@ -360,14 +362,16 @@ impl ForwardRenderer {
                 cmd.end_rendering();
             });
 
-        if camera_frozen || !occlusion_culling {
+        if !occlusion_culling {
             return;
         }
 
-        self.depth_pyramid.update(
-            context,
-            target_attachments.depth_resolve.unwrap_or(target_attachments.depth_target),
-        );
+        if !camera_frozen {
+            self.depth_pyramid.update(
+                context,
+                target_attachments.depth_resolve.unwrap_or(target_attachments.depth_target),
+            );
+        }
 
         let depth_pyramid = self.depth_pyramid.get_current(context);
 
@@ -389,7 +393,7 @@ impl ForwardRenderer {
         
         let (cull_info_buffer, mut draw_commands_buffer) = create_meshlet_dispatch_command(
             context,
-            "late_forward_depth_prepass_meshlet_dispatch_command".into(),
+            "late_forward_depth_prepass".into(),
             assets,
             scene,
             &cull_info,
@@ -398,7 +402,7 @@ impl ForwardRenderer {
         if !mesh_shading {
             draw_commands_buffer = create_meshlet_draw_commands(
                 context,
-                "late_forward_depth_prepass_meshlet_draw_commands".into(),
+                "late_forward_depth_prepass".into(),
                 assets,
                 scene,
                 &cull_info,
@@ -572,7 +576,7 @@ impl ForwardRenderer {
 
         let (cull_info_buffer, mut draw_commands_buffer) = create_meshlet_dispatch_command(
             context,
-            "forward_meshlet_dispatch_command".into(),
+            "forward".into(),
             assets,
             scene,
             &cull_info,
@@ -581,7 +585,7 @@ impl ForwardRenderer {
         if !mesh_shading {
             draw_commands_buffer = create_meshlet_draw_commands(
                 context,
-                "forward_meshlet_draw_commands".into(),
+                "forward".into(),
                 assets,
                 scene,
                 &cull_info,

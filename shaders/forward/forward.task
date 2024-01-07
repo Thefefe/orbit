@@ -126,7 +126,7 @@ void main() {
 
         uint alpha_mode = GetBuffer(MaterialsBuffer, materials_buffer).materials[meshlet.material_index].alpha_mode;
         bool visible_in_buffer = true;
-        bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0;
+        bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0xFFFFFFFF;
 
         if (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2) {
             uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[dispatch.visibility_offset];

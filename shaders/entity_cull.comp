@@ -111,13 +111,12 @@ void main() {
 		
 		bool visible = true;
 		bool visible_in_buffer = true;
-		bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0;
+		bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0xFFFFFFFF;
 
 		if (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2 || cull_info.occlusion_pass == 4) {
 			uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).entries[gID / 32];
 			visible_in_buffer = (visibility_bitset & (1 << (gID % 32))) > 0;
 		}
-
 
 		// first occlusion pass: only proccess if submesh was visible last frame
 		if (cull_info.occlusion_pass == 1) visible = visible_in_buffer;

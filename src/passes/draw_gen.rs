@@ -29,11 +29,6 @@ pub enum OcclusionCullInfo {
         noskip_alphamode: AlphaModeFlags,
         aspect_ratio: f32,
     },
-    ShadowMask {
-        visibility_buffer: graphics::GraphBufferHandle,
-        shadow_mask: graphics::GraphImageHandle,
-        aspect_ratio: f32,
-    },
 }
 
 impl OcclusionCullInfo {
@@ -48,7 +43,6 @@ impl OcclusionCullInfo {
                 visibility_buffer,
                 ..
             } => Some(*visibility_buffer),
-            OcclusionCullInfo::ShadowMask { visibility_buffer, .. } => Some(*visibility_buffer),
         }
     }
 
@@ -57,7 +51,6 @@ impl OcclusionCullInfo {
             OcclusionCullInfo::None => None,
             OcclusionCullInfo::VisibilityRead { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
             OcclusionCullInfo::VisibilityWrite { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
-            OcclusionCullInfo::ShadowMask { .. } => None,
         }
     }
 
@@ -69,9 +62,6 @@ impl OcclusionCullInfo {
             }
             OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => {
                 Some((*visibility_buffer, AccessKind::ComputeShaderWrite))
-            }
-            OcclusionCullInfo::ShadowMask { visibility_buffer, .. } => {
-                Some((*visibility_buffer, AccessKind::ComputeShaderReadGeneral))
             }
         }
     }
@@ -95,7 +85,6 @@ impl OcclusionCullInfo {
             OcclusionCullInfo::None => None,
             OcclusionCullInfo::VisibilityRead { .. } => None,
             OcclusionCullInfo::VisibilityWrite { depth_pyramid, .. } => Some(*depth_pyramid),
-            OcclusionCullInfo::ShadowMask { shadow_mask, .. } => Some(*shadow_mask),
         }
     }
 
@@ -108,7 +97,6 @@ impl OcclusionCullInfo {
             OcclusionCullInfo::None => 0,
             OcclusionCullInfo::VisibilityRead { .. } => 1,
             OcclusionCullInfo::VisibilityWrite { .. } => 2,
-            OcclusionCullInfo::ShadowMask { .. } => 4,
         }
     }
 }
@@ -158,31 +146,6 @@ impl CullInfo<'_> {
                     gpu_data.cull_planes.as_mut_ptr(),
                     self.view_space_cull_planes.len(),
                 );
-            }
-        }
-
-        if let OcclusionCullInfo::ShadowMask { aspect_ratio, .. } = self.occlusion_culling {
-            match self.projection {
-                Projection::Perspective { fov, near_clip } => {
-                    let f = 1.0 / f32::tan(0.5 * fov);
-                    gpu_data.projection_type = 0;
-                    gpu_data.p00_or_width_recip_x2 = f / aspect_ratio;
-                    gpu_data.p11_or_height_recip_x2 = f;
-                    gpu_data.z_near = near_clip;
-                }
-                Projection::Orthographic {
-                    half_width,
-                    near_clip,
-                    far_clip,
-                } => {
-                    let width = half_width * 2.0;
-                    let height = width * aspect_ratio.recip();
-                    gpu_data.projection_type = 1;
-                    gpu_data.p00_or_width_recip_x2 = width.recip() * 2.0;
-                    gpu_data.p11_or_height_recip_x2 = height.recip() * 2.0;
-                    gpu_data.z_near = near_clip;
-                    gpu_data.z_far = far_clip;
-                }
             }
         }
 

@@ -12,12 +12,15 @@ use crate::{
     graphics::{self, FRAME_COUNT},
     math,
     scene::{SceneData, SceneGraphData},
-    Camera, Projection, MAX_SHADOW_CASCADE_COUNT,
+    Camera, Projection, Settings, MAX_SHADOW_CASCADE_COUNT,
 };
 
 use super::{
     debug_renderer::DebugRenderer,
-    draw_gen::{create_draw_commands, AlphaModeFlags, CullInfo, OcclusionCullInfo, MAX_DRAW_COUNT},
+    draw_gen::{
+        create_meshlet_dispatch_command, create_meshlet_draw_commands, AlphaModeFlags, CullInfo,
+        OcclusionCullInfo, MAX_DRAW_COUNT,
+    },
 };
 
 #[repr(C)]
@@ -227,9 +230,7 @@ impl ShadowRenderer {
 
         if let Some(shadow_index) = self.debug_settings.selected_shadow {
             match &self.rendered_shadows[shadow_index] {
-                RenderedShadow::Cascaded {
-                    shadow_maps,
-                } => {
+                RenderedShadow::Cascaded { shadow_maps } => {
                     ui.checkbox(
                         &mut self.debug_settings.show_cascade_view_frustum,
                         "show cascade view frustum",
@@ -284,6 +285,7 @@ impl ShadowRenderer {
     pub fn render_shadows(
         &mut self,
         context: &mut graphics::Context,
+        global_settings: &Settings,
 
         camera: &Camera,
 
@@ -304,6 +306,7 @@ impl ShadowRenderer {
                 ShadowKind::Directional { orientation } => {
                     self.render_cascaded_shadow(
                         context,
+                        global_settings,
                         &mut shadow_data,
                         shadow_command.name.clone(),
                         shadow_index,
@@ -339,9 +342,10 @@ impl ShadowRenderer {
 
         shadow_map: graphics::GraphImageHandle,
         view_projection: Mat4,
-        draw_commands: graphics::GraphBufferHandle,
+        cull_info: &CullInfo,
         clear: bool,
         fragment_shader: bool,
+        mesh_shading: bool,
 
         assets: AssetGraphData,
         scene: SceneGraphData,
@@ -349,7 +353,6 @@ impl ShadowRenderer {
         let settings = self.settings;
 
         let mut pipeline_desc = graphics::RasterPipelineDesc::builder()
-            .vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"))
             .rasterizer(graphics::RasterizerDesc {
                 depth_clamp: false,
                 ..Default::default()
@@ -366,19 +369,34 @@ impl ShadowRenderer {
             pipeline_desc = pipeline_desc.fragment_shader(graphics::ShaderSource::spv("shaders/shadow.frag.spv"));
         }
 
-        let pipeline = context.create_raster_pipeline(
-            if fragment_shader {
-                "shadow_pipeline"
-            } else {
-                "shadow_opaque_only_pipeline"
-            },
-            &pipeline_desc,
-        );
+        if mesh_shading {
+            pipeline_desc = pipeline_desc
+                .task_shader(graphics::ShaderSource::spv("shaders/shadow.task.spv"))
+                .mesh_shader(graphics::ShaderSource::spv("shaders/shadow.mesh.spv"));
+        } else {
+            pipeline_desc = pipeline_desc.vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"));
+        }
+
+        let pipeline = context.create_raster_pipeline("shadow_pipeline", &pipeline_desc);
+
+        let (cull_info_buffer, mut draw_commands_buffer) =
+            create_meshlet_dispatch_command(context, "shadow".into(), assets, scene, &cull_info);
+
+        if !mesh_shading {
+            draw_commands_buffer = create_meshlet_draw_commands(
+                context,
+                "shadow".into(),
+                assets,
+                scene,
+                &cull_info,
+                draw_commands_buffer,
+            );
+        }
 
         context
             .add_pass(pass_name)
             .with_dependency(shadow_map, graphics::AccessKind::DepthAttachmentWrite)
-            .with_dependency(draw_commands, graphics::AccessKind::IndirectBuffer)
+            .with_dependency(draw_commands_buffer, graphics::AccessKind::IndirectBuffer)
             .render(move |cmd, graph| {
                 let shadow_map = graph.get_image(shadow_map);
 
@@ -386,8 +404,9 @@ impl ShadowRenderer {
                 let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
                 let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
                 let entity_buffer = graph.get_buffer(scene.entity_buffer);
-                let draw_commands_buffer = graph.get_buffer(draw_commands);
                 let materials_buffer = graph.get_buffer(assets.materials_buffer);
+                let draw_commands_buffer = graph.get_buffer(draw_commands_buffer);
+                let cull_info_buffer = graph.get_buffer(cull_info_buffer);
 
                 let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
                     .image_view(shadow_map.view)
@@ -410,8 +429,6 @@ impl ShadowRenderer {
                 cmd.begin_rendering(&rendering_info);
 
                 cmd.bind_raster_pipeline(pipeline);
-                cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
-
                 // negative becouse of reverse-z projection
                 cmd.set_depth_bias(
                     -settings.depth_bias_constant_factor,
@@ -421,21 +438,28 @@ impl ShadowRenderer {
 
                 cmd.build_constants()
                     .mat4(&view_projection)
+                    .buffer(draw_commands_buffer)
+                    .buffer(cull_info_buffer)
                     .buffer(vertex_buffer)
                     .buffer(meshlet_buffer)
                     .buffer(meshlet_data_buffer)
                     .buffer(entity_buffer)
-                    .buffer(draw_commands_buffer)
                     .buffer(materials_buffer);
 
-                cmd.draw_indexed_indirect_count(
-                    draw_commands_buffer,
-                    4,
-                    draw_commands_buffer,
-                    0,
-                    MAX_DRAW_COUNT as u32,
-                    std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
-                );
+                if mesh_shading {
+                    cmd.draw_mesh_tasks_indirect(draw_commands_buffer, 0, 1, 0);
+                } else {
+                    cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
+                    cmd.draw_indexed_indirect_count(
+                        draw_commands_buffer,
+                        4,
+                        draw_commands_buffer,
+                        0,
+                        MAX_DRAW_COUNT as u32,
+                        std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
+                    );
+                }
+
 
                 cmd.end_rendering();
             });
@@ -444,6 +468,7 @@ impl ShadowRenderer {
     pub fn render_cascaded_shadow(
         &mut self,
         context: &mut graphics::Context,
+        global_settings: &Settings,
         shadow_data: &mut GpuCascadedShadowData,
         name: Cow<'static, str>,
         shadow_index: usize,
@@ -694,11 +719,11 @@ impl ShadowRenderer {
                 far_clip,
             };
 
-            let draw_commands = create_draw_commands(
+            self.render_shadow_map(
                 context,
-                format!("{shadow_map_name}_shadow_draw_commands").into(),
-                imported_assets,
-                imported_scene,
+                format!("{shadow_map_name}_shadow_pass").into(),
+                shadow_map,
+                light_projection_matrix,
                 &CullInfo {
                     view_matrix: light_matrix,
                     view_space_cull_planes: culling_planes,
@@ -707,17 +732,9 @@ impl ShadowRenderer {
                     alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                     debug_print: false,
                 },
-                None,
-            );
-
-            self.render_shadow_map(
-                context,
-                format!("{shadow_map_name}_shadow_pass").into(),
-                shadow_map,
-                light_projection_matrix,
-                draw_commands,
                 true,
                 true,
+                global_settings.use_mesh_shading,
                 imported_assets,
                 imported_scene,
             );

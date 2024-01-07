@@ -950,6 +950,7 @@ impl App {
 
         self.shadow_renderer.render_shadows(
             context,
+            &self.settings,
             &self.frozen_camera,
             &self.gpu_assets,
             &self.scene,

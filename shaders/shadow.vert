@@ -5,11 +5,12 @@
 
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;
+    uint draw_command_buffer;
+    uint cull_info_buffer;
     uint vertex_buffer;
     uint meshlet_buffer;
     uint meshlet_data_buffer;
     uint entity_buffer;
-    uint draw_commands_buffer;
     uint materials_buffer;
 };
 
@@ -20,7 +21,7 @@ layout(location = 0) out VertexOutput {
 
 void main() {
     uint vertex_index =
-        GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[gl_DrawID].meshlet_vertex_offset +
+        GetBuffer(MeshletDrawCommandBuffer, draw_command_buffer).draws[gl_DrawID].meshlet_vertex_offset +
         GetBuffer(MeshletDataBuffer, meshlet_data_buffer).vertex_indices[gl_VertexIndex];
     float pos_array[3] = GetBuffer(VertexBuffer, vertex_buffer).vertices[vertex_index].position;
     vec3 pos = vec3(pos_array[0], pos_array[1], pos_array[2]);
@@ -29,6 +30,6 @@ void main() {
 
     float uv_array[2] = GetBuffer(VertexBuffer, vertex_buffer).vertices[vertex_index].uv_coord;
     vout.uv = vec2(uv_array[0], uv_array[1]);
-    uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_commands_buffer).draws[gl_DrawID].meshlet_index;
+    uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_command_buffer).draws[gl_DrawID].meshlet_index;
     vout.material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;
 }

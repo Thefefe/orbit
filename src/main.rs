@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-use std::f32::consts::PI;
+use std::{f32::consts::PI, ops::Range};
 
 use ash::vk;
-use assets::GpuAssets;
+use assets::{GpuAssets, MAX_MESH_LODS};
 use gltf_loader::load_gltf;
 
 use time::Time;
@@ -206,6 +206,10 @@ pub struct Settings {
     pub shadow_settings: ShadowSettings,
 
     pub use_mesh_shading: bool,
+    pub min_mesh_lod: usize,
+    pub max_mesh_lod: usize,
+    pub lod_base: f32,
+    pub lod_step: f32,
 
     pub camera_debug_settings: CameraDebugSettings,
     pub cluster_settings: ClusterSettings,
@@ -221,6 +225,11 @@ impl Default for Settings {
 
             use_mesh_shading: false,
 
+            min_mesh_lod: 0,
+            max_mesh_lod: 7,
+            lod_base: 10.0,
+            lod_step: 2.5,
+
             camera_debug_settings: Default::default(),
             cluster_settings: Default::default(),
             cluster_debug_settings: Default::default(),
@@ -229,6 +238,10 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn lod_range(&self) -> Range<usize> {
+        self.min_mesh_lod..self.max_mesh_lod + 1
+    }
+
     pub fn edit_general(&mut self, device: &graphics::Device, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let present_mode_display = |p: vk::PresentModeKHR| match p {
@@ -258,7 +271,29 @@ impl Settings {
             });
         });
 
-        ui.add_enabled(device.mesh_shader_fns.is_some(), egui::Checkbox::new(&mut self.use_mesh_shading, "use mesh shading"));
+        ui.add_enabled(
+            device.mesh_shader_fns.is_some(),
+            egui::Checkbox::new(&mut self.use_mesh_shading, "use mesh shading"),
+        );
+
+        ui.horizontal(|ui| {
+            ui.label("min mesh lod");
+            ui.add(egui::Slider::new(&mut self.min_mesh_lod, 0..=self.max_mesh_lod.min(MAX_MESH_LODS - 1)));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("max mesh lod");
+            ui.add(egui::Slider::new(&mut self.max_mesh_lod, 0.max(self.min_mesh_lod)..=MAX_MESH_LODS - 1));
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("lod base");
+            ui.add(egui::DragValue::new(&mut self.lod_base));
+        });
+        ui.horizontal(|ui| {
+            ui.label("lod step");
+            ui.add(egui::DragValue::new(&mut self.lod_step));
+        });
 
         ui.heading("Shadow Settings");
         self.shadow_settings.edit(ui);
@@ -800,10 +835,16 @@ impl App {
         if self.open_allocator_visualizer {
             let allocator_stuff = context.device.allocator_stuff.lock();
             let allocator = &allocator_stuff.allocator;
-            self.allocator_visualizer.render_breakdown_window(egui_ctx, &allocator, &mut self.open_allocator_visualizer);
+            self.allocator_visualizer.render_breakdown_window(
+                egui_ctx,
+                &allocator,
+                &mut self.open_allocator_visualizer,
+            );
             egui::Window::new("Allocator Memory Blocks")
                 .open(&mut self.open_allocator_visualizer)
-                .show(egui_ctx, |ui| self.allocator_visualizer.render_memory_block_ui(ui, &allocator));
+                .show(egui_ctx, |ui| {
+                    self.allocator_visualizer.render_memory_block_ui(ui, &allocator)
+                });
             self.allocator_visualizer.render_memory_block_visualization_windows(egui_ctx, &allocator);
         }
 
@@ -1048,15 +1089,10 @@ impl App {
 
                     let z_near = 0.01;
 
-                    if let Some(aabb) =
-                        math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11)
+                    if let Some(aabb) = math::project_sphere_clip_space(position_view.extend(radius), z_near, p00, p11)
                     {
                         if show_bounding_spheres {
-                            self.debug_renderer.draw_sphere(
-                                position_world.into(),
-                                radius,
-                                vec4(0.0, 1.0, 0.0, 1.0),
-                            );
+                            self.debug_renderer.draw_sphere(position_world.into(), radius, vec4(0.0, 1.0, 0.0, 1.0));
                         }
 
                         if show_screen_space_aabbs {
@@ -1075,11 +1111,7 @@ impl App {
                             self.debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                         }
                     } else if show_bounding_spheres {
-                        self.debug_renderer.draw_sphere(
-                            position_world.into(),
-                            radius,
-                            vec4(1.0, 0.0, 0.0, 1.0),
-                        );
+                        self.debug_renderer.draw_sphere(position_world.into(), radius, vec4(1.0, 0.0, 0.0, 1.0));
                     }
                 }
             }

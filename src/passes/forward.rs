@@ -1,5 +1,5 @@
 use ash::vk;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, vec3};
 use rand::prelude::Distribution;
 
 use crate::{
@@ -148,8 +148,6 @@ impl ForwardRenderer {
         );
 
         context.record_and_submit(|cmd| {
-            cmd.fill_buffer(&visibility_buffer, 0, MAX_DRAW_COUNT as _, 0);
-
             cmd.barrier(
                 &[],
                 &[graphics::image_barrier(
@@ -267,7 +265,13 @@ impl ForwardRenderer {
                 })
                 .unwrap_or_default(),
             alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+            
             debug_print: false,
+            
+            lod_range: settings.lod_range(),
+            lod_base: settings.lod_base,
+            lod_step: settings.lod_step,
+            lod_target_pos_view_space: vec3(0.0, 0.0, 0.0),
         };
 
         let (cull_info_buffer, mut draw_commands_buffer) = create_meshlet_dispatch_command(
@@ -388,6 +392,10 @@ impl ForwardRenderer {
                 aspect_ratio: frozen_camera.aspect_ratio,
             },
             alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+            lod_range: settings.lod_range(),
+            lod_base: settings.lod_base,
+            lod_step: settings.lod_step,
+            lod_target_pos_view_space: vec3(0.0, 0.0, 0.0),
             debug_print: false,
         };
         
@@ -571,6 +579,10 @@ impl ForwardRenderer {
                 })
                 .unwrap_or_default(),
             alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
+            lod_range: settings.lod_range(),
+            lod_base: settings.lod_base,
+            lod_step: settings.lod_step,
+            lod_target_pos_view_space: vec3(0.0, 0.0, 0.0),
             debug_print: false,
         };
 

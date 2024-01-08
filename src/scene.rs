@@ -421,7 +421,7 @@ impl SceneData {
                 let visibility_offset = if let Some(v) = entity.visibility_buffer_range {
                     v.range.start
                 } else {
-                    let meshlet_count = assets.mesh_infos[mesh].meshlet_range.size();
+                    let meshlet_count = assets.mesh_infos[mesh].mesh_lods[0].meshlet_count as usize;
                     let (alloc_index, range) =
                         self.meshlet_visibility_allocator.allocate(meshlet_count.div_ceil(32)).unwrap();
                     entity.visibility_buffer_range = Some(VisibilityBufferRange { alloc_index, range });

@@ -1,7 +1,7 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, ops::Range};
 
 use ash::vk;
-use glam::{Mat4, Vec4};
+use glam::{Mat4, Vec4, Vec3};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
@@ -107,6 +107,12 @@ pub struct CullInfo<'a> {
     pub projection: Projection,
     pub occlusion_culling: OcclusionCullInfo,
     pub alpha_mode_filter: AlphaModeFlags,
+    
+    pub lod_range: Range<usize>,
+    pub lod_base: f32,
+    pub lod_step: f32,
+    pub lod_target_pos_view_space: Vec3,
+    
     pub debug_print: bool,
 }
 
@@ -135,6 +141,12 @@ impl CullInfo<'_> {
             visibility_buffer: visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
             meshlet_visibility_buffer: meshlet_visibility_buffer_descriptor_index.unwrap_or(u32::MAX),
             depth_pyramid: depth_pyramid_descriptor_index.unwrap_or(u32::MAX),
+
+            min_mesh_lod: self.lod_range.start as u32,
+            max_mesh_lod: self.lod_range.end as u32 - 1,
+            lod_base: self.lod_base,
+            lod_step: self.lod_step,
+            lod_target_pos_view_space: self.lod_target_pos_view_space,
 
             ..Default::default()
         };
@@ -198,12 +210,12 @@ pub struct GpuCullInfo {
     view_matrix: Mat4,
     reprojection_matrix: Mat4,
     cull_planes: [Vec4; MAX_CULL_PLANES],
+    
     cull_plane_count: u32,
-
     alpha_mode_flags: u32,
     noskip_alpha_mode: u32,
-
     occlusion_pass: u32,
+
     visibility_buffer: u32,
     meshlet_visibility_buffer: u32,
     depth_pyramid: u32,
@@ -213,8 +225,14 @@ pub struct GpuCullInfo {
     p00_or_width_recip_x2: f32,
     p11_or_height_recip_x2: f32,
     z_near: f32,
+    
     z_far: f32,
-    _padding: [u32; 3],
+    lod_base: f32,
+    lod_step: f32,
+    min_mesh_lod: u32,
+    
+    lod_target_pos_view_space: Vec3,
+    max_mesh_lod: u32,
 }
 
 pub fn create_draw_commands(

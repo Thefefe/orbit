@@ -1,6 +1,7 @@
 #include "common.glsl"
 
 #define MAX_SHADOW_CASCADE_COUNT 4
+#define MAX_MESH_LODS 8
 
 struct GlobalData {
     ivec2 screen_size;
@@ -114,13 +115,19 @@ struct Aabb {
     vec4 max_pos;  
 };
 
+struct MeshLod {
+    uint meshlet_offset;
+    uint meshlet_count;
+};
+
 struct MeshInfo {
     vec4 bounding_sphere;
     Aabb aabb;
     uint vertex_offset;
     uint meshlet_data_offset;
-    uint meshlet_offset;
-    uint meshlet_count;
+    uint lod_count;
+    uint _padding;
+    MeshLod mesh_lods[MAX_MESH_LODS];
 };
 
 struct Meshlet {
@@ -202,6 +209,12 @@ struct CullInfo {
     float p11_or_height_recipx2;
     float z_near;
     float z_far;
+    
+    float lod_base;
+    float lod_step;
+    uint  min_mesh_lod;
+    vec3  lod_target_pos_view_space;
+    uint  max_mesh_lod;
 };
 
 struct EguiVertex {

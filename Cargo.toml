@@ -39,4 +39,4 @@ parking_lot = "0.12.1"
 smallvec = "1.11.2"
 
 # crates.io version is outdated
-meshopt = { git = "https://github.com/gwihlidal/meshopt-rs.git", rev = "a342382" }
+meshopt2 = "0.2.0"

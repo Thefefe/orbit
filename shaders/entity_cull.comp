@@ -200,15 +200,25 @@ void main() {
 
 		// draw command fill
 		if (should_draw) {
-			uint dispatch_count = (mesh_info.meshlet_count + 32 - 1) / 32;
+			float lod_distance = distance(cull_info.lod_target_pos_view_space, bounding_sphere_view_space.xyz);
+			float lod_index_f = log2(lod_distance / cull_info.lod_base) / log2(cull_info.lod_step);
+			uint lod_index = clamp(
+				uint(max(lod_index_f + 1, 0)),
+				cull_info.min_mesh_lod,
+				min(cull_info.max_mesh_lod, mesh_info.lod_count - 1)
+			);
+
+			MeshLod mesh_lod = mesh_info.mesh_lods[lod_index];
+			// MeshLod mesh_lod = mesh_info.mesh_lods[min(cull_info.min_mesh_lod, mesh_info.lod_count - 1)];
+			uint dispatch_count = (mesh_lod.meshlet_count + 32 - 1) / 32;
 			uint dispatch_offset = atomicAdd(GetBuffer(MeshletDispatchBuffer, meshlet_dispatch_buffer).workgroup_count_x, dispatch_count);
 			uint visibility_offset = entity_draw.visibility_offset;
 
 			for (uint dispatch_index = 0; dispatch_index < dispatch_count; dispatch_index++) {
 				MeshletDispatch dispatch;
     			dispatch.entity_index       = entity_draw.entity_index;
-    			dispatch.meshlet_offset     = mesh_info.meshlet_offset + 32 * dispatch_index;
-    			dispatch.meshlet_count      = min(mesh_info.meshlet_count - 32 * dispatch_index, 32);
+    			dispatch.meshlet_offset     = mesh_lod.meshlet_offset + 32 * dispatch_index;
+    			dispatch.meshlet_count      = min(mesh_lod.meshlet_count - 32 * dispatch_index, 32);
     			dispatch.visibility_offset  = visibility_offset;
 				GetBuffer(MeshletDispatchBuffer, meshlet_dispatch_buffer).dispatches[dispatch_offset + dispatch_index] = dispatch;
 

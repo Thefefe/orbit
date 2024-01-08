@@ -219,6 +219,42 @@ impl MeshData {
     // }
 }
 
+const MESH_LOD_TARGET_ERROR: f32 = 1e-3;
+
+pub fn build_mesh_lod(
+    vertices: &[GpuMeshVertex],
+    indices: &[u32],
+    target_index_count: usize,
+    lock_border: bool,
+    output_indices: &mut Vec<u32>,
+) -> f32 {
+    let output_indices_offset = output_indices.len();
+    output_indices.reserve(output_indices.len() + indices.len());
+    let mut error = 0.0;
+    unsafe {
+        let index_count = meshopt2::ffi::meshopt_simplify(
+            output_indices.as_mut_ptr().add(output_indices_offset),
+            indices.as_ptr(),
+            indices.len(),
+            vertices.as_ptr().cast(),
+            vertices.len(),
+            std::mem::size_of::<GpuMeshVertex>(),
+            target_index_count,
+            MESH_LOD_TARGET_ERROR,
+            if lock_border { meshopt2::SimplifyOptions::LockBorder.bits() } else { 0 },
+            &mut error as *mut f32
+        );
+
+        output_indices.set_len(output_indices_offset + index_count);
+        let result_index_slice = &mut output_indices[output_indices_offset..output_indices_offset+index_count];
+
+        meshopt2::optimize_vertex_cache_in_place(result_index_slice, vertices.len());
+        meshopt2::optimize_overdraw_in_place(result_index_slice, &vertex_adapter(vertices), 1.05);
+    };
+
+    error
+}
+
 pub fn compute_meshlets(
     vertices: &[GpuMeshVertex],
     indices: &[u32],
@@ -228,7 +264,7 @@ pub fn compute_meshlets(
     meshlet_data: &mut Vec<u32>,
     meshlets: &mut Vec<GpuMeshlet>,
 ) {
-    let raw_meshlets = meshopt::build_meshlets(
+    let raw_meshlets = meshopt2::build_meshlets(
         indices,
         &vertex_adapter(&vertices),
         MAX_MESHLET_VERTICES,
@@ -253,7 +289,7 @@ pub fn compute_meshlets(
         //     }
         //     packed
         // }));
-        let meshlet_bounds = meshopt::compute_meshlet_bounds(meshlet, &vertex_adapter(vertices));
+        let meshlet_bounds = meshopt2::compute_meshlet_bounds(meshlet, &vertex_adapter(vertices));
         meshlets.push(GpuMeshlet {
             bounding_sphere: Vec4::from_array([
                 meshlet_bounds.center[0],
@@ -290,7 +326,7 @@ pub fn optimize_mesh(
 
     let vertex_count = unsafe {
         remap_buffer.set_len(input_vertices.len());
-        meshopt::ffi::meshopt_generateVertexRemap(
+        meshopt2::ffi::meshopt_generateVertexRemap(
             remap_buffer.as_mut_ptr(),
             input_indices.as_ptr(),
             input_indices.len(),
@@ -307,7 +343,7 @@ pub fn optimize_mesh(
         output_vertices.set_len(vertex_count);
         output_indices.set_len(input_indices.len());
 
-        meshopt::ffi::meshopt_remapVertexBuffer(
+        meshopt2::ffi::meshopt_remapVertexBuffer(
             output_vertices.as_mut_ptr().cast(),
             input_vertices.as_ptr().cast(),
             input_vertices.len(),
@@ -315,7 +351,7 @@ pub fn optimize_mesh(
             remap_buffer.as_ptr(),
         );
 
-        meshopt::ffi::meshopt_remapIndexBuffer(
+        meshopt2::ffi::meshopt_remapIndexBuffer(
             output_indices.as_mut_ptr(),
             input_indices.as_ptr(),
             input_indices.len(),
@@ -323,15 +359,15 @@ pub fn optimize_mesh(
         );
     };
 
-    meshopt::optimize_vertex_cache_in_place(output_indices, vertex_count);
-    meshopt::optimize_overdraw_in_place(output_indices, &vertex_adapter(output_vertices), 1.05);
-    meshopt::optimize_vertex_fetch_in_place(output_indices, output_vertices);
+    meshopt2::optimize_vertex_cache_in_place(output_indices, vertex_count);
+    meshopt2::optimize_overdraw_in_place(output_indices, &vertex_adapter(output_vertices), 1.05);
+    meshopt2::optimize_vertex_fetch_in_place(output_indices, output_vertices);
 }
 
-fn vertex_adapter(vertices: &[GpuMeshVertex]) -> meshopt::VertexDataAdapter {
+pub fn vertex_adapter(vertices: &[GpuMeshVertex]) -> meshopt2::VertexDataAdapter {
     let position_offset = bytemuck::offset_of!(GpuMeshVertex, position);
     let vertex_stride = std::mem::size_of::<GpuMeshVertex>();
-    meshopt::VertexDataAdapter::new(bytemuck::cast_slice(vertices), vertex_stride, position_offset).unwrap()
+    meshopt2::VertexDataAdapter::new(bytemuck::cast_slice(vertices), vertex_stride, position_offset).unwrap()
 }
 
 #[repr(C)]

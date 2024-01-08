@@ -3,6 +3,7 @@ use crate::math::Aabb;
 use crate::{collections::arena, graphics};
 
 pub mod mesh;
+use bytemuck::Zeroable;
 use mesh::*;
 
 use ash::vk;
@@ -11,6 +12,8 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 use smallvec::SmallVec;
 
+pub const MAX_MESH_LODS: usize = 8;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMeshInfo {
@@ -18,8 +21,9 @@ pub struct GpuMeshInfo {
     aabb: GpuAabb,
     vertex_offset: u32,
     meshlet_data_offset: u32,
-    meshlet_offset: u32,
-    meshlet_count: u32,
+    mesh_lod_count: u32,
+    _padding: u32,
+    mesh_lods: [GpuMeshLod; MAX_MESH_LODS],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +32,13 @@ pub struct SubmeshInfo {
     pub vertex_count: u32,
     pub index_offset: u32,
     pub index_count: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
+pub struct GpuMeshLod {
+    pub meshlet_offset: u32,
+    pub meshlet_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +52,8 @@ pub struct MeshInfo {
     pub index_alloc_index: arena::Index,
     pub meshlet_data_alloc_index: arena::Index,
     pub meshlet_alloc_index: arena::Index,
+    pub mesh_lod_count: usize,
+    pub mesh_lods: [GpuMeshLod; MAX_MESH_LODS],
 
     pub aabb: Aabb,
     pub bounding_sphere: Vec4,
@@ -65,13 +78,18 @@ impl MeshInfo {
     }
 
     pub fn to_gpu(&self) -> GpuMeshInfo {
+        let mut mesh_lods = self.mesh_lods;
+        for lod in mesh_lods.iter_mut() {
+            lod.meshlet_offset += self.meshlet_offset();
+        }
         GpuMeshInfo {
             bounding_sphere: self.bounding_sphere,
             aabb: GpuAabb::from(self.aabb),
             vertex_offset: self.vertex_offset(),
             meshlet_data_offset: self.meshlet_data_offset(),
-            meshlet_offset: self.meshlet_offset(),
-            meshlet_count: self.meshlet_count(),
+            mesh_lod_count: self.mesh_lod_count as u32,
+            _padding: 0,
+            mesh_lods,
         }
     }
 }
@@ -179,14 +197,14 @@ const MAX_MESH_COUNT: usize = 10_000;
 const MAX_VERTEX_COUNT: usize = 4_000_000;
 const MAX_INDEX_COUNT: usize = 12_000_000;
 const MAX_MATERIAL_COUNT: usize = 1_000;
-const MAX_MESHLET_COUNT: usize = 64_000;
+const MAX_MESHLET_COUNT: usize = MAX_MESH_COUNT * 64;
 const MAX_SUBMESH_COUNT: usize = 10_000 * 8;
 // 64 (meshlet vertex index), 24 (approx. micro index)
 const MAX_MESHLET_DATA_COUNT: usize = MAX_MESHLET_COUNT * (64 + 24);
 
 pub const MAX_MESHLET_VERTICES: usize = 64;
 pub const MAX_MESHLET_TRIANGLES: usize = 64;
-pub const MESHLET_CONE_WEIGHT: f32 = 0.5;
+pub const MESHLET_CONE_WEIGHT: f32 = 0.0;
 
 #[derive(Clone, Copy)]
 pub struct AssetGraphData {
@@ -305,26 +323,79 @@ impl GpuAssets {
     pub fn add_mesh(&mut self, context: &graphics::Context, mesh: &MeshData) -> MeshHandle {
         let mut meshlet_data = Vec::new();
         let mut meshlets = Vec::new();
+        let mut mesh_lod_count = 0;
+        let mut mesh_lods = [GpuMeshLod::zeroed(); MAX_MESH_LODS];
 
         let mut submesh_infos: SmallVec<[SubmeshInfo; 4]> = SmallVec::new();
 
-        for submesh in mesh.submeshes.iter().copied() {
-            compute_meshlets(
-                &mesh.vertices[submesh.vertex_range()],
-                &mesh.indices[submesh.index_range()],
-                submesh.material,
-                submesh.vertex_offset as u32,
-                &mut meshlet_data,
-                &mut meshlets,
-            );
+        let mut lod_indices = Vec::new();
+        let mut index_count_scale: f64 = 1.0;
 
-            submesh_infos.push(SubmeshInfo {
-                vertex_offset: submesh.vertex_offset as u32,
-                vertex_count: submesh.vertex_count as u32,
-                index_offset: submesh.index_offset as u32,
-                index_count: submesh.index_count as u32,
-            });
+        for lod_index in 0..MAX_MESH_LODS {
+            let meshlet_offset = meshlets.len();
+
+            let mut finish_lod = false;
+
+            for submesh in mesh.submeshes.iter().copied() {
+                let submesh_vertices = &mesh.vertices[submesh.vertex_range()];
+                let submesh_indices = &mesh.indices[submesh.index_range()];
+                lod_indices.clear();
+                
+                if lod_index == 0 {
+                    lod_indices.extend_from_slice(&mesh.indices[submesh.index_range()]);
+                } else {
+                    let target_index_count = (submesh_indices.len() as f64 * index_count_scale) as usize;
+                    let _error = build_mesh_lod(
+                        submesh_vertices,
+                        submesh_indices,
+                        target_index_count,
+                        mesh.submeshes.len() > 1,
+                        &mut lod_indices
+                    );
+
+                    if target_index_count.div_ceil(3) * 3 < lod_indices.len() {
+                        finish_lod = true;
+                    }
+
+                    // log::info!(
+                    //     "lod_{lod_index}: source_index_count: {}, target_index_count: {target_index_count}, result_index_count: {}, result_error: {_error}",
+                    //     submesh_indices.len(),
+                    //     lod_indices.len(),
+                    // );
+                }
+                
+                if !lod_indices.is_empty() {
+                    compute_meshlets(
+                        submesh_vertices,
+                        &lod_indices,
+                        submesh.material,
+                        submesh.vertex_offset as u32,
+                        &mut meshlet_data,
+                        &mut meshlets,
+                    );
+                }
+    
+                submesh_infos.push(SubmeshInfo {
+                    vertex_offset: submesh.vertex_offset as u32,
+                    vertex_count: submesh.vertex_count as u32,
+                    index_offset: submesh.index_offset as u32,
+                    index_count: submesh.index_count as u32,
+                });
+                
+                index_count_scale *= 0.8;
+            }
+
+            mesh_lod_count += 1;
+            
+            let meshlet_count = meshlets.len() - meshlet_offset;
+            mesh_lods[lod_index].meshlet_offset = meshlet_offset as u32;
+            mesh_lods[lod_index].meshlet_count = meshlet_count as u32;
+
+            if finish_lod {
+                break;
+            }
         }
+
 
         let (vertex_alloc_index, vertex_range) = self.vertex_allocator.allocate(mesh.vertices.len()).unwrap();
         let (index_alloc_index, index_range) = self.index_allocator.allocate(mesh.vertices.len()).unwrap();
@@ -383,6 +454,8 @@ impl GpuAssets {
             bounding_sphere: mesh.bounding_sphere,
 
             submesh_infos,
+            mesh_lod_count,
+            mesh_lods,
         };
         
         let gpu_mesh_info = mesh_info.to_gpu();

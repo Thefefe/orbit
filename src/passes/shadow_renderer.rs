@@ -731,8 +731,8 @@ impl ShadowRenderer {
                     occlusion_culling: OcclusionCullInfo::None,
                     alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                     lod_range: match cascade_index {
-                        0 | 1 => 0..global_settings.max_mesh_lod + 1,
-                        _ => global_settings.max_mesh_lod..global_settings.max_mesh_lod + 1
+                        0 | 1 => global_settings.lod_range(),
+                        _ => 2..global_settings.max_mesh_lod + 1
                     },
                     lod_base: global_settings.lod_base,
                     lod_step: global_settings.lod_step,

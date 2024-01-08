@@ -219,7 +219,7 @@ impl MeshData {
     // }
 }
 
-const MESH_LOD_TARGET_ERROR: f32 = 1e-3;
+const MESH_LOD_TARGET_ERROR: f32 = 1e-2;
 
 pub fn build_mesh_lod(
     vertices: &[GpuMeshVertex],

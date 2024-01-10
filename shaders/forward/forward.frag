@@ -90,8 +90,8 @@ float penumbra_size(float reciever_depth, float avg_blockers_depth) {
     return (reciever_depth - avg_blockers_depth) / avg_blockers_depth;
 }
 
-#define PENUMBRA_SAMPLE_COUNT 16
-#define SHADOW_SAMPLE_COUNT 16
+#define PENUMBRA_SAMPLE_COUNT 12
+#define SHADOW_SAMPLE_COUNT 32
 
 vec2 vogel_disk_sample(int sampleIndex, int samplesCount, float phi) {
     float GoldenAngle = 2.4;

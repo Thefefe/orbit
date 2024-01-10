@@ -686,7 +686,7 @@ impl ForwardRenderer {
                 .load_op(if skybox.is_none() || render_mode == RenderMode::Overdraw {
                     vk::AttachmentLoadOp::CLEAR
                 } else {
-                    vk::AttachmentLoadOp::CLEAR
+                    vk::AttachmentLoadOp::DONT_CARE
                 })
                 .clear_value(vk::ClearValue {
                     color: vk::ClearColorValue {

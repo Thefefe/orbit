@@ -36,6 +36,7 @@ impl ShaderSource {
 const MAX_SPECIALISATION_ENTRY_COUNT: usize = 4;
 const MAX_SPECIALISATION_DATA_SIZE: usize = MAX_SPECIALISATION_ENTRY_COUNT * 4;
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct SpecializationMapEntry {
     pub constant_id: u32,
@@ -75,7 +76,8 @@ impl SpecialisationMap {
             constant_id,
             offset: offset as u32,
             size: bytes.len(),
-        }
+        };
+        self.entry_count += 1;
     }
 }
 
@@ -590,19 +592,27 @@ impl graphics::Context {
         RasterPipeline { handle }
     }
 
-    pub fn create_compute_pipeline(&mut self, name: &str, shader: ShaderSource) -> ComputePipeline {
+    pub fn create_compute_pipeline(&mut self, name: &str, shader: ShaderStage) -> ComputePipeline {
         if let Some(compute_pipeline) = self.compute_pipelines.get(&shader).copied() {
             return compute_pipeline;
         }
 
-        let module = self.get_shader_module(&shader);
+        let module = self.get_shader_module(&shader.source);
+        let spec_info = shader.spec_info();
 
-        let stage = vk::PipelineShaderStageCreateInfo::builder()
+        let mut stage_desc = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(module)
-            .name(cstr::cstr!("main"))
-            .build();
-        let create_info = vk::ComputePipelineCreateInfo::builder().stage(stage).layout(self.device.pipeline_layout);
+            .name(cstr::cstr!("main"));
+
+        if shader.has_spec_constants() {
+            log::info!("compute pipeline {name:?} has spec info!");
+            stage_desc = stage_desc.specialization_info(&spec_info);
+        }
+
+        let create_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(stage_desc.build())
+            .layout(self.device.pipeline_layout);
 
         let handle = unsafe {
             self.device

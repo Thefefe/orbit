@@ -9,7 +9,7 @@
 #include "forward_common.glsl"
 
 // TODO: use spec constants
-layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 64) out;
 
 layout(location = 0) out VERTEX_OUTPUT vout[];

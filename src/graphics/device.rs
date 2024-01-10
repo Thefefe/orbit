@@ -163,13 +163,20 @@ impl SurfaceInfo {
 pub struct GpuProperties {
     pub properties10: vk::PhysicalDeviceProperties,
     pub properties12: vk::PhysicalDeviceVulkan12Properties,
+    mesh_shader_properties: vk::PhysicalDeviceMeshShaderPropertiesEXT,
 }
 
 impl GpuProperties {
-    fn new(instance: &ash::Instance, handle: vk::PhysicalDevice) -> Self {
+    fn new(instance: &ash::Instance, handle: vk::PhysicalDevice, mesh_shading: bool) -> Self {
         let mut properties12 = vk::PhysicalDeviceVulkan12Properties::default();
+        let mut mesh_shader_properties = vk::PhysicalDeviceMeshShaderPropertiesEXT::default();
 
-        let mut properties = vk::PhysicalDeviceProperties2::builder().push_next(&mut properties12);
+        let mut properties = vk::PhysicalDeviceProperties2::builder()
+            .push_next(&mut properties12);
+
+        if mesh_shading {
+            properties = properties.push_next(&mut mesh_shader_properties);
+        }
 
         unsafe {
             instance.get_physical_device_properties2(handle, &mut properties);
@@ -178,6 +185,7 @@ impl GpuProperties {
         Self {
             properties10: properties.properties,
             properties12,
+            mesh_shader_properties,
         }
     }
 }
@@ -189,6 +197,7 @@ pub struct GpuInfo {
     pub features: vk::PhysicalDeviceFeatures,
     pub queue_families: Vec<QueueFamily>,
     pub extensions: HashSet<CString>,
+    pub mesh_shader_support: bool,
 
     pub surface_info: SurfaceInfo,
 }
@@ -221,6 +230,11 @@ impl GpuInfo {
         query.iter().all(|&query| self.extensions.contains(query))
     }
 
+    #[inline]
+    pub fn mesh_shader_properties(&self) -> Option<&vk::PhysicalDeviceMeshShaderPropertiesEXT> {
+        self.mesh_shader_support.then_some(&self.properties.mesh_shader_properties)
+    }
+
     pub fn supported_multisample_counts(&self) -> impl Iterator<Item = graphics::MultisampleCount> + '_ {
         graphics::MultisampleCount::ALL.into_iter().filter(|sample_count| {
             self.properties.properties10.limits.framebuffer_color_sample_counts.contains(sample_count.to_vk())
@@ -235,7 +249,6 @@ fn enumerate_gpus<'a>(
 ) -> impl Iterator<Item = GpuInfo> + DoubleEndedIterator + 'a {
     unsafe {
         instance.enumerate_physical_devices().unwrap().into_iter().map(move |handle| {
-            let properties = GpuProperties::new(instance, handle);
             let features = instance.get_physical_device_features(handle);
             let queue_families: Vec<_> = instance
                 .get_physical_device_queue_family_properties(handle)
@@ -256,12 +269,16 @@ fn enumerate_gpus<'a>(
                 })
                 .collect();
 
-            let extensions = instance
+            let extensions: HashSet<CString> = instance
                 .enumerate_device_extension_properties(handle)
                 .unwrap()
                 .into_iter()
                 .map(|extension| CStr::from_ptr(extension.extension_name.as_ptr()).to_owned())
                 .collect();
+
+            let mesh_shader_support = extensions.contains(ext::MeshShader::name());
+
+            let properties = GpuProperties::new(instance, handle, mesh_shader_support);
 
             let surface_info = if queue_families.iter().any(|queue| queue.supports_present) {
                 SurfaceInfo::query(surface_fns, handle, surface)
@@ -275,7 +292,9 @@ fn enumerate_gpus<'a>(
                 features,
                 queue_families,
                 extensions,
+                mesh_shader_support,
                 surface_info,
+                
             }
         })
     }

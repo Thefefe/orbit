@@ -178,7 +178,7 @@ pub struct Context {
 
     pub shader_modules: HashMap<graphics::ShaderSource, vk::ShaderModule>,
     pub raster_pipelines: HashMap<graphics::RasterPipelineDesc, graphics::RasterPipeline>,
-    pub compute_pipelines: HashMap<graphics::ShaderSource, graphics::ComputePipeline>,
+    pub compute_pipelines: HashMap<graphics::ShaderStage, graphics::ComputePipeline>,
 
     pub graph: RenderGraph,
     transient_resource_cache: TransientResourceCache,

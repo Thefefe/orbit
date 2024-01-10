@@ -9,7 +9,7 @@ use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 use crate::{
     assets::{AssetGraphData, GpuAssets, GpuMeshletDrawCommand},
-    graphics::{self, FRAME_COUNT},
+    graphics::{self, ShaderStage, FRAME_COUNT},
     math,
     scene::{SceneData, SceneGraphData},
     Camera, Projection, Settings, MAX_SHADOW_CASCADE_COUNT,
@@ -18,8 +18,8 @@ use crate::{
 use super::{
     debug_renderer::DebugRenderer,
     draw_gen::{
-        create_meshlet_dispatch_command, create_meshlet_draw_commands, AlphaModeFlags, CullInfo,
-        OcclusionCullInfo, MAX_DRAW_COUNT,
+        create_meshlet_dispatch_command, create_meshlet_draw_commands, AlphaModeFlags, CullInfo, OcclusionCullInfo,
+        MAX_DRAW_COUNT, meshlet_dispatch_size,
     },
 };
 
@@ -370,9 +370,12 @@ impl ShadowRenderer {
         }
 
         if mesh_shading {
-            pipeline_desc = pipeline_desc
-                .task_shader(graphics::ShaderSource::spv("shaders/shadow.task.spv"))
-                .mesh_shader(graphics::ShaderSource::spv("shaders/shadow.mesh.spv"));
+            let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
+            pipeline_desc = pipeline_desc.
+                task_shader(ShaderStage::spv("shaders/shadow.task.spv")
+                    .spec_u32(0, meshlet_dispatch_size(context)))
+                .mesh_shader(ShaderStage::spv("shaders/shadow.mesh.spv")
+                    .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations));
         } else {
             pipeline_desc = pipeline_desc.vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"));
         }
@@ -459,7 +462,6 @@ impl ShadowRenderer {
                         std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
                     );
                 }
-
 
                 cmd.end_rendering();
             });
@@ -732,7 +734,7 @@ impl ShadowRenderer {
                     alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
                     lod_range: match cascade_index {
                         0 | 1 => global_settings.lod_range(),
-                        _ => 2..global_settings.max_mesh_lod + 1
+                        _ => 2..global_settings.max_mesh_lod + 1,
                     },
                     lod_base: global_settings.lod_base,
                     lod_step: global_settings.lod_step,

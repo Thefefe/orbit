@@ -3,7 +3,7 @@ use glam::{vec2, vec3a, vec4, Mat4, Vec2, Vec3A, Vec3Swizzles, Vec4, Vec4Swizzle
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    graphics::{self, AccessKind},
+    graphics::{self, AccessKind, ShaderStage},
     math::{self, Aabb},
     scene::SceneGraphData,
     Camera,
@@ -410,7 +410,7 @@ pub fn mark_active_clusters(
 ) -> (graphics::GraphBufferHandle, graphics::GraphBufferHandle) {
     let pipeline = context.create_compute_pipeline(
         "mark_active_clusters_pipeline",
-        graphics::ShaderSource::spv("shaders/light_cluster/mark_active.comp.spv"),
+        ShaderStage::spv("shaders/light_cluster/mark_active.comp.spv"),
     );
 
     let tile_count = settings.tile_counts();
@@ -498,7 +498,7 @@ pub fn compact_active_clusters(
 ) -> graphics::GraphBufferHandle {
     let pipeline = context.create_compute_pipeline(
         "compact_active_clusters_pipeline",
-        graphics::ShaderSource::spv("shaders/light_cluster/active_cluster_compaction.comp.spv"),
+        ShaderStage::spv("shaders/light_cluster/active_cluster_compaction.comp.spv"),
     );
 
     let unique_cluster_buffer = context.create_transient_buffer(
@@ -549,7 +549,7 @@ pub fn cluster_light_assignment(
 ) -> (graphics::GraphImageHandle, graphics::GraphBufferHandle) {
     let pipeline = context.create_compute_pipeline(
         "cluster_light_assingment_pipeline",
-        graphics::ShaderSource::spv("shaders/light_cluster/light_culling.comp.spv"),
+        ShaderStage::spv("shaders/light_cluster/light_culling.comp.spv"),
     );
 
     let light_offset_image = context.create_transient_image(

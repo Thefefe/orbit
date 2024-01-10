@@ -8,7 +8,7 @@
 
 #include "forward_common.glsl"
 
-// #define USE_SUBGROUP_OPS
+#define USE_SUBGROUP_OPS
 
 #ifdef USE_SUBGROUP_OPS
 	#extension GL_KHR_shader_subgroup_vote : require
@@ -16,8 +16,8 @@
 	#extension GL_KHR_shader_subgroup_ballot : require
 #endif
 
-// TODO: use spec constants
-layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+layout (constant_id = 0) const int MESHLET_DISPATCH_SIZE = 64;
 
 float largest_scale_from_matrix(mat3 matrix) {
 	vec3 x = matrix[0];
@@ -104,12 +104,13 @@ shared uint task_mesh_count;
 taskPayloadSharedEXT MeshTaskPayload payload;
 
 void main() {
-    MeshletDispatch dispatch = GetBuffer(MeshletDispatchBuffer, draw_command_buffer).dispatches[gl_GlobalInvocationID.x / 32];
+    MeshletDispatch dispatch = GetBuffer(MeshletDispatchBuffer, draw_command_buffer).dispatches[gl_GlobalInvocationID.x / MESHLET_DISPATCH_SIZE];
 
     task_mesh_count = 0;
     barrier();
 
     CullInfo cull_info = GetBuffer(CullInfoBuffer, cull_info_buffer).cull_info;
+    bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0xFFFFFFFF;
     bool visible = true;
 
     // TODO: remove
@@ -126,11 +127,12 @@ void main() {
 
         uint alpha_mode = GetBuffer(MaterialsBuffer, materials_buffer).materials[meshlet.material_index].alpha_mode;
         bool visible_in_buffer = true;
-        bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0xFFFFFFFF;
 
-        if (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2) {
-            uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[dispatch.visibility_offset];
-            visible_in_buffer = (visibility_bitset & (1 << gl_LocalInvocationID.x)) > 0;
+        if (meshlet_occlusion_culling && (cull_info.occlusion_pass == 1 || cull_info.occlusion_pass == 2)) {
+            uint index_offset = dispatch.visibility_offset + gl_LocalInvocationID.x / 32;
+            uint bit_offset = gl_LocalInvocationID.x % 32;
+            uint visibility_bitset = GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[index_offset];
+            visible_in_buffer = (visibility_bitset & (1 << bit_offset)) > 0;
         }
 
         // first occlusion pass: only proccess if submesh was visible last frame
@@ -220,7 +222,7 @@ void main() {
     }
 
 	// update visibility buffer, only on second occlusion pass
-	if (cull_info.occlusion_pass == 2) {
+	if (meshlet_occlusion_culling && cull_info.occlusion_pass == 2) {
 #ifdef USE_SUBGROUP_OPS
 		uvec4 visiblity_bitset = subgroupBallot(visible);
 		
@@ -231,10 +233,12 @@ void main() {
 			}
 		}
 #else
-		GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[dispatch.visibility_offset] = 0;
+        uint index_offset = dispatch.visibility_offset + gl_LocalInvocationID.x / 32;
+        uint bit_offset = gl_LocalInvocationID.x % 32;
+		GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[index_offset] = 0;
 		barrier();
-		uint bitset = uint(visible) << gl_LocalInvocationID.x;
-		atomicOr(GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[dispatch.visibility_offset], bitset);
+		uint bitset = uint(visible) << bit_offset;
+		atomicOr(GetBuffer(VisibilityBuffer, cull_info.meshlet_visibility_buffer).entries[index_offset], bitset);
 #endif
 	}
 

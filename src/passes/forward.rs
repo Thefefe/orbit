@@ -1,13 +1,13 @@
 use ash::vk;
-use glam::{Mat4, Vec3, vec3};
+use glam::{vec3, Mat4, Vec3};
 use rand::prelude::Distribution;
 
 use crate::{
     assets::{AssetGraphData, GpuAssets, GpuMeshletDrawCommand},
-    graphics::{self, AccessKind},
+    graphics::{self, AccessKind, ShaderStage},
     math,
     passes::draw_gen::{
-        create_meshlet_dispatch_command, create_meshlet_draw_commands, AlphaModeFlags, CullInfo,
+        create_meshlet_dispatch_command, create_meshlet_draw_commands, meshlet_dispatch_size, AlphaModeFlags, CullInfo,
         OcclusionCullInfo,
     },
     scene::{SceneData, SceneGraphData},
@@ -265,22 +265,17 @@ impl ForwardRenderer {
                 })
                 .unwrap_or_default(),
             alpha_mode_filter: AlphaModeFlags::OPAQUE | AlphaModeFlags::MASKED,
-            
+
             debug_print: false,
-            
+
             lod_range: settings.lod_range(),
             lod_base: settings.lod_base,
             lod_step: settings.lod_step,
             lod_target_pos_view_space: vec3(0.0, 0.0, 0.0),
         };
 
-        let (cull_info_buffer, mut draw_commands_buffer) = create_meshlet_dispatch_command(
-            context,
-            "early_forward_depth_prepass".into(),
-            assets,
-            scene,
-            &cull_info,
-        );
+        let (cull_info_buffer, mut draw_commands_buffer) =
+            create_meshlet_dispatch_command(context, "early_forward_depth_prepass".into(), assets, scene, &cull_info);
 
         if !mesh_shading {
             draw_commands_buffer = create_meshlet_draw_commands(
@@ -293,14 +288,50 @@ impl ForwardRenderer {
             );
         }
 
-        let depth_prepass_pipeline = forward_depth_prepass_pipeline(context, settings.msaa, mesh_shading);
+        let depth_prepass_pipeline = {
+            let mut desc = graphics::RasterPipelineDesc::builder()
+                .fragment_shader(graphics::ShaderSource::spv(
+                    "shaders/forward/forward_depth_prepass.frag.spv",
+                ))
+                .depth_state(Some(graphics::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: graphics::PipelineState::Static(true),
+                    write: true,
+                    compare: vk::CompareOp::GREATER,
+                }))
+                .multisample_state(graphics::MultisampleState {
+                    sample_count: settings.msaa,
+                    alpha_to_coverage: true,
+                });
+
+            if mesh_shading {
+                let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
+                desc = desc
+                    .task_shader(
+                        ShaderStage::spv("shaders/forward/forward_depth_prepass.task.spv")
+                            .spec_u32(0, meshlet_dispatch_size(context)),
+                    )
+                    .mesh_shader(
+                        ShaderStage::spv("shaders/forward/forward_depth_prepass.mesh.spv")
+                            .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                    );
+            } else {
+                desc = desc.vertex_shader(graphics::ShaderSource::spv(
+                    "shaders/forward/forward_depth_prepass.vert.spv",
+                ));
+            }
+
+            context.create_raster_pipeline("forward_depth_prepass_pipeline", &desc)
+        };
 
         context
             .add_pass("early_forward_depth_prepass")
             .with_dependency(target_attachments.depth_target, AccessKind::DepthAttachmentWrite)
             .with_dependencies(target_attachments.depth_resolve.map(|i| (i, AccessKind::DepthAttachmentWrite)))
             .with_dependency(draw_commands_buffer, AccessKind::IndirectBuffer)
-            .with_dependencies(mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderRead)))
+            .with_dependencies(
+                mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderRead)),
+            )
             .render(move |cmd, graph| {
                 let depth_target = graph.get_image(target_attachments.depth_target);
                 let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
@@ -349,7 +380,6 @@ impl ForwardRenderer {
                     .buffer(entity_buffer)
                     .buffer(materials_buffer);
 
-                
                 if mesh_shading {
                     cmd.draw_mesh_tasks_indirect(&draw_commands_buffer, 0, 1, 0);
                 } else {
@@ -398,14 +428,9 @@ impl ForwardRenderer {
             lod_target_pos_view_space: vec3(0.0, 0.0, 0.0),
             debug_print: false,
         };
-        
-        let (cull_info_buffer, mut draw_commands_buffer) = create_meshlet_dispatch_command(
-            context,
-            "late_forward_depth_prepass".into(),
-            assets,
-            scene,
-            &cull_info,
-        );
+
+        let (cull_info_buffer, mut draw_commands_buffer) =
+            create_meshlet_dispatch_command(context, "late_forward_depth_prepass".into(), assets, scene, &cull_info);
 
         if !mesh_shading {
             draw_commands_buffer = create_meshlet_draw_commands(
@@ -423,7 +448,9 @@ impl ForwardRenderer {
             .with_dependency(target_attachments.depth_target, AccessKind::DepthAttachmentWrite)
             .with_dependencies(target_attachments.depth_resolve.map(|i| (i, AccessKind::DepthAttachmentWrite)))
             .with_dependency(draw_commands_buffer, AccessKind::IndirectBuffer)
-            .with_dependencies(mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderWrite)))
+            .with_dependencies(
+                mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderWrite)),
+            )
             .with_dependencies(mesh_shading.then_some(depth_pyramid).map(|i| (i, AccessKind::TaskShaderReadGeneral)))
             .render(move |cmd, graph| {
                 let depth_target = graph.get_image(target_attachments.depth_target);
@@ -473,7 +500,6 @@ impl ForwardRenderer {
                     .buffer(entity_buffer)
                     .buffer(materials_buffer);
 
-                
                 if mesh_shading {
                     cmd.draw_mesh_tasks_indirect(&draw_commands_buffer, 0, 1, 0);
                 } else {
@@ -586,13 +612,8 @@ impl ForwardRenderer {
             debug_print: false,
         };
 
-        let (cull_info_buffer, mut draw_commands_buffer) = create_meshlet_dispatch_command(
-            context,
-            "forward".into(),
-            assets,
-            scene,
-            &cull_info,
-        );
+        let (cull_info_buffer, mut draw_commands_buffer) =
+            create_meshlet_dispatch_command(context, "forward".into(), assets, scene, &cull_info);
 
         if !mesh_shading {
             draw_commands_buffer = create_meshlet_draw_commands(
@@ -605,8 +626,86 @@ impl ForwardRenderer {
             );
         }
 
-        let forward_pipeline = forward_pipeline(context, settings.msaa, mesh_shading);
-        let overdraw_pipeline = forward_overdraw_pipeline(context, settings.msaa, mesh_shading);
+        let forward_pipeline = {
+            let mut desc = graphics::RasterPipelineDesc::builder()
+                .fragment_shader(graphics::ShaderSource::spv("shaders/forward/forward.frag.spv"))
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: App::COLOR_FORMAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: None,
+                }])
+                .depth_state(Some(graphics::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: graphics::PipelineState::Static(true),
+                    write: true,
+                    compare: vk::CompareOp::GREATER_OR_EQUAL,
+                }))
+                .multisample_state(graphics::MultisampleState {
+                    sample_count: settings.msaa,
+                    alpha_to_coverage: true,
+                });
+
+            if mesh_shading {
+                let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
+                desc = desc
+                    .task_shader(
+                        ShaderStage::spv("shaders/forward/forward.task.spv")
+                            .spec_u32(0, meshlet_dispatch_size(context)),
+                    )
+                    .mesh_shader(
+                        ShaderStage::spv("shaders/forward/forward.mesh.spv")
+                            .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                    );
+            } else {
+                desc = desc.vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward.vert.spv"));
+            }
+
+            context.create_raster_pipeline("forward_pipeline", &desc)
+        };
+
+        let overdraw_pipeline = {
+            let mut desc = graphics::RasterPipelineDesc::builder()
+                .fragment_shader(graphics::ShaderSource::spv("shaders/forward/forward.frag.spv"))
+                .color_attachments(&[graphics::PipelineColorAttachment {
+                    format: App::COLOR_FORMAT,
+                    color_mask: vk::ColorComponentFlags::RGBA,
+                    color_blend: Some(graphics::ColorBlendState {
+                        src_color_blend_factor: vk::BlendFactor::ONE,
+                        dst_color_blend_factor: vk::BlendFactor::ONE,
+                        color_blend_op: vk::BlendOp::ADD,
+                        src_alpha_blend_factor: vk::BlendFactor::ONE,
+                        dst_alpha_blend_factor: vk::BlendFactor::ONE,
+                        alpha_blend_op: vk::BlendOp::ADD,
+                    }),
+                }])
+                .depth_state(Some(graphics::DepthState {
+                    format: App::DEPTH_FORMAT,
+                    test: graphics::PipelineState::Static(true),
+                    write: true,
+                    compare: vk::CompareOp::GREATER_OR_EQUAL,
+                }))
+                .multisample_state(graphics::MultisampleState {
+                    sample_count: settings.msaa,
+                    alpha_to_coverage: true,
+                });
+
+            if mesh_shading {
+                let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
+                desc = desc
+                    .task_shader(
+                        ShaderStage::spv("shaders/forward/forward.task.spv")
+                            .spec_u32(0, meshlet_dispatch_size(context)),
+                    )
+                    .mesh_shader(
+                        ShaderStage::spv("shaders/forward/forward.mesh.spv")
+                            .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                    );
+            } else {
+                desc = desc.vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward.vert.spv"));
+            }
+
+            context.create_raster_pipeline("forward_overdraw_pipeline", &desc)
+        };
 
         let skybox_pipeline = context.create_raster_pipeline(
             "skybox_pipeline",
@@ -687,6 +786,7 @@ impl ForwardRenderer {
                     vk::AttachmentLoadOp::CLEAR
                 } else {
                     vk::AttachmentLoadOp::DONT_CARE
+                    // vk::AttachmentLoadOp::CLEAR
                 })
                 .clear_value(vk::ClearValue {
                     color: vk::ClearColorValue {
@@ -778,114 +878,6 @@ impl ForwardRenderer {
             cmd.end_rendering();
         });
     }
-}
-
-fn forward_depth_prepass_pipeline(
-    context: &mut graphics::Context,
-    msaa: graphics::MultisampleCount,
-    mesh_shading: bool,
-) -> graphics::RasterPipeline {
-    let mut desc = graphics::RasterPipelineDesc::builder()
-        .fragment_shader(graphics::ShaderSource::spv(
-            "shaders/forward/forward_depth_prepass.frag.spv",
-        ))
-        .depth_state(Some(graphics::DepthState {
-            format: App::DEPTH_FORMAT,
-            test: graphics::PipelineState::Static(true),
-            write: true,
-            compare: vk::CompareOp::GREATER,
-        }))
-        .multisample_state(graphics::MultisampleState {
-            sample_count: msaa,
-            alpha_to_coverage: true,
-        });
-
-    if mesh_shading {
-        desc = desc
-            .task_shader(graphics::ShaderSource::spv("shaders/forward/forward_depth_prepass.task.spv"))
-            .mesh_shader(graphics::ShaderSource::spv("shaders/forward/forward_depth_prepass.mesh.spv"));
-    } else {
-        desc = desc.vertex_shader(graphics::ShaderSource::spv(
-            "shaders/forward/forward_depth_prepass.vert.spv",
-        ));
-    }
-
-    context.create_raster_pipeline("forward_pipeline", &desc)
-}
-
-fn forward_pipeline(
-    context: &mut graphics::Context,
-    msaa: graphics::MultisampleCount,
-    mesh_shading: bool,
-) -> graphics::RasterPipeline {
-    let mut desc = graphics::RasterPipelineDesc::builder()
-        .fragment_shader(graphics::ShaderSource::spv("shaders/forward/forward.frag.spv"))
-        .color_attachments(&[graphics::PipelineColorAttachment {
-            format: App::COLOR_FORMAT,
-            color_mask: vk::ColorComponentFlags::RGBA,
-            color_blend: None,
-        }])
-        .depth_state(Some(graphics::DepthState {
-            format: App::DEPTH_FORMAT,
-            test: graphics::PipelineState::Static(true),
-            write: true,
-            compare: vk::CompareOp::GREATER_OR_EQUAL,
-        }))
-        .multisample_state(graphics::MultisampleState {
-            sample_count: msaa,
-            alpha_to_coverage: true,
-        });
-
-    if mesh_shading {
-        desc = desc
-            .task_shader(graphics::ShaderSource::spv("shaders/forward/forward.task.spv"))
-            .mesh_shader(graphics::ShaderSource::spv("shaders/forward/forward.mesh.spv"));
-    } else {
-        desc = desc.vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward.vert.spv"));
-    }
-
-    context.create_raster_pipeline("forward_pipeline", &desc)
-}
-
-fn forward_overdraw_pipeline(
-    context: &mut graphics::Context,
-    msaa: graphics::MultisampleCount,
-    mesh_shading: bool,
-) -> graphics::RasterPipeline {
-    let mut desc = graphics::RasterPipelineDesc::builder()
-        .fragment_shader(graphics::ShaderSource::spv("shaders/forward/forward.frag.spv"))
-        .color_attachments(&[graphics::PipelineColorAttachment {
-            format: App::COLOR_FORMAT,
-            color_mask: vk::ColorComponentFlags::RGBA,
-            color_blend: Some(graphics::ColorBlendState {
-                src_color_blend_factor: vk::BlendFactor::ONE,
-                dst_color_blend_factor: vk::BlendFactor::ONE,
-                color_blend_op: vk::BlendOp::ADD,
-                src_alpha_blend_factor: vk::BlendFactor::ONE,
-                dst_alpha_blend_factor: vk::BlendFactor::ONE,
-                alpha_blend_op: vk::BlendOp::ADD,
-            }),
-        }])
-        .depth_state(Some(graphics::DepthState {
-            format: App::DEPTH_FORMAT,
-            test: graphics::PipelineState::Static(true),
-            write: true,
-            compare: vk::CompareOp::GREATER_OR_EQUAL,
-        }))
-        .multisample_state(graphics::MultisampleState {
-            sample_count: msaa,
-            alpha_to_coverage: true,
-        });
-
-    if mesh_shading {
-        desc = desc
-            .task_shader(graphics::ShaderSource::spv("shaders/forward/forward.task.spv"))
-            .mesh_shader(graphics::ShaderSource::spv("shaders/forward/forward.mesh.spv"));
-    } else {
-        desc = desc.vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward.vert.spv"));
-    }
-
-    context.create_raster_pipeline("forward_overdraw_pipeline", &desc)
 }
 
 fn gen_offset_texture_data(window_size: usize, filter_size: usize) -> Vec<f32> {

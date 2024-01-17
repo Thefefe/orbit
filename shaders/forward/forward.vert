@@ -16,7 +16,8 @@ void main() {
     mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].model_matrix;
     vout.world_pos = model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
-    gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).view_projection * vout.world_pos;
+    // gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).view_projection * vout.world_pos;
+    gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).view_projection * model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
     vout.uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
     

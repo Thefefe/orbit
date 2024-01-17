@@ -340,6 +340,11 @@ void main() {
         if (material.occlusion_texture_index != TEXTURE_NONE) {
             ao = texture(GetSampledTexture2D(material.occlusion_texture_index), vout.uv).r * material.occlusion_factor;
         }
+
+        if (ssao_image != TEXTURE_NONE) {
+            vec2 screen_uv = gl_FragCoord.xy / vec2(GetBuffer(PerFrameBuffer, per_frame_buffer).screen_size);
+            ao = min(ao, texture(GetSampledTexture2D(ssao_image), screen_uv).x);
+        }
     }
     
     // overdraw visualization
@@ -546,7 +551,7 @@ void main() {
             out_color.xyz = cascade_color * debug_light(vout.normal, light_direction, max(shadow, 0.2));
         } break;
         case 2:
-            out_color = vec4(normal * 0.5 + 0.5, 1.0);
+            out_color.xyz = normal * 0.5 + 0.5;
             out_color = vec4(srgb_to_linear(out_color.rgb), out_color.a);
             break;
         case 3: 

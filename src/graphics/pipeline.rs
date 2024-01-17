@@ -606,7 +606,6 @@ impl graphics::Context {
             .name(cstr::cstr!("main"));
 
         if shader.has_spec_constants() {
-            log::info!("compute pipeline {name:?} has spec info!");
             stage_desc = stage_desc.specialization_info(&spec_info);
         }
 

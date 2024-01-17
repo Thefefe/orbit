@@ -41,7 +41,7 @@ use passes::{
     debug_renderer::DebugRenderer,
     env_map_loader::EnvironmentMap,
     forward::{ForwardRenderer, RenderMode},
-    shadow_renderer::{ShadowRenderer, ShadowSettings},
+    shadow_renderer::{ShadowRenderer, ShadowSettings}, ssao::{SsaoRenderer, SsaoSettings},
 };
 
 use crate::passes::{
@@ -115,6 +115,7 @@ impl CameraController {
         let movement_speed = if input.key_held(KeyCode::LShift) {
             self.movement_speed * 8.0
         } else if input.key_held(KeyCode::LControl) {
+			
             self.movement_speed / 8.0
         } else {
             self.movement_speed
@@ -214,6 +215,8 @@ pub struct Settings {
     pub camera_debug_settings: CameraDebugSettings,
     pub cluster_settings: ClusterSettings,
     pub cluster_debug_settings: ClusterDebugSettings,
+    pub ssao_enabled: bool,
+    pub ssao_settings: SsaoSettings,
 }
 
 impl Default for Settings {
@@ -233,6 +236,8 @@ impl Default for Settings {
             camera_debug_settings: Default::default(),
             cluster_settings: Default::default(),
             cluster_debug_settings: Default::default(),
+            ssao_enabled: true,
+            ssao_settings: Default::default(),
         }
     }
 }
@@ -297,6 +302,10 @@ impl Settings {
 
         ui.heading("Shadow Settings");
         self.shadow_settings.edit(ui);
+    
+        ui.checkbox(&mut self.ssao_enabled, "ssao");
+        ui.heading("SSAO Settings");
+        self.ssao_settings.edit(ui);
     }
 
     pub fn edit_cluster(&mut self, ui: &mut egui::Ui) {
@@ -394,6 +403,7 @@ struct App {
 
     forward_renderer: ForwardRenderer,
     shadow_renderer: ShadowRenderer,
+    ssao_renderer: SsaoRenderer,
     debug_renderer: DebugRenderer,
     settings: Settings,
 
@@ -402,7 +412,6 @@ struct App {
     camera: Camera,
     camera_controller: CameraController,
     frozen_camera: Camera,
-    sun_light_entity_index: usize,
     entity_dir_controller: CameraController,
 
     selected_entity_index: Option<usize>,
@@ -439,8 +448,12 @@ impl App {
             settings.use_mesh_shading = true;
         }
 
-        let sun_light_entity_index = scene.add_entity(EntityData {
+        scene.add_entity(EntityData {
             name: Some("sun".into()),
+            transform: Transform {
+                orientation: Quat::from_rotation_arc(vec3(0.0, 0.0, 1.0), vec3(-1.0, 1.0, 1.0).normalize()),
+                ..Default::default()
+            },
             light: Some(Light {
                 color: vec3(1.0, 1.0, 1.0),
                 intensity: 8.0,
@@ -502,7 +515,7 @@ impl App {
         // let mut rng = rand::thread_rng();
 
         // let prefab = scene.entities.pop().unwrap();
-        // let pos_range = -64.0..=64.0;
+        // let pos_range = -128.0..=128.0;
         // let rot_range = 0.0..=2.0 * PI;
         // for _ in 0..20_000 {
         //     let mut entity = prefab.clone();
@@ -518,9 +531,9 @@ impl App {
         //     scene.add_entity(entity);
         // }
 
-        // let horizontal_range = -32.0..=32.0;
-        // let vertical_range = 0.0..=16.0;
-        // for _ in 0..1000 {
+        // let horizontal_range = -8.0..8.0;
+        // let vertical_range = 0.0..=6.0;
+        // for _ in 0..64 {
         //     let position = Vec3 {
         //         x: rng.gen_range(horizontal_range.clone()),
         //         y: rng.gen_range(vertical_range.clone()),
@@ -615,6 +628,7 @@ impl App {
 
             forward_renderer: ForwardRenderer::new(context),
             shadow_renderer,
+            ssao_renderer: SsaoRenderer::new(context),
             debug_renderer: DebugRenderer::new(context),
             settings,
 
@@ -623,7 +637,6 @@ impl App {
             camera,
             camera_controller: CameraController::new(1.0, 0.003),
             frozen_camera: camera,
-            sun_light_entity_index,
             entity_dir_controller: CameraController::new(1.0, 0.0003),
 
             selected_entity_index: None,
@@ -989,6 +1002,14 @@ impl App {
             &self.frozen_camera,
         );
 
+        let ssao_image = self.settings.ssao_enabled.then(|| self.ssao_renderer.compute_ssao(
+            context,
+            &self.settings.ssao_settings,
+            target_attachments.non_msaa_depth_target(),
+            &self.camera,
+            [screen_extent.width, screen_extent.height]
+        ));
+
         self.shadow_renderer.render_shadows(
             context,
             &self.settings,
@@ -1027,6 +1048,7 @@ impl App {
             &self.gpu_assets,
             &self.scene,
             skybox,
+            ssao_image,
             &self.shadow_renderer,
             &target_attachments,
             cluster_info,

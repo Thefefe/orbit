@@ -16,6 +16,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint selected_light;
     uint brdf_integration_map_index;
     uint jitter_texture_index;
+    uint ssao_image;
 };
 
 #define VERTEX_OUTPUT VertexOutput { \

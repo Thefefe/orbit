@@ -3,7 +3,7 @@
 #include "include/common.glsl"
 #include "include/types.glsl"
 
-RegisterImageFormat(r32f);
+RegisterFloatImageFormat(r32f);
 
 layout(push_constant, std430) uniform PushConstants {
     uvec2 dimensions;

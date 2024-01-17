@@ -84,8 +84,9 @@ pub struct ForwardFrameData {
     view: Mat4,
     view_pos: Vec3,
     render_mode: u32,
+    screen_size: [u32; 2],
     z_near: f32,
-    _padding: [u32; 3],
+    _padding: u32,
 }
 
 pub struct ForwardRenderer {
@@ -526,6 +527,7 @@ impl ForwardRenderer {
         scene: &SceneData,
 
         skybox: Option<graphics::GraphImageHandle>,
+        ssao_image: Option<graphics::GraphImageHandle>,
         shadow_renderer: &ShadowRenderer,
 
         target_attachments: &TargetAttachments,
@@ -567,8 +569,9 @@ impl ForwardRenderer {
                 view: camera_view_matrix,
                 view_pos: camera.transform.position,
                 render_mode: render_mode as u32,
+                screen_size: [screen_extent.width, screen_extent.height],
                 z_near: frozen_camera.z_near(),
-                _padding: [0; 3],
+                _padding: 0,
             }),
         );
 
@@ -637,8 +640,8 @@ impl ForwardRenderer {
                 .depth_state(Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
                     test: graphics::PipelineState::Static(true),
-                    write: true,
-                    compare: vk::CompareOp::GREATER_OR_EQUAL,
+                    write: false,
+                    compare: vk::CompareOp::EQUAL,
                 }))
                 .multisample_state(graphics::MultisampleState {
                     sample_count: settings.msaa,
@@ -750,7 +753,8 @@ impl ForwardRenderer {
             .with_dependencies(target_attachments.depth_resolve.map(|i| (i, AccessKind::DepthAttachmentWrite)))
             .with_dependency(target_attachments.color_target, AccessKind::ColorAttachmentWrite)
             .with_dependencies(target_attachments.color_resolve.map(|i| (i, AccessKind::ColorAttachmentWrite)))
-            .with_dependencies(shadow_renderer.rendered_shadow_maps().map(|h| (h, AccessKind::FragmentShaderRead)));
+            .with_dependencies(shadow_renderer.rendered_shadow_maps().map(|h| (h, AccessKind::FragmentShaderRead)))
+            .with_dependencies(ssao_image.map(|i| (i, AccessKind::FragmentShaderRead)));
 
         pass_builder.render(move |cmd, graph| {
             let color_target = graph.get_image(target_attachments.color_target);
@@ -762,6 +766,7 @@ impl ForwardRenderer {
             let jitter_texture = graph.get_image(jitter_texture);
 
             let skybox = skybox.map(|h| graph.get_image(h));
+            let ssao_image = ssao_image.map(|h| graph.get_image(h));
 
             let per_frame_data = graph.get_buffer(frame_data);
             let cluster_info_buffer = graph.get_buffer(cluster_info.info_buffer);
@@ -785,13 +790,13 @@ impl ForwardRenderer {
                 .load_op(if skybox.is_none() || render_mode == RenderMode::Overdraw {
                     vk::AttachmentLoadOp::CLEAR
                 } else {
-                    vk::AttachmentLoadOp::DONT_CARE
-                    // vk::AttachmentLoadOp::CLEAR
+                    // vk::AttachmentLoadOp::DONT_CARE
+                    vk::AttachmentLoadOp::CLEAR
                 })
                 .clear_value(vk::ClearValue {
                     color: vk::ClearColorValue {
-                        // float32: [1.0, 0.0, 1.0, 0.0],
-                        float32: [0.0, 0.0, 0.0, 0.0],
+                        float32: [1.0, 0.0, 1.0, 0.0],
+                        // float32: [0.0, 0.0, 0.0, 0.0],
                     },
                 })
                 .store_op(vk::AttachmentStoreOp::STORE);
@@ -844,7 +849,7 @@ impl ForwardRenderer {
                 cmd.bind_raster_pipeline(forward_pipeline);
             }
 
-            cmd.build_constants()
+            let mut constants = cmd.build_constants()
                 .buffer(draw_commands_buffer)
                 .buffer(cull_info_buffer)
                 .buffer(per_frame_data)
@@ -861,6 +866,14 @@ impl ForwardRenderer {
                 .uint(selected_light)
                 .sampled_image(brdf_integration_map)
                 .sampled_image(jitter_texture);
+
+            if let Some(ssao_image) = ssao_image {
+                constants = constants.sampled_image(ssao_image);
+            } else {
+                constants = constants.uint(u32::MAX);
+            }
+
+            constants.push();
 
             if mesh_shading {
                 cmd.draw_mesh_tasks_indirect(&draw_commands_buffer, 0, 1, 0);

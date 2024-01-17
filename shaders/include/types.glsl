@@ -53,6 +53,7 @@ RegisterBuffer(PerFrameBuffer, {
     mat4  view;
     vec3  view_pos;
     uint  render_mode;
+    uvec2 screen_size;
     float z_near;
 });
 

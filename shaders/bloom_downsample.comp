@@ -1,0 +1,93 @@
+#version 460
+
+#include "include/common.glsl"
+#include "include/types.glsl"
+
+#include "include/functions.glsl"
+
+RegisterFloatImageFormat(r11f_g11f_b10f);
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant, std430) uniform PushConstants {
+    uvec2 image_size;
+    uint  input_image;
+    uint  output_image;
+
+    // https://catlikecoding.com/unity/tutorials/advanced-rendering/bloom/
+    vec4  threshold_filter;
+    
+    uint  mip_level;
+};
+
+vec3 rgb_to_srgb_simple(vec3 rgb) {
+    return pow(rgb, vec3(1.0 / 2.2));
+}
+
+float karis_average(vec3 col) {
+    float luma = luminance(rgb_to_srgb_simple(col)) * 0.25f;
+    return 1.0 / (1.0 + luma);
+}
+
+vec3 prefilter(vec3 color) {
+    float max_component = max(color.r, max(color.g, color.b));
+    float soft = clamp(max_component - threshold_filter.y, 0, threshold_filter.z);
+    soft = soft * soft * threshold_filter.w;
+    float contribution = max(max_component - threshold_filter.x, soft) / max(max_component, 0.00001);
+    return color * contribution;
+}
+
+void main() {
+    if (gl_GlobalInvocationID.x >= image_size.x || gl_GlobalInvocationID.y >= image_size.y) return;
+
+    vec2 pixel = vec2(gl_GlobalInvocationID.xy) + vec2(0.5);
+    vec2 size_rcp = 1.0 / vec2(image_size);
+    
+    // https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare/
+    // z0  --  z1  --  z2
+    //
+    // --  y   --  y   --    x * 0.125
+    //
+    // z3  --  x   --  z4    y * 0.5
+    //
+    // --  y   --  y   --    z * 0.125
+    //
+    // z5  --  z6  --  z7
+    vec3 x = texture(GetSampledTexture2D(input_image), pixel * size_rcp).xyz;
+
+    vec3 y0 = texture(GetSampledTexture2D(input_image), (pixel + vec2(+1, +1)) * size_rcp).xyz;
+    vec3 y1 = texture(GetSampledTexture2D(input_image), (pixel + vec2(-1, +1)) * size_rcp).xyz;
+    vec3 y2 = texture(GetSampledTexture2D(input_image), (pixel + vec2(+1, -1)) * size_rcp).xyz;
+    vec3 y3 = texture(GetSampledTexture2D(input_image), (pixel + vec2(-1, -1)) * size_rcp).xyz;
+    
+    vec3 z0 = texture(GetSampledTexture2D(input_image), (pixel + vec2(-2, -2)) * size_rcp).xyz;
+    vec3 z1 = texture(GetSampledTexture2D(input_image), (pixel + vec2(-2,  0)) * size_rcp).xyz;
+    vec3 z2 = texture(GetSampledTexture2D(input_image), (pixel + vec2(-2, +2)) * size_rcp).xyz;
+    vec3 z3 = texture(GetSampledTexture2D(input_image), (pixel + vec2( 0, -2)) * size_rcp).xyz;
+    vec3 z4 = texture(GetSampledTexture2D(input_image), (pixel + vec2( 0,  2)) * size_rcp).xyz;
+    vec3 z5 = texture(GetSampledTexture2D(input_image), (pixel + vec2(+2, -2)) * size_rcp).xyz;
+    vec3 z6 = texture(GetSampledTexture2D(input_image), (pixel + vec2(+2,  0)) * size_rcp).xyz;
+    vec3 z7 = texture(GetSampledTexture2D(input_image), (pixel + vec2(+2, +2)) * size_rcp).xyz;
+
+    vec3 g0 = (y0+y1+y2+y3) * 0.125;
+    vec3 g1 = (z0+z0+z3+x)  * 0.03125;
+    vec3 g2 = (z1+z2+z4+x)  * 0.03125;
+    vec3 g3 = (z3+z5+z6+x)  * 0.03125;
+    vec3 g4 = (z4+z6+z7+x)  * 0.03125;
+    
+    if (mip_level == 0) {
+        g0 *= karis_average(g0);
+        g1 *= karis_average(g1);
+        g2 *= karis_average(g2);
+        g3 *= karis_average(g3);
+        g4 *= karis_average(g4);
+    }
+
+    vec3 result = g0+g1+g2+g3+g4;
+
+    if (mip_level == 0) {
+        result = prefilter(result);
+    }
+
+    imageStore(GetImage2D(r11f_g11f_b10f, output_image), ivec2(gl_GlobalInvocationID.xy), vec4(result, 0.0));
+}

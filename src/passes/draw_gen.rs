@@ -8,7 +8,7 @@ use crate::{
     assets::{AlphaMode, AssetGraphData, GpuMeshletDrawCommand},
     graphics::{self, AccessKind, ShaderStage},
     scene::SceneGraphData,
-    Projection,
+    Projection, math,
 };
 
 pub const MAX_DRAW_COUNT: usize = 2_000_000;
@@ -514,7 +514,7 @@ pub struct DepthPyramid {
 impl DepthPyramid {
     pub fn new(context: &graphics::Context, name: Cow<'static, str>, [width, height]: [u32; 2]) -> Self {
         let [width, height] = [width.next_power_of_two() / 2, height.next_power_of_two() / 2];
-        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(width, height));
+        let mip_levels = math::mip_levels_from_size(u32::max(width, height));
 
         let pyramid = context.create_image(
             name,
@@ -541,7 +541,7 @@ impl DepthPyramid {
 
     pub fn resize(&mut self, [width, height]: [u32; 2]) {
         let dimensions = [width.next_power_of_two() / 2, height.next_power_of_two() / 2, 1];
-        let mip_levels = crate::gltf_loader::mip_levels_from_size(u32::max(dimensions[0], dimensions[1]));
+        let mip_levels = math::mip_levels_from_size(u32::max(dimensions[0], dimensions[1]));
         if self.pyramid.recreate(&graphics::ImageDesc {
             dimensions,
             mip_levels,
@@ -618,7 +618,7 @@ impl DepthPyramid {
                         .uint(dst_view.height())
                         .sampled_image(&src_view)
                         .storage_image(&dst_view);
-                    cmd.dispatch([dst_view.width() / 16 + 1, dst_view.height() / 16 + 1, 1]);
+                    cmd.dispatch([dst_view.width().div_ceil(16), dst_view.height().div_ceil(16), 1]);
                 }
             });
     }

@@ -37,14 +37,17 @@ use input::Input;
 use scene::{EntityData, Light, LightParams, SceneData, Transform};
 
 use passes::{
+    bloom::BloomSettings,
     cluster::{ClusterDebugSettings, ClusterSettings},
     debug_renderer::DebugRenderer,
     env_map_loader::EnvironmentMap,
     forward::{ForwardRenderer, RenderMode},
-    shadow_renderer::{ShadowRenderer, ShadowSettings}, ssao::{SsaoRenderer, SsaoSettings},
+    shadow_renderer::{ShadowRenderer, ShadowSettings},
+    ssao::{SsaoRenderer, SsaoSettings},
 };
 
 use crate::passes::{
+    bloom::compute_bloom,
     cluster::{compute_clusters, debug_cluster_volumes},
     forward::TargetAttachments,
     post_process::render_post_process,
@@ -115,7 +118,6 @@ impl CameraController {
         let movement_speed = if input.key_held(KeyCode::LShift) {
             self.movement_speed * 8.0
         } else if input.key_held(KeyCode::LControl) {
-			
             self.movement_speed / 8.0
         } else {
             self.movement_speed
@@ -217,6 +219,9 @@ pub struct Settings {
     pub cluster_debug_settings: ClusterDebugSettings,
     pub ssao_enabled: bool,
     pub ssao_settings: SsaoSettings,
+    pub bloom_enabled: bool,
+    pub bloom_settings: BloomSettings,
+    pub camera_exposure: f32,
 }
 
 impl Default for Settings {
@@ -238,6 +243,9 @@ impl Default for Settings {
             cluster_debug_settings: Default::default(),
             ssao_enabled: true,
             ssao_settings: Default::default(),
+            bloom_enabled: true,
+            bloom_settings: Default::default(),
+            camera_exposure: 1.0,
         }
     }
 }
@@ -266,9 +274,9 @@ impl Settings {
                     }
                 });
         });
-
+        
         ui.horizontal(|ui| {
-            ui.label("msaa");
+            ui.label("MSAA");
             egui::ComboBox::from_id_source("msaa").selected_text(format!("{}", self.msaa)).show_ui(ui, |ui| {
                 for sample_count in device.gpu.supported_multisample_counts() {
                     ui.selectable_value(&mut self.msaa, sample_count, sample_count.to_string());
@@ -276,36 +284,56 @@ impl Settings {
             });
         });
 
-        ui.add_enabled(
-            device.mesh_shader_fns.is_some(),
-            egui::Checkbox::new(&mut self.use_mesh_shading, "use mesh shading"),
-        );
+        ui.checkbox(&mut self.ssao_enabled, "SSAO");
+        ui.checkbox(&mut self.bloom_enabled, "Bloom");
 
-        ui.horizontal(|ui| {
-            ui.label("min mesh lod");
-            ui.add(egui::Slider::new(&mut self.min_mesh_lod, 0..=self.max_mesh_lod.min(MAX_MESH_LODS - 1)));
-        });
+        ui.collapsing("Mesh Settings", |ui| {
+            
+            ui.add_enabled(
+                device.mesh_shader_fns.is_some(),
+                egui::Checkbox::new(&mut self.use_mesh_shading, "use mesh shading"),
+            );
 
-        ui.horizontal(|ui| {
-            ui.label("max mesh lod");
-            ui.add(egui::Slider::new(&mut self.max_mesh_lod, 0.max(self.min_mesh_lod)..=MAX_MESH_LODS - 1));
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("lod base");
-            ui.add(egui::DragValue::new(&mut self.lod_base));
-        });
-        ui.horizontal(|ui| {
-            ui.label("lod step");
-            ui.add(egui::DragValue::new(&mut self.lod_step));
-        });
-
-        ui.heading("Shadow Settings");
-        self.shadow_settings.edit(ui);
+            ui.horizontal(|ui| {
+                ui.label("min mesh lod");
+                ui.add(egui::Slider::new(
+                    &mut self.min_mesh_lod,
+                    0..=self.max_mesh_lod.min(MAX_MESH_LODS - 1),
+                ));
+            });
     
-        ui.checkbox(&mut self.ssao_enabled, "ssao");
-        ui.heading("SSAO Settings");
-        self.ssao_settings.edit(ui);
+            ui.horizontal(|ui| {
+                ui.label("max mesh lod");
+                ui.add(egui::Slider::new(
+                    &mut self.max_mesh_lod,
+                    0.max(self.min_mesh_lod)..=MAX_MESH_LODS - 1,
+                ));
+            });
+    
+            ui.horizontal(|ui| {
+                ui.label("lod base");
+                ui.add(egui::DragValue::new(&mut self.lod_base));
+            });
+            ui.horizontal(|ui| {
+                ui.label("lod step");
+                ui.add(egui::DragValue::new(&mut self.lod_step));
+            });
+        });
+        
+        ui.collapsing("Shadow Settings", |ui| self.shadow_settings.edit(ui));
+        
+        ui.collapsing("Post Proccessing Settings", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("camera exposure");
+                ui.add(egui::DragValue::new(&mut self.camera_exposure).clamp_range(0.1..=16.0).speed(0.1));
+            });
+            
+            ui.heading("SSAO Settings");
+            self.ssao_settings.edit(ui);
+
+            ui.heading("Bloom Settings");
+            self.bloom_settings.edit(ui)
+        });
     }
 
     pub fn edit_cluster(&mut self, ui: &mut egui::Ui) {
@@ -317,7 +345,6 @@ impl Settings {
 
 #[derive(Debug, Clone, Copy)]
 pub struct CameraDebugSettings {
-    pub exposure: f32,
     pub render_mode: RenderMode,
     pub freeze_camera: bool,
     pub show_bounding_boxes: bool,
@@ -336,7 +363,6 @@ pub struct CameraDebugSettings {
 impl Default for CameraDebugSettings {
     fn default() -> Self {
         Self {
-            exposure: 1.0,
             render_mode: RenderMode::Shaded,
             freeze_camera: false,
             show_bounding_boxes: false,
@@ -356,10 +382,6 @@ impl Default for CameraDebugSettings {
 
 impl CameraDebugSettings {
     fn edit(&mut self, ui: &mut egui::Ui, pyramid_max_mip_level: u32) {
-        ui.horizontal(|ui| {
-            ui.label("camera exposure");
-            ui.add(egui::DragValue::new(&mut self.exposure).clamp_range(0.1..=16.0).speed(0.1));
-        });
         ui.checkbox(&mut self.freeze_camera, "freeze camera");
         ui.checkbox(&mut self.show_bounding_boxes, "show bounding boxes");
         ui.checkbox(&mut self.show_bounding_spheres, "show bounding spheres");
@@ -495,7 +517,7 @@ impl App {
                 name: Some("sky".into()),
                 light: Some(Light {
                     color: vec3(1.0, 1.0, 1.0),
-                    intensity: 0.8,
+                    intensity: 0.65,
                     params: LightParams::Sky {
                         irradiance: environment_map.irradiance.clone(),
                         prefiltered: environment_map.prefiltered.clone(),
@@ -511,8 +533,9 @@ impl App {
             load_gltf(&gltf_path, context, &mut gpu_assets, &mut scene).unwrap();
         }
 
-        // use rand::Rng;
-        // let mut rng = rand::thread_rng();
+        #[allow(unused_imports)]
+        use rand::Rng;
+        let mut _rng = rand::thread_rng();
 
         // let prefab = scene.entities.pop().unwrap();
         // let pos_range = -128.0..=128.0;
@@ -660,7 +683,7 @@ impl App {
         time: &Time,
         egui_ctx: &egui::Context,
         context: &mut graphics::Context,
-        control_flow: &mut ControlFlow,
+        control_flow: &mut ControlFlow, 
     ) {
         puffin::profile_function!();
 
@@ -887,7 +910,11 @@ impl App {
             self.settings.camera_debug_settings.render_mode = RenderMode::from(new_render_mode);
         }
 
-        if input.close_requested() | input.key_pressed(KeyCode::Escape) {
+        if input.key_pressed(KeyCode::Escape) {
+            self.selected_entity_index = None;
+        }
+
+        if input.close_requested() {
             control_flow.set_exit();
         }
     }
@@ -973,13 +1000,13 @@ impl App {
         }
 
         let color_target = context.import(&self.main_color_image);
-        let color_resolve_target = self.main_color_resolve_image.as_ref().map(|i| context.import(i));
+        let color_resolve = self.main_color_resolve_image.as_ref().map(|i| context.import(i));
         let depth_target = context.import(&self.main_depth_image);
         let depth_resolve = self.main_depth_resolve_image.as_ref().map(|i| context.import(i));
 
         let target_attachments = TargetAttachments {
             color_target,
-            color_resolve: None,
+            color_resolve,
             depth_target,
             depth_resolve,
         };
@@ -1002,13 +1029,15 @@ impl App {
             &self.frozen_camera,
         );
 
-        let ssao_image = self.settings.ssao_enabled.then(|| self.ssao_renderer.compute_ssao(
-            context,
-            &self.settings.ssao_settings,
-            target_attachments.non_msaa_depth_target(),
-            &self.camera,
-            [screen_extent.width, screen_extent.height]
-        ));
+        let ssao_image = self.settings.ssao_enabled.then(|| {
+            self.ssao_renderer.compute_ssao(
+                context,
+                &self.settings.ssao_settings,
+                target_attachments.non_msaa_depth_target(),
+                &self.camera,
+                [screen_extent.width, screen_extent.height],
+            )
+        });
 
         self.shadow_renderer.render_shadows(
             context,
@@ -1056,6 +1085,14 @@ impl App {
             &self.frozen_camera,
             selected_light,
         );
+
+        let bloom_image = self.settings.bloom_enabled.then(|| {
+            compute_bloom(
+                context,
+                &self.settings.bloom_settings,
+                target_attachments.non_msaa_color_target(),
+            )
+        });
 
         egui::Window::new("shadow debug settings")
             .open(&mut self.open_shadow_debug_settings)
@@ -1152,9 +1189,9 @@ impl App {
 
             let pos = entity.transform.position;
 
-            self.debug_renderer.draw_line(pos, pos + vec3(1.0, 0.0, 0.0), vec4(1.0, 0.0, 0.0, 1.0));
-            self.debug_renderer.draw_line(pos, pos + vec3(0.0, 1.0, 0.0), vec4(0.0, 1.0, 0.0, 1.0));
-            self.debug_renderer.draw_line(pos, pos + vec3(0.0, 0.0, 1.0), vec4(0.0, 0.0, 1.0, 1.0));
+            // self.debug_renderer.draw_line(pos, pos + vec3(1.0, 0.0, 0.0), vec4(1.0, 0.0, 0.0, 1.0));
+            // self.debug_renderer.draw_line(pos, pos + vec3(0.0, 1.0, 0.0), vec4(0.0, 1.0, 0.0, 1.0));
+            // self.debug_renderer.draw_line(pos, pos + vec3(0.0, 0.0, 1.0), vec4(0.0, 0.0, 1.0, 1.0));
 
             if let Some(mesh) = entity.mesh {
                 self.debug_renderer.draw_model_wireframe(
@@ -1183,9 +1220,7 @@ impl App {
             context,
             &self.settings,
             &self.gpu_assets,
-            color_target,
-            color_resolve_target,
-            depth_target,
+            target_attachments,
             &self.camera,
         );
 
@@ -1196,12 +1231,9 @@ impl App {
 
         render_post_process(
             context,
-            if let Some(resolved) = color_resolve_target {
-                resolved
-            } else {
-                color_target
-            },
-            self.settings.camera_debug_settings.exposure,
+            target_attachments.non_msaa_color_target(),
+            bloom_image,
+            &self.settings,
             (show_depth_pyramid).then_some((depth_pyramid, depth_pyramid_level, pyramid_display_far_depth)),
             self.settings.camera_debug_settings.render_mode,
         );

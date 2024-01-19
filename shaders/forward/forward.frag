@@ -80,12 +80,6 @@ const vec2 poisson_offsets[64] = vec2[](
 	vec2(-0.4230408, -0.7129914)
 );
 
-// https://blog.demofox.org/2022/01/01/interleaved-gradient-noise-a-different-kind-of-low-discrepancy-sequence/
-float interleaved_gradient_noise(vec2 seed) {
-    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
-    return fract(magic.z * fract(dot(seed, magic.xy)));
-}
-
 float penumbra_size(float reciever_depth, float avg_blockers_depth) {
     return (reciever_depth - avg_blockers_depth) / avg_blockers_depth;
 }
@@ -156,7 +150,7 @@ float pcf_poisson(uint shadow_map, vec4 clip_pos, float inv_world_size, float li
     float avg_blockers_depth;
     penumbra_poisson(shadow_map, random_theta, clip_pos.xyz, blockers_count, avg_blockers_depth, inv_world_size);
     
-    if (blockers_count == 0 && blockers_count == PENUMBRA_SAMPLE_COUNT) return blockers_count / PENUMBRA_SAMPLE_COUNT;
+    if (blockers_count == 0 || blockers_count == PENUMBRA_SAMPLE_COUNT) return 1.0 - (blockers_count / PENUMBRA_SAMPLE_COUNT);
 
     float penumbra_scale = penumbra_size(1.0 - clip_pos.z, avg_blockers_depth) * light_size_uv;
     float filter_radius = max(penumbra_scale * inv_world_size, 1.0 / textureSize(GetSampledTexture2D(shadow_map), 0).x);
@@ -572,7 +566,7 @@ void main() {
             break;
         case 8: 
             float norm_light_count = clamp(light_count / 32.0, 0.0, 1.0);
-            out_color.xyz = colormap(norm_light_count).xyz;
+            out_color.xyz = heat_colormap(norm_light_count).xyz;
             break;
     }
 }

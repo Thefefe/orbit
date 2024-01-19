@@ -23,6 +23,15 @@ pub enum ResourceSource {
     },
 }
 
+impl ResourceSource {
+    pub fn desc(&self) -> graphics::AnyResourceDesc {
+        match self {
+            ResourceSource::Create { desc, .. } => *desc,
+            ResourceSource::Import { resource } => resource.desc(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct GraphResourceVersion {
     pub last_access: graphics::AccessKind,

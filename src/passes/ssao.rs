@@ -178,7 +178,7 @@ impl SsaoRenderer {
     }
 }
 
-const SSAO_NOISE_SIZE: usize = 16;
+const SSAO_NOISE_SIZE: usize = 4;
 const SSAO_SAMPLE_SIZE: usize = 64;
 
 pub fn compute_noise_texture(context: &mut graphics::Context) -> graphics::Image {

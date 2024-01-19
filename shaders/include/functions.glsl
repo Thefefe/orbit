@@ -37,6 +37,17 @@ vec3 srgb_to_linear(vec3 srgb) {
     return mix(higher, lower, cutoff);
 }
 
+vec3 linear_to_srgb(vec3 linear) {
+    bvec3 cutoff = lessThan(linear, vec3(0.0031308));
+    vec3 higher = vec3(1.055) * pow(linear, vec3(1.0/2.4)) - vec3(0.055);
+    vec3 lower = linear * vec3(12.92);
+    return mix(higher, lower, cutoff);
+}
+
+float luminance(vec3 rgb) {
+    return dot(rgb, vec3(0.2126f, 0.7152f, 0.0722f));
+}
+
 vec2 hammersley_2d(uint i, uint N) 
 {
 	// Radical inverse based on http://holger.dammertz.org/stuff/notes_HammersleyOnHemisphere.html
@@ -94,6 +105,12 @@ vec3 fresnel_schlick_roughness(float cos_theta, vec3 base_reflectivity, float ro
      * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
 }
 
+// https://blog.demofox.org/2022/01/01/interleaved-gradient-noise-a-different-kind-of-low-discrepancy-sequence/
+float interleaved_gradient_noise(vec2 seed) {
+    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+    return fract(magic.z * fract(dot(seed, magic.xy)));
+}
+
 // https://graphics.pixar.com/library/OrthonormalB/paper.pdf
 vec3 reference_orthonormal_vector(vec3 v) {
     float signum = v.z >= 0.0 ? 1.0 : -1.0;
@@ -122,7 +139,7 @@ void unpack_normal_tangent(i8vec4 packed, out vec3 n, out vec4 t) {
 }
 
 //https://github.com/kbinani/colormap-shaders/blob/master/shaders/glsl/MATLAB_jet.frag
-float colormap_red(float x) {
+float heat_colormap_red(float x) {
     if (x < 0.7) {
         return 4.0 * x - 1.5;
     } else {
@@ -130,7 +147,7 @@ float colormap_red(float x) {
     }
 }
 
-float colormap_green(float x) {
+float heat_colormap_green(float x) {
     if (x < 0.5) {
         return 4.0 * x - 0.5;
     } else {
@@ -138,7 +155,7 @@ float colormap_green(float x) {
     }
 }
 
-float colormap_blue(float x) {
+float heat_colormap_blue(float x) {
     if (x < 0.3) {
        return 4.0 * x + 0.5;
     } else {
@@ -146,9 +163,9 @@ float colormap_blue(float x) {
     }
 }
 
-vec4 colormap(float x) {
-    float r = clamp(colormap_red(x), 0.0, 1.0);
-    float g = clamp(colormap_green(x), 0.0, 1.0);
-    float b = clamp(colormap_blue(x), 0.0, 1.0);
+vec4 heat_colormap(float x) {
+    float r = clamp(heat_colormap_red(x), 0.0, 1.0);
+    float g = clamp(heat_colormap_green(x), 0.0, 1.0);
+    float b = clamp(heat_colormap_blue(x), 0.0, 1.0);
     return vec4(r, g, b, 1.0);
 }

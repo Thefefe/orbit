@@ -11,7 +11,7 @@ use crate::{
         GpuAssets, MaterialData, MeshHandle, TextureHandle,
     },
     graphics,
-    math::Aabb,
+    math::{Aabb, next_mip_size},
     scene::{EntityData, SceneData, Transform},
     utils::OptionDefaultIterator,
 };
@@ -104,18 +104,6 @@ fn dxgi_format_to_vk(format: ddsfile::DxgiFormat) -> Option<vk::Format> {
         _ => return None,
     };
     Some(vk_format)
-}
-
-pub fn mip_levels_from_size(max_size: u32) -> u32 {
-    u32::max(1, f32::floor(f32::log2(max_size as f32)) as u32 + 1)
-}
-
-pub fn next_mip_size(prev: u32) -> u32 {
-    if prev > 1 {
-        prev / 2
-    } else {
-        1
-    }
 }
 
 // taken from https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-file-layout-for-textures

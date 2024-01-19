@@ -42,16 +42,14 @@ vec3 aces_narkowicz(vec3 col) {
     return clamp((col * (a * col + b)) / (col * (c * col + d) + e), 0.0, 1.0);
 }
 
-float luminance(vec3 radiance) {
-    return dot(radiance, vec3(0.2125, 0.7154, 0.0721));
-}
-
 #define HIGHEST_OVERDRAW_COUNT 12.0
 
 layout(push_constant, std430) uniform PushConstants {
     uint render_mode;
-    uint image_index;
     float exposure;
+    float bloom_intensity;
+    uint image_index;
+    uint bloom_image;
     uint depth_pyramid;
     uint depth_pyramid_level;
     float pyramid_far_depth;
@@ -59,6 +57,11 @@ layout(push_constant, std430) uniform PushConstants {
 
 void main() {
     vec3 hdr_color = texture(GetSampledTexture2D(image_index), in_uv).rgb;
+    if (render_mode == 0 && bloom_image != TEXTURE_NONE) {
+        vec3 bloom_color = texture(GetSampledTexture2D(bloom_image), in_uv).rgb;
+        // hdr_color = mix(hdr_color, bloom_color, bloom_intensity);
+        hdr_color += bloom_color * bloom_intensity;
+    }
 
     if (render_mode == 8) out_color = vec4(hdr_color.xyz, 1.0);
 

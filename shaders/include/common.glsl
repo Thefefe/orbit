@@ -5,7 +5,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 
 const float PI = 3.14159265359;
-const float EPSILON = 0.0000001;
+const float EPSILON = 0.0001;
 
 #define IMMUTABLE_SAMPLER_COUNT 7
 #define SHADOW_SAMPLER 4
@@ -21,12 +21,12 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2DMS _u_textur
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_texture_cube_registry[];
 
 #define RegisterFloatImageFormat(Format) \
-    layout(set = 2, binding = 0, Format) uniform writeonly image2D _u_image2d_##Format##_registry[]; \
-    layout(set = 2, binding = 0, Format) uniform writeonly image3D _u_image3d_##Format##_registry[]
+    layout(set = 2, binding = 0, Format) uniform image2D _u_image2d_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform image3D _u_image3d_##Format##_registry[]
 
 #define RegisterIntImageFormat(Format) \
-    layout(set = 2, binding = 0, Format) uniform writeonly iimage2D _u_image2d_##Format##_registry[]; \
-    layout(set = 2, binding = 0, Format) uniform writeonly iimage3D _u_image3d_##Format##_registry[]
+    layout(set = 2, binding = 0, Format) uniform iimage2D _u_image2d_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform iimage3D _u_image3d_##Format##_registry[]
 
 #define RegisterUintImageFormat(Format) \
     layout(set = 2, binding = 0, Format) uniform uimage2D _u_image2d_##Format##_registry[]; \

@@ -6,3 +6,4 @@ pub mod post_process;
 pub mod shadow_renderer;
 pub mod cluster;
 pub mod ssao;
+pub mod bloom;

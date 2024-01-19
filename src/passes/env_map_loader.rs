@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use ash::vk;
 use glam::{vec3, Mat4};
 
-use crate::{gltf_loader, graphics};
+use crate::{graphics, math};
 
 pub const FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 const IRRADIANCE_SIZE: u32 = 32;
@@ -47,7 +47,7 @@ impl EnvironmentMap {
         resolution: u32,
         equirectangular_image: &graphics::ImageView,
     ) -> EnvironmentMap {
-        let skybox_mip_levels = gltf_loader::mip_levels_from_size(resolution);
+        let skybox_mip_levels = math::mip_levels_from_size(resolution);
         let skybox = context.create_image(
             format!("{name}_skybox"),
             &graphics::ImageDesc {
@@ -350,7 +350,7 @@ impl EnvironmentMap {
                         }],
                     );
 
-                    extent = extent.map(gltf_loader::next_mip_size);
+                    extent = extent.map(math::next_mip_size);
                 }
             }
 

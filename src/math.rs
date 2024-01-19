@@ -15,6 +15,18 @@ pub const NDC_BOUNDS: [Vec4; 8] = [
     vec4(-1.0, 1.0, 1.0, 1.0),
 ];
 
+pub fn mip_levels_from_size(max_size: u32) -> u32 {
+    u32::max(1, f32::floor(f32::log2(max_size as f32)) as u32 + 1)
+}
+
+pub fn next_mip_size(prev: u32) -> u32 {
+    if prev > 1 {
+        prev / 2
+    } else {
+        1
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Aabb {
     pub min: Vec3A,

@@ -1,13 +1,14 @@
 use ash::vk;
 
-use crate::graphics;
+use crate::{graphics::{self, AccessKind}, Settings};
 
 use super::forward::RenderMode;
 
 pub fn render_post_process(
     context: &mut graphics::Context,
     src_image: graphics::GraphImageHandle,
-    exposure: f32,
+    bloom_image: Option<graphics::GraphImageHandle>,
+    settings: &Settings,
     depth_pyramid_debug: Option<(graphics::GraphImageHandle, u32, f32)>,
     render_mode: RenderMode,
 ) {
@@ -28,16 +29,21 @@ pub fn render_post_process(
             }]),
     );
 
+    let exposure = settings.camera_exposure;
+    let bloom_intensity = settings.bloom_settings.intensity;
+
     context
         .add_pass("blit_present_pass")
-        .with_dependency(swapchain_image, graphics::AccessKind::ColorAttachmentWrite)
-        .with_dependency(src_image, graphics::AccessKind::FragmentShaderRead)
+        .with_dependency(swapchain_image, AccessKind::ColorAttachmentWrite)
+        .with_dependency(src_image, AccessKind::FragmentShaderRead)
+        .with_dependencies(bloom_image.map(|h| (h, AccessKind::FragmentShaderReadGeneral)))
         .with_dependencies(
-            depth_pyramid_debug.map(|(pyramid, _, _)| (pyramid, graphics::AccessKind::FragmentShaderReadGeneral)),
+            depth_pyramid_debug.map(|(pyramid, _, _)| (pyramid, AccessKind::FragmentShaderReadGeneral)),
         )
         .render(move |cmd, graph| {
             let swapchain_image = graph.get_image(swapchain_image);
             let src_image = graph.get_image(src_image);
+            let bloom_image = bloom_image.map(|i| graph.get_image(i));
 
             let color_attachment = vk::RenderingAttachmentInfo::builder()
                 .image_view(swapchain_image.view)
@@ -54,8 +60,17 @@ pub fn render_post_process(
 
             cmd.bind_raster_pipeline(pipeline);
 
-            let mut constants =
-                cmd.build_constants().uint(render_mode as u32).sampled_image(&src_image).float(exposure);
+            let mut constants = cmd.build_constants()
+                .uint(render_mode as u32)
+                .float(exposure)
+                .float(bloom_intensity)
+                .sampled_image(&src_image);
+            
+            if let Some(bloom_image) = bloom_image {
+                constants = constants.sampled_image(bloom_image);
+            } else {
+                constants = constants.uint(u32::MAX);
+            }
 
             if let Some((depth_pyramid, depth_pyramid_level, far_depth)) = depth_pyramid_debug {
                 let depth_pyramid = graph.get_image(depth_pyramid);

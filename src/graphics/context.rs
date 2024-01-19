@@ -635,6 +635,22 @@ impl Context {
         self.graph.resources[handle.resource_index].descriptor_index
     }
 
+    #[track_caller]
+    pub fn get_buffer_desc(&self, handle: GraphBufferHandle) -> graphics::BufferDesc {
+        match self.graph.resources[handle.resource_index].source.desc() {
+            graphics::AnyResourceDesc::Buffer(desc) => desc,
+            _ => panic!("resource isn't a buffer"),
+        }
+    }
+
+    #[track_caller]
+    pub fn get_image_desc(&self, handle: GraphImageHandle) -> graphics::ImageDesc {
+        match self.graph.resources[handle.resource_index].source.desc() {
+            graphics::AnyResourceDesc::Image(desc) => desc,
+            _ => panic!("resource isn't an image"),
+        }
+    }
+
     pub fn import<R: graphics::RenderResource>(&mut self, resource: R) -> GraphHandle<R::RawResource> {
         let resource = resource.into();
         let descriptor_index = resource.as_ref().descriptor_index();

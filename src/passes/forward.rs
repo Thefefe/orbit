@@ -75,6 +75,10 @@ impl TargetAttachments {
     pub fn non_msaa_depth_target(&self) -> graphics::GraphImageHandle {
         self.depth_resolve.unwrap_or(self.depth_target)
     }
+
+    pub fn non_msaa_color_target(&self) -> graphics::GraphImageHandle {
+        self.color_resolve.unwrap_or(self.color_target)
+    }
 }
 
 #[repr(C)]
@@ -790,13 +794,13 @@ impl ForwardRenderer {
                 .load_op(if skybox.is_none() || render_mode == RenderMode::Overdraw {
                     vk::AttachmentLoadOp::CLEAR
                 } else {
-                    // vk::AttachmentLoadOp::DONT_CARE
-                    vk::AttachmentLoadOp::CLEAR
+                    vk::AttachmentLoadOp::DONT_CARE
+                    // vk::AttachmentLoadOp::CLEAR
                 })
                 .clear_value(vk::ClearValue {
                     color: vk::ClearColorValue {
-                        float32: [1.0, 0.0, 1.0, 0.0],
-                        // float32: [0.0, 0.0, 0.0, 0.0],
+                        // float32: [1.0, 0.0, 1.0, 0.0],
+                        float32: [0.0, 0.0, 0.0, 0.0],
                     },
                 })
                 .store_op(vk::AttachmentStoreOp::STORE);

@@ -268,42 +268,41 @@ void main() {
     }
 
     out_color = vec4(1.0);
-    uint alpha_mode;
+    // uint alpha_mode;
     vec4  base_color;
     vec3  normal;
     float metallic;
     float roughness;
     vec3  emissive;
     float ao;
-    float alpha_cutoff;
     {
         MaterialData material = GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index];
-        alpha_mode = material.alpha_mode;
+        // alpha_mode = material.alpha_mode;
         base_color = material.base_color;
         normal     = vout.normal;
         metallic   = material.metallic_factor;
         roughness  = material.roughness_factor;
         emissive   = material.emissive_factor;
         ao         = 1.0;
-        alpha_cutoff = material.alpha_cutoff;
+        // alpha_cutoff = material.alpha_cutoff;
 
         if (material.base_texture_index != TEXTURE_NONE) {
             base_color *= texture(GetSampledTexture2D(material.base_texture_index), vout.uv);
         }
 
         // masked
-        if (alpha_mode == 1) {
-            // avoid artifacts at edge cases
-            if (alpha_cutoff >= 1.0 || (material.base_texture_index == TEXTURE_NONE && base_color.a <= alpha_cutoff)) {
-                discard;
-            }
+        // if (alpha_mode == 1) {
+        //     // avoid artifacts at edge cases
+        //     if (alpha_cutoff >= 1.0 || (material.base_texture_index == TEXTURE_NONE && base_color.a <= alpha_cutoff)) {
+        //         discard;
+        //     }
             
-            if (material.base_texture_index != TEXTURE_NONE) {
-                vec2 texture_size = textureSize(GetSampledTexture2D(material.base_texture_index), 0);
-                base_color.a *= 1 + max(0, calc_mip_level(vout.uv * texture_size)) * MIP_SCALE;
-                out_color.a = (base_color.a - alpha_cutoff) / max(fwidth(base_color.a), 0.0001) + 0.5;
-            }
-        }
+        //     if (material.base_texture_index != TEXTURE_NONE) {
+        //         vec2 texture_size = textureSize(GetSampledTexture2D(material.base_texture_index), 0);
+        //         base_color.a *= 1 + max(0, calc_mip_level(vout.uv * texture_size)) * MIP_SCALE;
+        //         out_color.a = (base_color.a - alpha_cutoff) / max(fwidth(base_color.a), 0.0001) + 0.5;
+        //     }
+        // }
 
         if (material.normal_texture_index != TEXTURE_NONE) {
             mat3 TBN = mat3(
@@ -343,7 +342,7 @@ void main() {
     
     // overdraw visualization
     if (GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode == 7) {
-        if (base_color.a < alpha_cutoff) {
+        if (base_color.a < GetBuffer(MaterialsBuffer, materials_buffer).materials[vout.material_index].alpha_cutoff) {
             out_color = vec4(0.0);
         } else {
             out_color = vec4(1.0);

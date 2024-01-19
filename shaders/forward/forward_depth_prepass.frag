@@ -48,10 +48,7 @@ void main() {
         if (texture_index != TEXTURE_NONE) {
             alpha *= texture(GetSampledTexture2D(texture_index), vout.uv).a;
             
-            // alpha bias to remove artifacts at the edges of alpha-tested geometry
-            // when there is no bias there is a mismatch in coverage between the depth pre-pass
-            // and the color pass, even when the exact same values are used 
-            alpha -= 0.001;
+            // alpha -= 0.001;
 
             vec2 texture_size = textureSize(GetSampledTexture2D(texture_index), 0);
             alpha *= 1 + max(0, calc_mip_level(vout.uv * texture_size)) * MIP_SCALE;

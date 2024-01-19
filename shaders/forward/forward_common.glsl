@@ -22,7 +22,7 @@ layout(push_constant, std430) uniform PushConstants {
 #define VERTEX_OUTPUT VertexOutput { \
     vec4 world_pos;                  \
     vec2 uv;                         \
-    vec3 normal;                     \
-    vec4 tangent;                    \
+    centroid vec3 normal;                     \
+    centroid vec4 tangent;                    \
     flat uint material_index;        \
 }

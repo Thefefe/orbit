@@ -649,7 +649,7 @@ impl ForwardRenderer {
                 }))
                 .multisample_state(graphics::MultisampleState {
                     sample_count: settings.msaa,
-                    alpha_to_coverage: true,
+                    alpha_to_coverage: false,
                 });
 
             if mesh_shading {
@@ -693,7 +693,7 @@ impl ForwardRenderer {
                 }))
                 .multisample_state(graphics::MultisampleState {
                     sample_count: settings.msaa,
-                    alpha_to_coverage: true,
+                    alpha_to_coverage: false,
                 });
 
             if mesh_shading {

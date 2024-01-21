@@ -5,6 +5,8 @@ A bindless gpu-driven toy vulkan renderer primarily made for testing out new ren
 # Features
 - PBR
 - IBL
+- SSAO
+- Bloom
 - glTF scene loading
 - RenderGraph
 - Fully bindless resources

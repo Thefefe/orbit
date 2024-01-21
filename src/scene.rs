@@ -415,13 +415,14 @@ impl SceneData {
         self.light_data_cache.clear();
         shadow_renderer.clear_shadow_commands();
 
+        let assets_shared = assets.shared_stuff.read();
         for entity in self.entities.iter_mut() {
             if let Some(mesh) = entity.mesh {
                 let instance_index = self.entity_data_cache.len() as u32;
                 let visibility_offset = if let Some(v) = entity.visibility_buffer_range {
                     v.range.start
                 } else {
-                    let meshlet_count = assets.mesh_infos[mesh].mesh_lods[0].meshlet_count as usize;
+                    let meshlet_count = assets_shared.mesh_infos[mesh].mesh_lods[0].meshlet_count as usize;
                     let (alloc_index, range) =
                         self.meshlet_visibility_allocator.allocate(meshlet_count.div_ceil(32)).unwrap();
                     entity.visibility_buffer_range = Some(VisibilityBufferRange { alloc_index, range });

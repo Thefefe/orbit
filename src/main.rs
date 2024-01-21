@@ -415,7 +415,7 @@ impl CameraDebugSettings {
 struct App {
     allocator_visualizer: gpu_allocator::vulkan::AllocatorVisualizer,
 
-    gpu_assets: GpuAssets,
+    assets: GpuAssets,
     scene: SceneData,
 
     main_color_image: graphics::Image,
@@ -641,7 +641,7 @@ impl App {
         Self {
             allocator_visualizer: gpu_allocator::vulkan::AllocatorVisualizer::new(),
 
-            gpu_assets,
+            assets: gpu_assets,
             scene,
 
             main_color_image,
@@ -925,11 +925,11 @@ impl App {
         self.scene.update_scene(
             context,
             &mut self.shadow_renderer,
-            &self.gpu_assets,
+            &self.assets,
             self.settings.cluster_settings.luminance_cutoff,
         );
 
-        let assets = self.gpu_assets.import_to_graph(context);
+        let assets = self.assets.import_to_graph(context);
         let scene = self.scene.import_to_graph(context);
 
         let screen_extent = context.swapchain_extent();
@@ -1043,7 +1043,7 @@ impl App {
             context,
             &self.settings,
             &self.frozen_camera,
-            &self.gpu_assets,
+            &self.assets,
             &self.scene,
             &mut self.debug_renderer,
         );
@@ -1074,7 +1074,7 @@ impl App {
         self.forward_renderer.render(
             context,
             &self.settings,
-            &self.gpu_assets,
+            &self.assets,
             &self.scene,
             skybox,
             ssao_image,
@@ -1108,6 +1108,7 @@ impl App {
         let show_bounding_spheres = self.settings.camera_debug_settings.show_bounding_spheres;
         let show_screen_space_aabbs = self.settings.camera_debug_settings.show_screen_space_aabbs;
 
+        let assets_shared = self.assets.shared_stuff.read();
         if show_bounding_boxes || show_bounding_spheres || show_screen_space_aabbs {
             let view_matrix = self.frozen_camera.transform.compute_matrix().inverse();
             let projection_matrix = self.frozen_camera.compute_projection_matrix();
@@ -1118,9 +1119,12 @@ impl App {
                     continue;
                 };
 
+                let aabb = assets_shared.mesh_infos[mesh].aabb;
+                let bounding_sphere = assets_shared.mesh_infos[mesh].bounding_sphere;
+                
                 let transform_matrix = entity.transform.compute_matrix();
+
                 if show_bounding_boxes {
-                    let aabb = self.gpu_assets.mesh_infos[mesh].aabb;
                     let corners = [
                         vec3a(0.0, 0.0, 0.0),
                         vec3a(1.0, 0.0, 0.0),
@@ -1136,7 +1140,6 @@ impl App {
                 }
 
                 if show_bounding_spheres || show_screen_space_aabbs {
-                    let bounding_sphere = self.gpu_assets.mesh_infos[mesh].bounding_sphere;
                     let position_world = transform_matrix.transform_point3a(bounding_sphere.into());
                     let radius = bounding_sphere.w * entity.transform.scale.max_element();
 
@@ -1175,6 +1178,7 @@ impl App {
                 }
             }
         }
+        drop(assets_shared);
 
         if self.settings.camera_debug_settings.show_frustum_planes {
             let planes = math::frustum_planes_from_matrix(&self.frozen_camera.compute_matrix());
@@ -1219,7 +1223,7 @@ impl App {
         self.debug_renderer.render(
             context,
             &self.settings,
-            &self.gpu_assets,
+            &self.assets,
             target_attachments,
             &self.camera,
         );

@@ -617,13 +617,14 @@ impl ShadowRenderer {
 
                     let projection_to_world_matrix = light_projection_matrix.inverse();
 
+                    let assets_shared = assets.shared_stuff.read();
                     for entity in scene.entities.iter() {
                         let Some(mesh) = entity.mesh else {
                             continue;
                         };
 
                         let model_matrix = entity.transform.compute_matrix();
-                        let bounding_sphere = assets.mesh_infos[mesh].bounding_sphere;
+                        let bounding_sphere = assets_shared.mesh_infos[mesh].bounding_sphere;
                         let bounding_sphere_light_space =
                             math::transform_sphere(&(light_matrix * model_matrix), bounding_sphere);
 
@@ -652,6 +653,7 @@ impl ShadowRenderer {
                         });
                         debug_renderer.draw_quad(&corners, vec4(1.0, 1.0, 1.0, 1.0));
                     }
+                    drop(assets_shared);
                 }
             }
 

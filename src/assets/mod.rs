@@ -10,6 +10,7 @@ use ash::vk;
 #[allow(unused_imports)]
 use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
+use parking_lot::{RwLock, RwLockReadGuard};
 use smallvec::SmallVec;
 
 pub const MAX_MESH_LODS: usize = 8;
@@ -216,27 +217,28 @@ pub struct AssetGraphData {
     pub materials_buffer: graphics::GraphBufferHandle,
 }
 
-pub struct GpuAssets {
-    pub vertex_buffer: graphics::Buffer,
-    pub index_buffer: graphics::Buffer,
-    pub meshlet_data_buffer: graphics::Buffer,
-    pub meshlet_buffer: graphics::Buffer,
-
+pub struct AssetsSharedStuff {
     // indices not bytes
     vertex_allocator: FreeListAllocator,
     index_allocator: FreeListAllocator,
     meshlet_data_allocator: FreeListAllocator,
     meshlet_allocator: FreeListAllocator,
-
     submesh_allocator: FreeListAllocator,
 
-    pub mesh_info_buffer: graphics::Buffer,
     pub mesh_infos: arena::Arena<MeshInfo>,
-
     pub textures: arena::Arena<graphics::Image>,
+    pub materials: arena::Arena<MaterialData>,
+}
 
+pub struct GpuAssets {
+    pub vertex_buffer: graphics::Buffer,
+    pub index_buffer: graphics::Buffer,
+    pub meshlet_data_buffer: graphics::Buffer,
+    pub meshlet_buffer: graphics::Buffer,
+    pub mesh_info_buffer: graphics::Buffer,
     pub material_buffer: graphics::Buffer,
-    pub material_indices: arena::Arena<MaterialData>,
+
+    pub shared_stuff: RwLock<AssetsSharedStuff>,
 }
 
 impl GpuAssets {
@@ -297,12 +299,7 @@ impl GpuAssets {
             },
         );
 
-        Self {
-            vertex_buffer,
-            index_buffer,
-            meshlet_data_buffer,
-            meshlet_buffer,
-
+        let shared_stuff = RwLock::new(AssetsSharedStuff {
             vertex_allocator: FreeListAllocator::new(MAX_VERTEX_COUNT),
             index_allocator: FreeListAllocator::new(MAX_INDEX_COUNT),
             meshlet_data_allocator: FreeListAllocator::new(MAX_MESHLET_DATA_COUNT),
@@ -310,17 +307,25 @@ impl GpuAssets {
 
             submesh_allocator: FreeListAllocator::new(MAX_SUBMESH_COUNT),
 
-            mesh_info_buffer,
             mesh_infos: arena::Arena::new(),
 
             textures: arena::Arena::new(),
+            materials: arena::Arena::new(),
+        });
 
+        Self {
+            vertex_buffer,
+            index_buffer,
+            meshlet_data_buffer,
+            meshlet_buffer,
+            mesh_info_buffer,
             material_buffer,
-            material_indices: arena::Arena::new(),
+
+            shared_stuff,
         }
     }
 
-    pub fn add_mesh(&mut self, context: &graphics::Context, mesh: &MeshData) -> MeshHandle {
+    pub fn add_mesh(&self, context: &graphics::Context, mesh: &MeshData) -> MeshHandle {
         let mut meshlet_data = Vec::new();
         let mut meshlets = Vec::new();
         let mut mesh_lod_count = 0;
@@ -340,7 +345,7 @@ impl GpuAssets {
                 let submesh_vertices = &mesh.vertices[submesh.vertex_range()];
                 let submesh_indices = &mesh.indices[submesh.index_range()];
                 lod_indices.clear();
-                
+
                 if lod_index == 0 {
                     lod_indices.extend_from_slice(&mesh.indices[submesh.index_range()]);
                 } else {
@@ -350,7 +355,7 @@ impl GpuAssets {
                         submesh_indices,
                         target_index_count,
                         mesh.submeshes.len() > 1,
-                        &mut lod_indices
+                        &mut lod_indices,
                     );
 
                     if target_index_count.div_ceil(3) * 3 < lod_indices.len() {
@@ -363,7 +368,7 @@ impl GpuAssets {
                     //     lod_indices.len(),
                     // );
                 }
-                
+
                 if !lod_indices.is_empty() {
                     compute_meshlets(
                         submesh_vertices,
@@ -374,19 +379,19 @@ impl GpuAssets {
                         &mut meshlets,
                     );
                 }
-    
+
                 submesh_infos.push(SubmeshInfo {
                     vertex_offset: submesh.vertex_offset as u32,
                     vertex_count: submesh.vertex_count as u32,
                     index_offset: submesh.index_offset as u32,
                     index_count: submesh.index_count as u32,
                 });
-                
+
                 index_count_scale *= 0.8;
             }
 
             mesh_lod_count += 1;
-            
+
             let meshlet_count = meshlets.len() - meshlet_offset;
             mesh_lods[lod_index].meshlet_offset = meshlet_offset as u32;
             mesh_lods[lod_index].meshlet_count = meshlet_count as u32;
@@ -396,12 +401,15 @@ impl GpuAssets {
             }
         }
 
+        let mut shared = self.shared_stuff.write();
 
-        let (vertex_alloc_index, vertex_range) = self.vertex_allocator.allocate(mesh.vertices.len()).unwrap();
-        let (index_alloc_index, index_range) = self.index_allocator.allocate(mesh.vertices.len()).unwrap();
+        let (vertex_alloc_index, vertex_range) = shared.vertex_allocator.allocate(mesh.vertices.len()).unwrap();
+        let (index_alloc_index, index_range) = shared.index_allocator.allocate(mesh.vertices.len()).unwrap();
         let (meshlet_data_alloc_index, meshlet_data_range) =
-            self.meshlet_data_allocator.allocate(meshlet_data.len()).unwrap();
-        let (meshlet_alloc_index, meshlet_range) = self.meshlet_allocator.allocate(meshlets.len()).unwrap();
+            shared.meshlet_data_allocator.allocate(meshlet_data.len()).unwrap();
+        let (meshlet_alloc_index, meshlet_range) = shared.meshlet_allocator.allocate(meshlets.len()).unwrap();
+
+        drop(shared);
 
         for meshlet in meshlets.iter_mut() {
             meshlet.vertex_offset += vertex_range.start as u32;
@@ -423,11 +431,7 @@ impl GpuAssets {
             vertex_range.start * std::mem::size_of::<GpuMeshVertex>(),
             vertex_bytes,
         );
-        context.queue_write_buffer(
-            &self.index_buffer,
-            index_range.start * 4,
-            index_bytes ,
-        );
+        context.queue_write_buffer(&self.index_buffer, index_range.start * 4, index_bytes);
         context.queue_write_buffer(
             &self.meshlet_data_buffer,
             meshlet_data_range.start * 4,
@@ -457,30 +461,30 @@ impl GpuAssets {
             mesh_lod_count,
             mesh_lods,
         };
-        
+
         let gpu_mesh_info = mesh_info.to_gpu();
-        let mesh_index = self.mesh_infos.insert(mesh_info);
-        
+        let mesh_index = self.shared_stuff.write().mesh_infos.insert(mesh_info);
+
         context.queue_write_buffer(
             &self.mesh_info_buffer,
             std::mem::size_of::<GpuMeshInfo>() * mesh_index.slot() as usize,
             bytemuck::bytes_of(&gpu_mesh_info),
         );
-        
+
         mesh_index
     }
 
-    pub fn import_texture(&mut self, image: graphics::Image) -> TextureHandle {
+    pub fn import_texture(&self, image: graphics::Image) -> TextureHandle {
         assert!(image.sampled_index().is_some());
-        self.textures.insert(image)
+        self.shared_stuff.write().textures.insert(image)
     }
 
     fn get_texture_desc_index(&self, handle: TextureHandle) -> u32 {
-        self.textures[handle]._descriptor_index
+        self.shared_stuff.read().textures[handle]._descriptor_index
     }
 
     pub fn add_material(&mut self, context: &graphics::Context, material_data: MaterialData) -> MaterialHandle {
-        let index = self.material_indices.insert(material_data);
+        let index = self.shared_stuff.write().materials.insert(material_data);
 
         let base_texture_index =
             material_data.base_texture.map(|handle| self.get_texture_desc_index(handle)).unwrap_or(u32::MAX);
@@ -534,5 +538,9 @@ impl GpuAssets {
             mesh_info_buffer: context.import(&self.mesh_info_buffer),
             materials_buffer: context.import(&self.material_buffer),
         }
+    }
+
+    pub fn get_mesh_info(&self, index: arena::Index) -> parking_lot::MappedRwLockReadGuard<MeshInfo> {
+        RwLockReadGuard::map(self.shared_stuff.read(), |shared| &shared.mesh_infos[index])
     }
 }

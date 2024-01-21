@@ -1,17 +1,22 @@
-use std::{borrow::Cow, collections::HashMap, path::Path};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use ash::vk;
 use glam::{Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 use image::EncodableLayout;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
     assets::{
-        mesh::{compute_normals, compute_tangents, optimize_mesh, sep_vertex_merge, MeshData},
-        GpuAssets, MaterialData, MeshHandle, TextureHandle,
+        mesh::{compute_normals, compute_tangents, optimize_mesh, sep_vertex_merge, GpuMeshVertex, MeshData},
+        GpuAssets, MaterialData, MaterialHandle, MeshHandle, TextureHandle,
     },
     graphics,
-    math::{Aabb, next_mip_size},
+    math::{next_mip_size, Aabb},
     scene::{EntityData, SceneData, Transform},
     utils::OptionDefaultIterator,
 };
@@ -384,10 +389,133 @@ pub fn load_image(
     }
 }
 
+struct MeshLoaderCache {
+    mesh_data: MeshData,
+    input_vertices: Vec<GpuMeshVertex>,
+    input_indices: Vec<u32>,
+    optimized_vertices: Vec<GpuMeshVertex>,
+    optimized_indices: Vec<u32>,
+    remap_buffer: Vec<u32>,
+}
+
+impl MeshLoaderCache {
+    fn new() -> Self {
+        Self {
+            mesh_data: MeshData::new(),
+            input_vertices: Vec::new(),
+            input_indices: Vec::new(),
+            optimized_vertices: Vec::new(),
+            optimized_indices: Vec::new(),
+            remap_buffer: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.mesh_data.clear();
+        self.input_vertices.clear();
+        self.input_indices.clear();
+        self.optimized_vertices.clear();
+        self.optimized_indices.clear();
+        self.remap_buffer.clear();
+    }
+}
+
+fn load_gltf_mesh(
+    context: &graphics::Context,
+    assets: &GpuAssets,
+    cache: &mut MeshLoaderCache,
+    buffers: &[Vec<u8>],
+    material_lookup: &[MaterialHandle],
+    mesh: gltf::Mesh,
+) -> MeshHandle {
+    cache.clear();
+
+    for (prim_index, primitive) in mesh.primitives().enumerate() {
+        let material_index = material_lookup[primitive.material().index().unwrap()];
+
+        assert_eq!(primitive.mode(), gltf::mesh::Mode::Triangles);
+        let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+
+        let name = mesh.name().unwrap_or("unnamed");
+
+        let have_uvs = reader.read_tex_coords(0).is_some();
+        let mut have_normals = reader.read_normals().is_some();
+        let have_tangents = reader.read_tangents().is_some();
+
+        // if !have_uvs {
+        //     log::warn!("model '{name}' primitive {prim_index} has no uv coordinates");
+        // }
+        // if !have_normals {
+        //     log::warn!("model '{name}' primitive {prim_index} has no normals");
+        // }
+        // if !have_tangents {
+        //     log::warn!("model '{name}' primitive {prim_index} has no tangents");
+        // }
+
+        let tex_coords = OptionDefaultIterator::new(reader.read_tex_coords(0).map(|i| i.into_f32()), [0.0, 0.0]);
+
+        let normals = OptionDefaultIterator::new(reader.read_normals(), [0.0, 0.0, 0.0]);
+
+        let tangents = OptionDefaultIterator::new(reader.read_tangents(), [0.0, 0.0, 0.0, 0.0]);
+
+        let vertex_iter = sep_vertex_merge(reader.read_positions().unwrap(), tex_coords, normals, tangents);
+        let index_iter = reader.read_indices().unwrap().into_u32();
+
+        cache.input_vertices.clear();
+        cache.input_indices.clear();
+
+        cache.input_vertices.extend(vertex_iter);
+        cache.input_indices.extend(index_iter);
+
+        if !have_normals {
+            // log::info!("generating normals for model '{name}' primitive {prim_index}...");
+            // mesh_data.compute_normals();
+            compute_normals(&mut cache.input_vertices, &mut cache.input_indices);
+            have_normals = true;
+        }
+
+        if !have_tangents {
+            if have_normals && have_uvs {
+                // log::info!("generating tangents for model '{name}' primitive {prim_index}...");
+                // mesh_data.compute_tangents();
+                compute_tangents(&mut cache.input_vertices, &mut cache.input_indices);
+            } else {
+                log::warn!(
+                    "can't generate tangents for '{name}' primitive {prim_index}, because it has no uv coordinates"
+                );
+            }
+        }
+
+        optimize_mesh(
+            &cache.input_vertices,
+            &cache.input_indices,
+            &mut cache.remap_buffer,
+            &mut cache.optimized_vertices,
+            &mut cache.optimized_indices,
+        );
+        cache.mesh_data.add_submesh(&cache.optimized_vertices, &cache.optimized_indices, material_index);
+
+        let bounding_box = primitive.bounding_box();
+        cache.mesh_data.aabb = Aabb::from_arrays(bounding_box.min, bounding_box.max);
+        let bounding_sphere_center = (cache.mesh_data.aabb.min + cache.mesh_data.aabb.max) * 0.5;
+
+        let mut bounding_sphere_radius_sqr: f32 = 0.0;
+        for vertex in cache.mesh_data.vertices.iter() {
+            let position = Vec3A::from(vertex.position);
+            bounding_sphere_radius_sqr =
+                bounding_sphere_radius_sqr.max(bounding_sphere_center.distance_squared(position));
+        }
+        cache.mesh_data.bounding_sphere = bounding_sphere_center.extend(bounding_sphere_radius_sqr.sqrt());
+    }
+
+    cache.mesh_data.compute_bounds();
+    assets.add_mesh(context, &cache.mesh_data)
+}
+
 pub fn load_gltf(
     path: &Path,
     context: &graphics::Context,
-    asset_store: &mut GpuAssets,
+    assets: &mut GpuAssets,
     scene: &mut SceneData,
 ) -> gltf::Result<()> {
     let base_path = path.parent().unwrap_or(Path::new(""));
@@ -412,53 +540,65 @@ pub fn load_gltf(
         buffers.push(data);
     }
 
-    let mut texture_lookup_table: HashMap<usize, TextureHandle> = HashMap::new();
-    let mut get_texture = |assets: &mut GpuAssets, gltf_texture: gltf::Texture, srgb: bool| -> TextureHandle {
-        let index = gltf_texture.index();
-        if let Some(texture_id) = texture_lookup_table.get(&index) {
-            return *texture_id;
+    // extracting color space information for textures
+    let mut srgb_textures = HashSet::new();
+    for material in document.materials() {
+        if let Some(color_texture) = material.pbr_metallic_roughness().base_color_texture() {
+            srgb_textures.insert(color_texture.texture().index());
         }
 
-        use gltf::texture::{MagFilter, WrappingMode};
-        let mag_filter = gltf_texture.sampler().mag_filter().unwrap_or(MagFilter::Linear);
-        let wrapping_mode = gltf_texture.sampler().wrap_s();
-        let sampler_flags = match (mag_filter, wrapping_mode) {
-            (MagFilter::Nearest, WrappingMode::ClampToEdge) => graphics::SamplerKind::NearestClamp,
-            (MagFilter::Nearest, WrappingMode::MirroredRepeat) => graphics::SamplerKind::NearestRepeat,
-            (MagFilter::Nearest, WrappingMode::Repeat) => graphics::SamplerKind::NearestRepeat,
-            (MagFilter::Linear, WrappingMode::ClampToEdge) => graphics::SamplerKind::LinearClamp,
-            (MagFilter::Linear, WrappingMode::MirroredRepeat) => graphics::SamplerKind::LinearRepeat,
-            (MagFilter::Linear, WrappingMode::Repeat) => graphics::SamplerKind::LinearRepeat,
-        };
+        if let Some(emissive_texture) = material.emissive_texture() {
+            srgb_textures.insert(emissive_texture.texture().index());
+        }
+    }
 
-        let (image_binary, image_format) =
-            image_data_from_gltf(base_path, gltf_texture.source().source(), &buffers).unwrap();
+    let texture_lookup_table: HashMap<usize, TextureHandle> = (0..document.textures().len())
+        .into_par_iter()
+        .map(|index| {
+            let gltf_texture = document.textures().nth(index).unwrap();
+            let srgb = srgb_textures.contains(&index);
 
-        let texture = load_image(
-            context,
-            format!("gltf_image_{index}").into(),
-            &image_binary,
-            image_format,
-            srgb,
-            false,
-            sampler_flags,
-        );
+            use gltf::texture::{MagFilter, WrappingMode};
+            let mag_filter = gltf_texture.sampler().mag_filter().unwrap_or(MagFilter::Linear);
+            let wrapping_mode = gltf_texture.sampler().wrap_s();
+            let sampler_flags = match (mag_filter, wrapping_mode) {
+                (MagFilter::Nearest, WrappingMode::ClampToEdge) => graphics::SamplerKind::NearestClamp,
+                (MagFilter::Nearest, WrappingMode::MirroredRepeat) => graphics::SamplerKind::NearestRepeat,
+                (MagFilter::Nearest, WrappingMode::Repeat) => graphics::SamplerKind::NearestRepeat,
+                (MagFilter::Linear, WrappingMode::ClampToEdge) => graphics::SamplerKind::LinearClamp,
+                (MagFilter::Linear, WrappingMode::MirroredRepeat) => graphics::SamplerKind::LinearRepeat,
+                (MagFilter::Linear, WrappingMode::Repeat) => graphics::SamplerKind::LinearRepeat,
+            };
 
-        let handle = assets.import_texture(texture);
-        texture_lookup_table.insert(index, handle);
-        handle
-    };
+            let (image_binary, image_format) =
+                image_data_from_gltf(base_path, gltf_texture.source().source(), &buffers).unwrap();
 
-    let mut material_lookup_table = Vec::new();
+            let texture = load_image(
+                context,
+                format!("gltf_image_{index}").into(),
+                &image_binary,
+                image_format,
+                srgb,
+                false,
+                sampler_flags,
+            );
+
+            let handle = assets.import_texture(texture);
+            (index, handle)
+        })
+        .collect();
+
+    let tex = |tex: gltf::Texture| *texture_lookup_table.get(&tex.index()).unwrap();
+
+    let mut material_lookup = Vec::new();
     for material in document.materials() {
         let pbr = material.pbr_metallic_roughness();
 
-        let base_texture = pbr.base_color_texture().map(|tex| get_texture(asset_store, tex.texture(), true));
-        let normal_texture = material.normal_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
-        let metallic_roughness_texture =
-            pbr.metallic_roughness_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
-        let occulusion_texture = material.occlusion_texture().map(|tex| get_texture(asset_store, tex.texture(), false));
-        let emissive_texture = material.emissive_texture().map(|tex| get_texture(asset_store, tex.texture(), true));
+        let base_texture = pbr.base_color_texture().map(|i| tex(i.texture()));
+        let normal_texture = material.normal_texture().map(|i| tex(i.texture()));
+        let metallic_roughness_texture = pbr.metallic_roughness_texture().map(|i| tex(i.texture()));
+        let occulusion_texture = material.occlusion_texture().map(|i| tex(i.texture()));
+        let emissive_texture = material.emissive_texture().map(|i| tex(i.texture()));
 
         let base_color = Vec4::from_array(pbr.base_color_factor());
         let metallic_factor = pbr.metallic_factor();
@@ -468,7 +608,7 @@ pub fn load_gltf(
 
         let alpha_cutoff = material.alpha_cutoff().unwrap_or(0.0);
 
-        let handle = asset_store.add_material(
+        let handle = assets.add_material(
             context,
             MaterialData {
                 alpha_mode: material.alpha_mode().into(),
@@ -488,97 +628,19 @@ pub fn load_gltf(
                 emissive_texture,
             },
         );
-        material_lookup_table.push(handle);
+        material_lookup.push(handle);
     }
 
-    let mut mesh_lookup_table = Vec::new();
-    let mut mesh_data = MeshData::new();
-    // let mut submeshes: Vec<Submesh> = Vec::new();
-
-    let mut input_vertices = Vec::new();
-    let mut input_indices = Vec::new();
-    let mut optimized_vertices = Vec::new();
-    let mut optimized_indices = Vec::new();
-    let mut remap_buffer = Vec::new();
-
-    for mesh in document.meshes() {
-        // submeshes.clear();
-        mesh_data.clear();
-
-        for (prim_index, primitive) in mesh.primitives().enumerate() {
-            let material_index = material_lookup_table[primitive.material().index().unwrap()];
-
-            assert_eq!(primitive.mode(), gltf::mesh::Mode::Triangles);
-            let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
-
-            let name = mesh.name().unwrap_or("unnamed");
-
-            let have_uvs = reader.read_tex_coords(0).is_some();
-            let mut have_normals = reader.read_normals().is_some();
-            let have_tangents = reader.read_tangents().is_some();
-
-            if !have_uvs {
-                log::warn!("model '{name}' primitive {prim_index} has no uv coordinates");
-            }
-            if !have_normals {
-                log::warn!("model '{name}' primitive {prim_index} has no normals");
-            }
-            if !have_tangents {
-                log::warn!("model '{name}' primitive {prim_index} has no tangents");
-            }
-
-            let tex_coords = OptionDefaultIterator::new(reader.read_tex_coords(0).map(|i| i.into_f32()), [0.0, 0.0]);
-
-            let normals = OptionDefaultIterator::new(reader.read_normals(), [0.0, 0.0, 0.0]);
-
-            let tangents = OptionDefaultIterator::new(reader.read_tangents(), [0.0, 0.0, 0.0, 0.0]);
-
-            let vertex_iter = sep_vertex_merge(reader.read_positions().unwrap(), tex_coords, normals, tangents);
-            let index_iter = reader.read_indices().unwrap().into_u32();
-
-            input_vertices.clear();
-            input_indices.clear();
-
-            input_vertices.extend(vertex_iter);
-            input_indices.extend(index_iter);
-
-            if !have_normals {
-                log::info!("generating normals for model '{name}' primitive {prim_index}...");
-                // mesh_data.compute_normals();
-                compute_normals(&mut input_vertices, &mut input_indices);
-                have_normals = true;
-            }
-
-            if !have_tangents {
-                if have_normals && have_uvs {
-                    log::info!("generating tangents for model '{name}' primitive {prim_index}...");
-                    // mesh_data.compute_tangents();
-                    compute_tangents(&mut input_vertices, &mut input_indices);
-                } else {
-                    log::warn!("can't generate tangents for '{name}' primitive {prim_index}, because it has no uv coordinates");
-                }
-            }
-
-            optimize_mesh(&input_vertices, &input_indices, &mut remap_buffer, &mut optimized_vertices, &mut optimized_indices);
-            mesh_data.add_submesh(&optimized_vertices, &optimized_indices, material_index);
-
-            let bounding_box = primitive.bounding_box();
-            mesh_data.aabb = Aabb::from_arrays(bounding_box.min, bounding_box.max);
-            let bounding_sphere_center = (mesh_data.aabb.min + mesh_data.aabb.max) * 0.5;
-
-            let mut bounding_sphere_radius_sqr: f32 = 0.0;
-            for vertex in mesh_data.vertices.iter() {
-                let position = Vec3A::from(vertex.position);
-                bounding_sphere_radius_sqr =
-                    bounding_sphere_radius_sqr.max(bounding_sphere_center.distance_squared(position));
-            }
-            mesh_data.bounding_sphere = bounding_sphere_center.extend(bounding_sphere_radius_sqr.sqrt());
-        }
-
-        mesh_data.compute_bounds();
-        let mesh_handle = asset_store.add_mesh(context, &mesh_data);
-        mesh_lookup_table.push(mesh_handle);
-    }
+    let mesh_lookup_table: Vec<_> = (0..document.meshes().len())
+        .into_par_iter()
+        .map_init(
+            || MeshLoaderCache::new(),
+            |cache, mesh_index| {
+                let mesh = document.meshes().nth(mesh_index).unwrap();
+                load_gltf_mesh(context, assets, cache, &buffers, &material_lookup, mesh)
+            },
+        )
+        .collect();
 
     fn add_gltf_node(
         scene: &mut SceneData,

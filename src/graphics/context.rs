@@ -188,7 +188,6 @@ pub struct Context {
     pub elapsed_frames: usize,
     start: Instant,
 
-    submit_infos: Vec<vk::SubmitInfo2>,
     record_submit_stuff: Mutex<RecordSubmitStuff>,
     transfer_queue: Mutex<TransferQueue>,
 
@@ -310,7 +309,6 @@ impl Context {
             elapsed_frames: 0,
             start: Instant::now(),
 
-            submit_infos: Vec::new(),
             record_submit_stuff,
             transfer_queue,
 
@@ -916,14 +914,14 @@ impl Context {
 
         {
             puffin::profile_scope!("command_submit");
-            self.submit_infos.clear();
-            self.submit_infos.extend(
-                batch_cmd_indices.iter().copied().map(|(pool_index, command_buffer_index)| {
+            let submit_infos: Vec<_> = batch_cmd_indices
+                .iter()
+                .copied()
+                .map(|(pool_index, command_buffer_index)| {
                     frame.command_pools[pool_index].get_mut().buffers()[command_buffer_index].submit_info()
-                }),
-            );
-            self.device.queue_submit(QueueType::Graphics, &self.submit_infos, frame.in_flight_fence);
-            self.submit_infos.clear();
+                })
+                .collect();
+            self.device.queue_submit(QueueType::Graphics, &submit_infos, frame.in_flight_fence);
         }
         {
             puffin::profile_scope!("queue_present");

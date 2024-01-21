@@ -418,9 +418,10 @@ impl DebugRenderer {
             Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuDrawIndiexedIndirectCommand>() * context.frame_index();
 
         self.mesh_expanded_draw_commands.clear();
+        let assets_shared = assets.shared_stuff.read();
         for draw_command in self.mesh_draw_commands.iter().copied() {
             // TODO: do the same, but with meshlets
-            for submesh in assets.mesh_infos[draw_command.mesh].submesh_infos.iter() {
+            for submesh in assets_shared.mesh_infos[draw_command.mesh].submesh_infos.iter() {
                 self.mesh_expanded_draw_commands.push(GpuDrawIndiexedIndirectCommand {
                     index_count: submesh.index_count,
                     instance_count: draw_command.instance_count,
@@ -431,6 +432,7 @@ impl DebugRenderer {
                 })
             }
         }
+        drop(assets_shared);
 
         context.queue_write_buffer(
             &self.line_vertex_buffer,

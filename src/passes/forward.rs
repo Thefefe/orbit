@@ -688,8 +688,8 @@ impl ForwardRenderer {
                 .depth_state(Some(graphics::DepthState {
                     format: App::DEPTH_FORMAT,
                     test: graphics::PipelineState::Static(true),
-                    write: true,
-                    compare: vk::CompareOp::GREATER_OR_EQUAL,
+                    write: false,
+                    compare: vk::CompareOp::EQUAL,
                 }))
                 .multisample_state(graphics::MultisampleState {
                     sample_count: settings.msaa,
@@ -791,7 +791,7 @@ impl ForwardRenderer {
             let mut color_attachment = vk::RenderingAttachmentInfo::builder()
                 .image_view(color_target.view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(if skybox.is_none() || render_mode == RenderMode::Overdraw {
+                .load_op(if skybox.is_none() || render_mode != RenderMode::Shaded {
                     vk::AttachmentLoadOp::CLEAR
                 } else {
                     vk::AttachmentLoadOp::DONT_CARE
@@ -800,7 +800,7 @@ impl ForwardRenderer {
                 .clear_value(vk::ClearValue {
                     color: vk::ClearColorValue {
                         // float32: [1.0, 0.0, 1.0, 0.0],
-                        float32: [0.0, 0.0, 0.0, 0.0],
+                        float32: [0.0, 0.0, 0.0, 1.0],
                     },
                 })
                 .store_op(vk::AttachmentStoreOp::STORE);
@@ -836,8 +836,7 @@ impl ForwardRenderer {
 
             cmd.begin_rendering(&rendering_info);
 
-            let draw_skybox = render_mode != RenderMode::Overdraw;
-            if let Some(skybox) = (draw_skybox).then_some(skybox).flatten() {
+            if let Some(skybox) = (render_mode == RenderMode::Shaded).then_some(skybox).flatten() {
                 cmd.bind_raster_pipeline(skybox_pipeline);
 
                 cmd.build_constants().mat4(&skybox_view_projection_matrix).sampled_image(skybox);

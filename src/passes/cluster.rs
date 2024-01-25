@@ -3,7 +3,7 @@ use glam::{vec2, vec3a, vec4, Mat4, Vec2, Vec3A, Vec3Swizzles, Vec4, Vec4Swizzle
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    graphics::{self, AccessKind, ShaderStage},
+    graphics::{self, AccessKind, ComputePass, ShaderStage},
     math::{self, Aabb},
     scene::SceneGraphData,
     Camera,
@@ -446,7 +446,7 @@ pub fn mark_active_clusters(
         .add_pass("clear_cluster_depth_slice_buffers")
         .with_dependency(tile_depth_slice_mask, AccessKind::ComputeShaderWrite)
         .with_dependency(cluster_depth_bounds_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
+        .record_custom(move |cmd, graph| {
             cmd.fill_buffer(
                 graph.get_buffer(tile_depth_slice_mask),
                 0,
@@ -461,32 +461,23 @@ pub fn mark_active_clusters(
             );
         });
 
-    context
-        .add_pass("mark_active_tiles")
-        .with_dependency(depth_buffer, AccessKind::ComputeShaderRead)
-        .with_dependency(tile_depth_slice_mask, AccessKind::ComputeShaderWrite)
-        .with_dependency(cluster_depth_bounds_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
-            let depth_buffer = graph.get_image(depth_buffer);
-            let tile_depth_slice_mask = graph.get_buffer(tile_depth_slice_mask);
-            let depth_bounds_buffer = graph.get_buffer(cluster_depth_bounds_buffer);
+    let depth_buffer_desc = context.get_image_desc(depth_buffer);
+    let depth_buffer_size = [depth_buffer_desc.dimensions[0], depth_buffer_desc.dimensions[1]];
+    let depth_buffer_sample_count = depth_buffer_desc.samples.sample_count();
 
-            cmd.bind_compute_pipeline(pipeline);
-            cmd.build_constants()
-                .uvec3(cluster_count)
-                .uint(tile_size_px)
-                .uvec2([depth_buffer.width(), depth_buffer.height()])
-                .float(z_near)
-                .float(z_far)
-                .float(z_scale)
-                .float(z_bias)
-                .sampled_image(depth_buffer)
-                .uint(depth_buffer.sample_count())
-                .buffer(tile_depth_slice_mask)
-                .buffer(depth_bounds_buffer);
-
-            cmd.dispatch([screen_resolution[0].div_ceil(8), screen_resolution[1].div_ceil(8), 1]);
-        });
+    ComputePass::new(context, "mark_active_tiles", pipeline)
+        .push_data(cluster_count)
+        .push_data(tile_size_px)
+        .push_data(depth_buffer_size)
+        .push_data(z_near)
+        .push_data(z_far)
+        .push_data(z_scale)
+        .push_data(z_bias)
+        .read_image(depth_buffer)
+        .push_data(depth_buffer_sample_count)
+        .write_buffer(tile_depth_slice_mask)
+        .write_buffer(cluster_depth_bounds_buffer)
+        .dispatch([screen_resolution[0].div_ceil(8), screen_resolution[1].div_ceil(8), 1]);
 
     (tile_depth_slice_mask, cluster_depth_bounds_buffer)
 }
@@ -517,24 +508,16 @@ pub fn compact_active_clusters(
     context
         .add_pass("clear_compact_cluster_buffer")
         .with_dependency(unique_cluster_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
+        .record_custom(move |cmd, graph| {
             let compact_cluster_index_list = graph.get_buffer(unique_cluster_buffer);
             cmd.fill_buffer(compact_cluster_index_list, 0, 16, 0);
         });
 
-    context
-        .add_pass("compact_active_clusters")
-        .with_dependency(active_cluster_mask, AccessKind::ComputeShaderRead)
-        .with_dependency(unique_cluster_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
-            let active_cluster_mask = graph.get_buffer(active_cluster_mask);
-            let unique_cluster_buffer = graph.get_buffer(unique_cluster_buffer);
-
-            cmd.bind_compute_pipeline(pipeline);
-            cmd.build_constants().uvec3(cluster_count).buffer(active_cluster_mask).buffer(unique_cluster_buffer);
-
-            cmd.dispatch(cluster_count.map(|x| x.div_ceil(4)));
-        });
+    ComputePass::new(context, "compact_active_clusters", pipeline)
+        .push_data(cluster_count)
+        .read_buffer(active_cluster_mask)
+        .write_buffer(unique_cluster_buffer)
+        .dispatch(cluster_count.map(|x| x.div_ceil(4)));
 
     unique_cluster_buffer
 }
@@ -600,25 +583,17 @@ pub fn cluster_light_assignment(
     context
         .add_pass("clear_light_index_buffer")
         .with_dependency(light_index_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
+        .record_custom(move |cmd, graph| {
             let compact_cluster_index_list = graph.get_buffer(light_index_buffer);
             cmd.fill_buffer(compact_cluster_index_list, 0, 4, 0);
         });
 
-    context
-        .add_pass("cluster_light_assingment")
-        .with_dependency(unique_cluster_buffer, AccessKind::IndirectBuffer)
+    ComputePass::new(context, "cluster_light_assingment", pipeline)
         .with_dependency(depth_bounds_buffer, AccessKind::ComputeShaderRead)
         .with_dependency(light_offset_image, AccessKind::ComputeShaderWrite)
         .with_dependency(light_index_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
-            let unique_cluster_buffer = graph.get_buffer(unique_cluster_buffer);
-            let cull_info_buffer = graph.get_buffer(cluster_cull_info_buffer);
-
-            cmd.bind_compute_pipeline(pipeline);
-            cmd.build_constants().buffer(cull_info_buffer);
-            cmd.dispatch_indirect(unique_cluster_buffer, 0);
-        });
+        .read_buffer(cluster_cull_info_buffer)
+        .dispatch_indirect(unique_cluster_buffer, 0);
 
     (light_offset_image, light_index_buffer)
 }

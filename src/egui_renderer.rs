@@ -282,7 +282,7 @@ impl EguiRenderer {
         context
             .add_pass("egui_draw")
             .with_dependency(target_image, graphics::AccessKind::ColorAttachmentWrite)
-            .render(move |cmd, graph| {
+            .record_custom(move |cmd, graph| {
                 let target_image = graph.get_image(target_image);
 
                 let index_buffer = graph.get_buffer(index_buffer);

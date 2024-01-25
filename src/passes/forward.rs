@@ -337,7 +337,7 @@ impl ForwardRenderer {
             .with_dependencies(
                 mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderRead)),
             )
-            .render(move |cmd, graph| {
+            .record_custom(move |cmd, graph| {
                 let depth_target = graph.get_image(target_attachments.depth_target);
                 let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
 
@@ -457,7 +457,7 @@ impl ForwardRenderer {
                 mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderWrite)),
             )
             .with_dependencies(mesh_shading.then_some(depth_pyramid).map(|i| (i, AccessKind::TaskShaderReadGeneral)))
-            .render(move |cmd, graph| {
+            .record_custom(move |cmd, graph| {
                 let depth_target = graph.get_image(target_attachments.depth_target);
                 let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
 
@@ -760,7 +760,7 @@ impl ForwardRenderer {
             .with_dependencies(shadow_renderer.rendered_shadow_maps().map(|h| (h, AccessKind::FragmentShaderRead)))
             .with_dependencies(ssao_image.map(|i| (i, AccessKind::FragmentShaderRead)));
 
-        pass_builder.render(move |cmd, graph| {
+        pass_builder.record_custom(move |cmd, graph| {
             let color_target = graph.get_image(target_attachments.color_target);
             let color_resolve = target_attachments.color_resolve.map(|i| graph.get_image(i));
             let depth_target = graph.get_image(target_attachments.depth_target);

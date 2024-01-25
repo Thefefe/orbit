@@ -336,7 +336,7 @@ impl MultisampleState {
     }
 }
 
-const MAX_COLOR_ATTACHMENT_COUNT: usize = 2;
+pub const MAX_COLOR_ATTACHMENT_COUNT: usize = 2;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct RasterPipelineDesc {

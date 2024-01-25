@@ -1,16 +1,17 @@
-use std::{borrow::Cow, collections::{HashMap, HashSet}, ops::Range};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    ops::Range,
+};
 
 use ash::vk;
 use parking_lot::Mutex;
 
 use crate::{collections::arena, graphics};
 
-use super::ReadWriteKind;
 pub type GraphResourceIndex = usize;
 pub type GraphPassIndex = arena::Index;
 pub type GraphDependencyIndex = usize;
-
-type PassFn = Box<dyn Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + Send + Sync>;
 
 #[derive(Debug)]
 pub enum ResourceSource {
@@ -82,10 +83,74 @@ impl GraphResourceData {
     }
 }
 
+type PassFn = Box<dyn Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + Send + Sync>;
+
+#[derive(Debug, Clone, Copy)]
+pub enum LoadOp<T> {
+    Load,
+    Clear(T),
+    DontCare,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ColorAttachmentDesc {
+    pub target: graphics::GraphImageHandle,
+    pub resolve: Option<graphics::GraphImageHandle>,
+    pub load_op: LoadOp<[f32; 4]>,
+    pub store: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DepthAttachmentDesc {
+    pub target: graphics::GraphImageHandle,
+    pub resolve: Option<graphics::GraphImageHandle>,
+    pub load_op: LoadOp<f32>,
+    pub store: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Dispatch {
+    DispatchWorkgroups([u32; 3]),
+    DispatchIndirect(graphics::GraphBufferHandle, u64),
+}
+
+pub enum Pass {
+    CustomPass(PassFn),
+    ComputeDispatch {
+        pipeline: graphics::ComputePipeline,
+        push_constant_data: [u8; 128],
+        push_constant_size: usize,
+        dispatch: Dispatch,
+    },
+}
+
+impl Pass {
+    pub fn record(&self, cmd: &graphics::CommandRecorder, graph: &graphics::CompiledRenderGraph) {
+        match self {
+            Pass::CustomPass(func) => func(cmd, graph),
+            Pass::ComputeDispatch {
+                pipeline,
+                push_constant_data,
+                push_constant_size,
+                dispatch,
+            } => {
+                cmd.bind_compute_pipeline(*pipeline);
+                cmd.push_constants(&push_constant_data[0..*push_constant_size], 0);
+                match dispatch {
+                    Dispatch::DispatchWorkgroups(workgroup_count) => cmd.dispatch(*workgroup_count),
+                    Dispatch::DispatchIndirect(indirect_buffer, offset) => {
+                        cmd.dispatch_indirect(graph.get_buffer(*indirect_buffer), *offset);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct PassData {
     pub name: Cow<'static, str>,
-    pub func: PassFn,
-    dependencies: Vec<GraphDependencyIndex>,
+    pub func: Pass,
+    dependency_range: Range<usize>,
     alive: bool,
 }
 
@@ -93,7 +158,7 @@ impl std::fmt::Debug for PassData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PassData")
             .field("name", &self.name)
-            .field("dependencies", &self.dependencies)
+            .field("dependencies", &self.dependency_range)
             .field("alive", &self.alive)
             .finish()
     }
@@ -143,7 +208,6 @@ impl RenderGraph {
     pub fn clear(&mut self) {
         self.resources.clear();
         self.passes.clear();
-        self.dependencies.clear();
         self.import_cache.clear();
         self.dont_wait_semaphores.get_mut().clear();
         self.dont_signal_semaphores.clear();
@@ -178,16 +242,63 @@ impl RenderGraph {
         index
     }
 
-    pub fn add_pass(&mut self, name: Cow<'static, str>, func: PassFn) -> GraphPassIndex {
-        self.passes.insert(PassData {
-            name,
+    pub fn add_pass(
+        &mut self,
+        name: Cow<'static, str>,
+        func: Pass,
+        dependencies: &[(GraphResourceIndex, graphics::AccessKind)],
+    ) -> GraphPassIndex {
+        let pass_index = self.passes.insert(PassData {
+            name: Cow::Borrowed(""), // temp value, real value used later in the function
             func,
-            dependencies: Vec::new(),
+            dependency_range: 0..0,
             alive: false,
-        })
+        });
+
+        let dependency_start = self.dependencies.len();
+
+        // not necessary but can catch the occasinal bug
+        // TODO: make this run only as needed, maybe add a seperate validation pass
+        let mut prev_deps: HashMap<GraphResourceIndex, graphics::AccessKind> = HashMap::new();
+
+        for &(res, acc) in dependencies {
+            self.add_dependency(pass_index, res, acc);
+
+            if let Some(other_acc) = prev_deps.get(&res) {
+                let res_name = self.resources[res].name.as_ref();
+
+                assert_eq!(
+                    acc.read_write_kind(),
+                    graphics::ReadWriteKind::Read,
+                    "read and write or multiple writes in pass '{name}' for resource {res_name}"
+                );
+
+                assert_eq!(
+                    other_acc.read_write_kind(),
+                    graphics::ReadWriteKind::Read,
+                    "read and write or multiple writes in pass '{name}' for resource {res_name}"
+                );
+
+                if self.resources[res].kind() == graphics::ResourceKind::Image {
+                    let layout = acc.image_layout();
+                    let other_layout = other_acc.image_layout();
+                    assert_eq!(
+                        layout, other_layout,
+                        "incompatible image layouts in pass '{name}' for image '{res_name}'"
+                    );
+                }
+            } else {
+                prev_deps.insert(res, acc);
+            }
+        }
+
+        self.passes[pass_index].name = name;
+        self.passes[pass_index].dependency_range = dependency_start..self.dependencies.len();
+
+        pass_index
     }
 
-    pub fn add_dependency(
+    fn add_dependency(
         &mut self,
         pass_handle: GraphPassIndex,
         resource_handle: GraphResourceIndex,
@@ -203,7 +314,7 @@ impl RenderGraph {
             resource_version,
         });
 
-        self.passes[pass_handle].dependencies.push(dependency);
+        // self.passes[pass_handle].dependency_range.push(dependency);
 
         let resource = &self.resources[resource_handle];
         let needs_layout_transition =
@@ -347,7 +458,7 @@ pub struct BatchDependency {
 
 pub struct CompiledPassData {
     pub name: Cow<'static, str>,
-    pub func: PassFn,
+    pub func: Pass,
 }
 
 impl From<PassData> for CompiledPassData {
@@ -465,8 +576,7 @@ impl RenderGraph {
             for slot in pass_range.clone() {
                 let (_, pass) = sorted_passes.passes.get_slot(slot as u32).unwrap();
 
-                for &dependency in pass.dependencies.iter() {
-                    let dependency = &self.dependencies[dependency];
+                for dependency in &self.dependencies[pass.dependency_range.clone()] {
                     let resource_data = &mut self.resources[dependency.resource_handle];
 
                     if dependency.resource_version == 0 {
@@ -497,8 +607,7 @@ impl RenderGraph {
             for slot in pass_range.clone() {
                 let pass = sorted_passes.passes.remove_slot(slot as u32).unwrap();
 
-                for &dependency in pass.dependencies.iter() {
-                    let dependency = &self.dependencies[dependency];
+                for dependency in &self.dependencies[pass.dependency_range.clone()] {
                     let resource_data = &mut self.resources[dependency.resource_handle];
 
                     // source of the last version of the resource
@@ -680,14 +789,13 @@ impl RenderGraph {
         self.passes
             .get(pass)
             .map(|pass| {
-                pass.dependencies
+                self.dependencies[pass.dependency_range.clone()]
                     .iter()
-                    .map(|&dependency_handle| {
-                        let dependency = &self.dependencies[dependency_handle];
+                    .map(|dependency| {
                         let resource = &self.resources[dependency.resource_handle];
                         let resource_version = &resource.versions[dependency.resource_version];
 
-                        let is_write = dependency.access.read_write_kind() == ReadWriteKind::Write;
+                        let is_write = dependency.access.read_write_kind() == graphics::ReadWriteKind::Write;
 
                         let prev_reads =
                             is_write.then_some(resource_version.read_by.iter().clone()).into_iter().flatten().copied();

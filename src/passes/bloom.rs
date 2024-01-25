@@ -97,7 +97,7 @@ pub fn compute_bloom(
         .add_pass("bloom_pass")
         .with_dependency(bloom_image, AccessKind::ComputeShaderWrite)
         .with_dependency(color_image, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
+        .record_custom(move |cmd, graph| {
             let color_image = graph.get_image(color_image);
             let downsample_image = graph.get_image(bloom_image);
 

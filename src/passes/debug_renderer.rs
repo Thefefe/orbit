@@ -526,7 +526,7 @@ impl DebugRenderer {
             .with_dependency(target_attachments.color_target, graphics::AccessKind::ColorAttachmentWrite)
             .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
             .with_dependencies(target_attachments.color_resolve.map(|h| (h, graphics::AccessKind::ColorAttachmentWrite)))
-            .render(move |cmd, graph| {
+            .record_custom(move |cmd, graph| {
                 let color_image = graph.get_image(target_attachments.color_target);
                 let color_resolve_image = target_attachments.color_resolve.map(|handle| graph.get_image(handle));
                 let depth_image = graph.get_image(target_attachments.depth_target);

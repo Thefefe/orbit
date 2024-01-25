@@ -6,7 +6,7 @@ use gpu_allocator::MemoryLocation;
 
 use crate::{
     assets::{AlphaMode, AssetGraphData, GpuMeshletDrawCommand},
-    graphics::{self, AccessKind, ShaderStage},
+    graphics::{self, AccessKind, ComputePass, ShaderStage},
     scene::SceneGraphData,
     Projection, math,
 };
@@ -283,7 +283,7 @@ pub fn create_draw_commands(
         .add_pass(format!("clearing_{draw_commands_name}_culling_buffer"))
         .with_dependency(meshlet_dispatch_buffer, AccessKind::ComputeShaderWrite)
         .with_dependency(meshlet_draw_command_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
+        .record_custom(move |cmd, graph| {
             let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
             let meshlet_draw_command_buffer = graph.get_buffer(meshlet_draw_command_buffer);
             cmd.fill_buffer(meshlet_dispatch_buffer, 0, 4, 0);
@@ -291,59 +291,26 @@ pub fn create_draw_commands(
             cmd.fill_buffer(meshlet_draw_command_buffer, 0, 4, 0);
         });
 
-    context
-        .add_pass(format!("{draw_commands_name}_entity_culling"))
-        .with_dependency(scene.entity_draw_buffer, AccessKind::ComputeShaderRead)
-        .with_dependency(meshlet_dispatch_buffer, AccessKind::ComputeShaderWrite)
-        .with_dependency(cull_info_buffer, AccessKind::ComputeShaderRead)
+    ComputePass::new(context, format!("{draw_commands_name}_entity_culling"), entity_cull_pipeline)
         .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
         .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .render(move |cmd, graph| {
-            let mesh_info_buffer = graph.get_buffer(assets.mesh_info_buffer);
-            let entity_draw_buffer = graph.get_buffer(scene.entity_draw_buffer);
-            let entity_buffer = graph.get_buffer(scene.entity_buffer);
-            let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
-            let cull_info_buffer = graph.get_buffer(cull_info_buffer);
+        .read_buffer(scene.entity_draw_buffer)
+        .read_buffer(assets.mesh_info_buffer)
+        .write_buffer(meshlet_dispatch_buffer)
+        .read_buffer(scene.entity_buffer)
+        .read_buffer(cull_info_buffer)
+        .dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
 
-            cmd.bind_compute_pipeline(entity_cull_pipeline);
-
-            cmd.build_constants()
-                .buffer(entity_draw_buffer)
-                .buffer(mesh_info_buffer)
-                .buffer(meshlet_dispatch_buffer)
-                .buffer(entity_buffer)
-                .buffer(cull_info_buffer);
-
-            cmd.dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
-        });
-
-    context
-        .add_pass(format!("{draw_commands_name}_meshlet_culling"))
-        .with_dependency(meshlet_draw_command_buffer, AccessKind::ComputeShaderWrite)
-        .with_dependency(meshlet_dispatch_buffer, AccessKind::IndirectBuffer)
-        .with_dependency(cull_info_buffer, AccessKind::ComputeShaderRead)
+    ComputePass::new(context, format!("{draw_commands_name}_meshlet_culling"), meshlet_cull_pipeline)
         .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
         .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .render(move |cmd, graph| {
-            let meshlet_draw_command_buffer = graph.get_buffer(meshlet_draw_command_buffer);
-            let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
-            let entity_buffer = graph.get_buffer(scene.entity_buffer);
-            let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
-            let cull_info_buffer = graph.get_buffer(cull_info_buffer);
-            let material_buffer = graph.get_buffer(assets.materials_buffer);
-
-            cmd.bind_compute_pipeline(meshlet_cull_pipeline);
-
-            cmd.build_constants()
-                .buffer(meshlet_dispatch_buffer)
-                .buffer(meshlet_buffer)
-                .buffer(meshlet_draw_command_buffer)
-                .buffer(entity_buffer)
-                .buffer(cull_info_buffer)
-                .buffer(material_buffer);
-
-            cmd.dispatch_indirect(meshlet_dispatch_buffer, 0);
-        });
+        .read_buffer(meshlet_dispatch_buffer)
+        .read_buffer(assets.meshlet_buffer)
+        .write_buffer(meshlet_draw_command_buffer)
+        .read_buffer(scene.entity_buffer)
+        .read_buffer(cull_info_buffer)
+        .read_buffer(assets.materials_buffer)
+        .dispatch_indirect(meshlet_dispatch_buffer, 0);
 
     meshlet_draw_command_buffer
 }
@@ -380,37 +347,21 @@ pub fn create_meshlet_dispatch_command(
     context
         .add_pass(format!("clearing_{draw_commands_name}_culling_buffer"))
         .with_dependency(meshlet_dispatch_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
+        .record_custom(move |cmd, graph| {
             let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
             cmd.fill_buffer(meshlet_dispatch_buffer, 0, 4, 0);
             cmd.fill_buffer(meshlet_dispatch_buffer, 4, 8, 1);
         });
 
-    context
-        .add_pass(format!("{draw_commands_name}_entity_culling"))
-        .with_dependency(scene.entity_draw_buffer, AccessKind::ComputeShaderRead)
-        .with_dependency(meshlet_dispatch_buffer, AccessKind::ComputeShaderWrite)
-        .with_dependency(cull_info_buffer, AccessKind::ComputeShaderRead)
+    ComputePass::new(context, format!("{draw_commands_name}_entity_culling"), entity_cull_pipeline)
         .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
         .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .render(move |cmd, graph| {
-            let mesh_info_buffer = graph.get_buffer(assets.mesh_info_buffer);
-            let entity_draw_buffer = graph.get_buffer(scene.entity_draw_buffer);
-            let entity_buffer = graph.get_buffer(scene.entity_buffer);
-            let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
-            let cull_info_buffer = graph.get_buffer(cull_info_buffer);
-
-            cmd.bind_compute_pipeline(entity_cull_pipeline);
-
-            cmd.build_constants()
-                .buffer(entity_draw_buffer)
-                .buffer(mesh_info_buffer)
-                .buffer(meshlet_dispatch_buffer)
-                .buffer(entity_buffer)
-                .buffer(cull_info_buffer);
-
-            cmd.dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
-        });
+        .read_buffer(scene.entity_draw_buffer)
+        .read_buffer(assets.mesh_info_buffer)
+        .write_buffer(meshlet_dispatch_buffer)
+        .read_buffer(scene.entity_buffer)
+        .read_buffer(cull_info_buffer)
+        .dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
 
     (cull_info_buffer, meshlet_dispatch_buffer)
 }
@@ -447,38 +398,21 @@ pub fn create_meshlet_draw_commands(
     context
         .add_pass(format!("clearing_{draw_commands_name}_culling_buffer"))
         .with_dependency(meshlet_draw_command_buffer, AccessKind::ComputeShaderWrite)
-        .render(move |cmd, graph| {
+        .record_custom(move |cmd, graph| {
             let meshlet_draw_command_buffer = graph.get_buffer(meshlet_draw_command_buffer);
             cmd.fill_buffer(meshlet_draw_command_buffer, 0, 4, 0);
         });
 
-    context
-        .add_pass(format!("{draw_commands_name}_meshlet_culling"))
-        .with_dependency(meshlet_draw_command_buffer, AccessKind::ComputeShaderWrite)
-        .with_dependency(meshlet_dispatch_buffer, AccessKind::IndirectBuffer)
-        .with_dependency(cull_info_buffer, AccessKind::ComputeShaderRead)
+    ComputePass::new(context, format!("{draw_commands_name}_meshlet_culling"), meshlet_cull_pipeline)
         .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
         .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .render(move |cmd, graph| {
-            let meshlet_draw_command_buffer = graph.get_buffer(meshlet_draw_command_buffer);
-            let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
-            let entity_buffer = graph.get_buffer(scene.entity_buffer);
-            let meshlet_dispatch_buffer = graph.get_buffer(meshlet_dispatch_buffer);
-            let cull_info_buffer = graph.get_buffer(cull_info_buffer);
-            let material_buffer = graph.get_buffer(assets.materials_buffer);
-
-            cmd.bind_compute_pipeline(meshlet_cull_pipeline);
-
-            cmd.build_constants()
-                .buffer(meshlet_dispatch_buffer)
-                .buffer(meshlet_buffer)
-                .buffer(meshlet_draw_command_buffer)
-                .buffer(entity_buffer)
-                .buffer(cull_info_buffer)
-                .buffer(material_buffer);
-
-            cmd.dispatch_indirect(meshlet_dispatch_buffer, 0);
-        });
+        .read_buffer(meshlet_dispatch_buffer)
+        .read_buffer(assets.meshlet_buffer)
+        .write_buffer(meshlet_draw_command_buffer)
+        .read_buffer(scene.entity_buffer)
+        .read_buffer(cull_info_buffer)
+        .read_buffer(assets.materials_buffer)
+        .dispatch_indirect(meshlet_dispatch_buffer, 0);
 
     meshlet_draw_command_buffer
 }
@@ -587,7 +521,7 @@ impl DepthPyramid {
             .add_pass("depth_pyramid_reduce")
             .with_dependency(pyramid, AccessKind::ComputeShaderWrite)
             .with_dependency(depth_buffer, AccessKind::ComputeShaderRead)
-            .render(move |cmd, graph| {
+            .record_custom(move |cmd, graph| {
                 let depth_buffer = graph.get_image(depth_buffer);
                 let pyramid = graph.get_image(pyramid);
 
@@ -639,7 +573,7 @@ pub fn update_multiple_depth_pyramids<const C: usize>(
         .add_pass("depth_pyramid_reduce_multiple")
         .with_dependencies(depth_pyramids.into_iter().map(|i| (i, AccessKind::ComputeShaderWrite)))
         .with_dependencies(depth_buffers.into_iter().map(|i| (i, AccessKind::ComputeShaderRead)))
-        .render(move |cmd, graph| {
+        .record_custom(move |cmd, graph| {
             let depth_pyramids = depth_pyramids.map(|i| graph.get_image(i));
             let depth_buffers = depth_buffers.map(|i| graph.get_image(i));
 

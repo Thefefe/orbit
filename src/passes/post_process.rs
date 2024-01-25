@@ -1,6 +1,9 @@
 use ash::vk;
 
-use crate::{graphics::{self, AccessKind}, Settings};
+use crate::{
+    graphics::{self, AccessKind},
+    Settings,
+};
 
 use super::forward::RenderMode;
 
@@ -37,10 +40,8 @@ pub fn render_post_process(
         .with_dependency(swapchain_image, AccessKind::ColorAttachmentWrite)
         .with_dependency(src_image, AccessKind::FragmentShaderRead)
         .with_dependencies(bloom_image.map(|h| (h, AccessKind::FragmentShaderReadGeneral)))
-        .with_dependencies(
-            depth_pyramid_debug.map(|(pyramid, _, _)| (pyramid, AccessKind::FragmentShaderReadGeneral)),
-        )
-        .render(move |cmd, graph| {
+        .with_dependencies(depth_pyramid_debug.map(|(pyramid, _, _)| (pyramid, AccessKind::FragmentShaderReadGeneral)))
+        .record_custom(move |cmd, graph| {
             let swapchain_image = graph.get_image(swapchain_image);
             let src_image = graph.get_image(src_image);
             let bloom_image = bloom_image.map(|i| graph.get_image(i));
@@ -60,12 +61,13 @@ pub fn render_post_process(
 
             cmd.bind_raster_pipeline(pipeline);
 
-            let mut constants = cmd.build_constants()
+            let mut constants = cmd
+                .build_constants()
                 .uint(render_mode as u32)
                 .float(exposure)
                 .float(bloom_intensity)
                 .sampled_image(&src_image);
-            
+
             if let Some(bloom_image) = bloom_image {
                 constants = constants.sampled_image(bloom_image);
             } else {

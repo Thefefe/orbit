@@ -1,5 +1,5 @@
 use crate::{
-    graphics::{self, AccessKind},
+    graphics::{self, AccessKind, ComputePass},
     Camera,
 };
 use ash::vk;
@@ -150,29 +150,18 @@ impl SsaoRenderer {
 
         let blur_pipeline =
             context.create_compute_pipeline("ssao_pipeline", graphics::ShaderStage::spv("shaders/ssao_blur.comp.spv"));
-
-        context
-            .add_pass("ssao_pass")
+        
+        ComputePass::new(context, "ssao_pass", ssao_pipeline)
             .with_dependency(depth_buffer, AccessKind::ComputeShaderRead)
             .with_dependency(ssao_raw_image, AccessKind::ComputeShaderWrite)
-            .render(move |cmd, graph| {
-                cmd.bind_compute_pipeline(ssao_pipeline);
-                cmd.build_constants().buffer(graph.get_buffer(ssao_info_buffer));
-                cmd.dispatch([ssao_resolution[0].div_ceil(8), ssao_resolution[1].div_ceil(8), 1]);
-            });
-
-        context
-            .add_pass("ssao_blur_pass")
-            .with_dependency(ssao_raw_image, AccessKind::ComputeShaderReadGeneral)
-            .with_dependency(ssao_blur_image, AccessKind::ComputeShaderWrite)
-            .render(move |cmd, graph| {
-                cmd.bind_compute_pipeline(blur_pipeline);
-                cmd.build_constants()
-                    .uvec2(ssao_resolution)
-                    .storage_image(graph.get_image(ssao_raw_image))
-                    .storage_image(graph.get_image(ssao_blur_image));
-                cmd.dispatch([ssao_resolution[0].div_ceil(8), ssao_resolution[1].div_ceil(8), 1]);
-            });
+            .read_buffer(ssao_info_buffer)
+            .dispatch([ssao_resolution[0].div_ceil(8), ssao_resolution[1].div_ceil(8), 1]);
+        
+        ComputePass::new(context, "ssao_blur_pass", blur_pipeline)
+            .push_data(ssao_resolution)
+            .read_image_general(ssao_raw_image)
+            .write_image(ssao_blur_image)
+            .dispatch([ssao_resolution[0].div_ceil(8), ssao_resolution[1].div_ceil(8), 1]);
 
         ssao_blur_image
     }

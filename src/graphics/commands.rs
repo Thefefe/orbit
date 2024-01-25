@@ -2,7 +2,7 @@ use ash::vk;
 use std::ffi::CString;
 use std::ops::Range;
 
-use crate::graphics;
+use crate::{graphics, utils};
 
 pub struct CommandPool {
     name: String,
@@ -461,13 +461,17 @@ impl<'a> CommandRecorder<'a> {
         stride: u32,
     ) {
         unsafe {
-            self.device.mesh_shader_fns.as_ref().expect("mesh shading isn't supported").cmd_draw_mesh_tasks_indirect(
-                self.buffer(),
-                indirect_buffer.handle,
-                indirect_buffer_offset,
-                draw_count,
-                stride
-            );
+            self.device
+                .mesh_shader_fns
+                .as_ref()
+                .expect("mesh shading isn't supported")
+                .cmd_draw_mesh_tasks_indirect(
+                    self.buffer(),
+                    indirect_buffer.handle,
+                    indirect_buffer_offset,
+                    draw_count,
+                    stride,
+                );
         }
     }
 
@@ -624,127 +628,112 @@ impl Drop for CommandRecorder<'_> {
 }
 
 pub struct PushConstantBuilder<'a> {
-    constants: [u8; 128],
-    byte_cursor: usize,
+    data: utils::StructuredDataBuilder<128>,
     command_recorder: &'a CommandRecorder<'a>,
 }
 
 impl<'a> PushConstantBuilder<'a> {
     pub fn new(command_recorder: &'a CommandRecorder<'a>) -> Self {
         Self {
-            constants: [0; 128],
-            byte_cursor: 0,
+            data: utils::StructuredDataBuilder::new(),
             command_recorder,
         }
     }
 
-    #[inline(always)]
-    pub fn reamaining_byte(&self) -> usize {
-        128 - self.byte_cursor
-    }
-
     #[track_caller]
     #[inline(always)]
-    pub fn push_bytes_with_align(mut self, bytes: &[u8], align: usize) -> Self {
-        let padding = self.byte_cursor % align;
-        debug_assert!(padding + bytes.len() < self.reamaining_byte());
-
-        let offset = self.byte_cursor + padding;
-        self.constants[offset..offset + bytes.len()].copy_from_slice(bytes);
-        self.byte_cursor += padding + bytes.len();
-
+    pub fn array<T: bytemuck::NoUninit>(mut self, slice: &[T]) -> Self {
+        self.data.push_bytes_with_align(bytemuck::cast_slice(slice), std::mem::align_of_val(slice));
         self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn array<T: bytemuck::NoUninit>(self, slice: &[T]) -> Self {
-        self.push_bytes_with_align(bytemuck::cast_slice(slice), std::mem::align_of_val(slice))
+    pub fn uint(mut self, val: u32) -> Self {
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn uint(self, val: u32) -> Self {
-        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    pub fn uvec2(mut self, val: [u32; 2]) -> Self {
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn uvec2(self, val: [u32; 2]) -> Self {
-        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    pub fn uvec3(mut self, val: [u32; 3]) -> Self {
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn uvec3(self, val: [u32; 3]) -> Self {
-        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+    pub fn uvec4(mut self, val: [u32; 4]) -> Self {
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn uvec4(self, val: [u32; 4]) -> Self {
-        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
-    }
-
-    #[track_caller]
-    #[inline(always)]
-    pub fn float(self, val: impl Into<f32>) -> Self {
+    pub fn float(mut self, val: impl Into<f32>) -> Self {
         let val = val.into();
-        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn vec2(self, val: impl Into<glam::Vec2>) -> Self {
+    pub fn vec2(mut self, val: impl Into<glam::Vec2>) -> Self {
         let val = val.into();
-        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn vec3(self, val: impl Into<glam::Vec3>) -> Self {
+    pub fn vec3(mut self, val: impl Into<glam::Vec3>) -> Self {
         let val = val.into();
-        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn vec4(self, val: impl Into<glam::Vec4>) -> Self {
+    pub fn vec4(mut self, val: impl Into<glam::Vec4>) -> Self {
         let val = val.into();
-        self.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val))
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn mat4(self, val: &glam::Mat4) -> Self {
-        self.push_bytes_with_align(bytemuck::bytes_of(val), std::mem::align_of_val(val))
+    pub fn mat4(mut self, val: &glam::Mat4) -> Self {
+        self.data.push_bytes_with_align(bytemuck::bytes_of(val), std::mem::align_of_val(&val));
+        self
     }
 
     #[track_caller]
     #[inline(always)]
     pub fn sampled_image(self, image: &graphics::ImageView) -> Self {
         let descriptor_index = image.sampled_index().expect("image doesn't have sampled descriptor index");
-        self.push_bytes_with_align(
-            bytemuck::bytes_of(&descriptor_index),
-            std::mem::align_of_val(&descriptor_index),
-        )
+        self.uint(descriptor_index)
     }
 
     #[track_caller]
     #[inline(always)]
     pub fn storage_image(self, image: &graphics::ImageView) -> Self {
         let descriptor_index = image.storage_index().expect("image doesn't have storage descriptor index");
-        self.push_bytes_with_align(
-            bytemuck::bytes_of(&descriptor_index),
-            std::mem::align_of_val(&descriptor_index),
-        )
+        self.uint(descriptor_index)
     }
 
     #[track_caller]
     #[inline(always)]
-    pub fn buffer(self, buffer: &graphics::BufferView) -> Self {
+    pub fn buffer(mut self, buffer: &graphics::BufferView) -> Self {
         let address = buffer.descriptor_index.unwrap();
-        self.push_bytes_with_align(bytemuck::bytes_of(&address), std::mem::align_of_val(&address))
+        self.data.push_bytes_with_align(bytemuck::bytes_of(&address), std::mem::align_of_val(&address));
+        self
     }
 
     pub fn push(self) {}
@@ -752,6 +741,6 @@ impl<'a> PushConstantBuilder<'a> {
 
 impl Drop for PushConstantBuilder<'_> {
     fn drop(&mut self) {
-        self.command_recorder.push_constants(&self.constants[0..self.byte_cursor], 0);
+        self.command_recorder.push_constants(self.data.bytes(), 0);
     }
 }

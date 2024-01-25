@@ -88,6 +88,42 @@ pub fn range_bounds_to_base_count(bounds: impl RangeBounds<u32>, min_bound: u32,
     (base, end_bound - base)
 }
 
+
+#[derive(Debug, Clone, Copy)]
+pub struct StructuredDataBuilder<const SIZE: usize> {
+    pub constants: [u8; SIZE],
+    pub byte_cursor: usize,
+}
+
+impl<const SIZE: usize> StructuredDataBuilder<SIZE> {
+    pub fn new() -> Self {
+        Self {
+            constants: [0; SIZE],
+            byte_cursor: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn reamaining_byte(&self) -> usize {
+        128 - self.byte_cursor
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    pub fn push_bytes_with_align(&mut self, bytes: &[u8], align: usize) {
+        let padding = self.byte_cursor % align;
+        debug_assert!(padding + bytes.len() < self.reamaining_byte());
+
+        let offset = self.byte_cursor + padding;
+        self.constants[offset..offset + bytes.len()].copy_from_slice(bytes);
+        self.byte_cursor += padding + bytes.len();
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.constants[0..self.byte_cursor]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

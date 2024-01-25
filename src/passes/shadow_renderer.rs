@@ -400,7 +400,7 @@ impl ShadowRenderer {
             .add_pass(pass_name)
             .with_dependency(shadow_map, graphics::AccessKind::DepthAttachmentWrite)
             .with_dependency(draw_commands_buffer, graphics::AccessKind::IndirectBuffer)
-            .render(move |cmd, graph| {
+            .record_custom(move |cmd, graph| {
                 let shadow_map = graph.get_image(shadow_map);
 
                 let vertex_buffer = graph.get_buffer(assets.vertex_buffer);

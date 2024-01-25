@@ -379,13 +379,16 @@ impl GpuAssets {
                         &mut meshlets,
                     );
                 }
-
-                submesh_infos.push(SubmeshInfo {
-                    vertex_offset: submesh.vertex_offset as u32,
-                    vertex_count: submesh.vertex_count as u32,
-                    index_offset: submesh.index_offset as u32,
-                    index_count: submesh.index_count as u32,
-                });
+                
+                // for now submeshes are only used for wireframe drawing, first lod is enough
+                if lod_index == 0 {
+                    submesh_infos.push(SubmeshInfo {
+                        vertex_offset: submesh.vertex_offset as u32,
+                        vertex_count: submesh.vertex_count as u32,
+                        index_offset: submesh.index_offset as u32,
+                        index_count: submesh.index_count as u32,
+                    });
+                }
 
                 index_count_scale *= 0.8;
             }
@@ -404,7 +407,7 @@ impl GpuAssets {
         let mut shared = self.shared_stuff.write();
 
         let (vertex_alloc_index, vertex_range) = shared.vertex_allocator.allocate(mesh.vertices.len()).unwrap();
-        let (index_alloc_index, index_range) = shared.index_allocator.allocate(mesh.vertices.len()).unwrap();
+        let (index_alloc_index, index_range) = shared.index_allocator.allocate(mesh.indices.len()).unwrap();
         let (meshlet_data_alloc_index, meshlet_data_range) =
             shared.meshlet_data_allocator.allocate(meshlet_data.len()).unwrap();
         let (meshlet_alloc_index, meshlet_range) = shared.meshlet_allocator.allocate(meshlets.len()).unwrap();

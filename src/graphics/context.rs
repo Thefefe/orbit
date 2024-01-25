@@ -5,11 +5,13 @@ use parking_lot::Mutex;
 use rayon::prelude::*;
 use winit::window::Window;
 
-use crate::graphics::{self, QueueType};
+use crate::{
+    graphics::{self, QueueType},
+    utils,
+};
 
 use super::{
-    graph::{self, CompiledRenderGraph, RenderGraph},
-    BatchDependency, ResourceKind, TransientResourceCache,
+    graph::{self, CompiledRenderGraph, RenderGraph}, BatchDependency, Dispatch, ResourceKind, TransientResourceCache
 };
 
 #[repr(C)]
@@ -596,15 +598,184 @@ impl<'a> PassBuilder<'a> {
         self
     }
 
-    pub fn render(
+    pub fn record_custom(
         self,
         f: impl Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + Send + Sync + 'static,
     ) -> graphics::GraphPassIndex {
-        let pass = self.context.graph.add_pass(self.name, Box::new(f));
-        for (resource, access) in self.dependencies.iter().copied() {
-            self.context.graph.add_dependency(pass, resource, access);
-        }
+        let pass = self.context.graph.add_pass(self.name, graphics::Pass::CustomPass(Box::new(f)), &self.dependencies);
         pass
+    }
+}
+
+pub struct CustomPass<'a> {
+    context: &'a mut Context,
+    name: Cow<'static, str>,
+    dependencies: Vec<(graphics::GraphResourceIndex, graphics::AccessKind)>,
+}
+
+impl CustomPass<'_> {
+    pub fn with_dependency<T>(mut self, handle: graphics::GraphHandle<T>, access: graphics::AccessKind) -> Self {
+        self.dependencies.push((handle.resource_index, access));
+        self
+    }
+
+    pub fn with_dependencies<I>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: IntoGraphDependency,
+    {
+        self.dependencies.extend(iter.into_iter().map(|item| item.into_dependency()));
+        self
+    }
+
+    pub fn record(
+        self,
+        f: impl Fn(&graphics::CommandRecorder, &graphics::CompiledRenderGraph) + Send + Sync + 'static,
+    ) -> graphics::GraphPassIndex {
+        let pass = self.context.graph.add_pass(self.name, graphics::Pass::CustomPass(Box::new(f)), &self.dependencies);
+        pass
+    }
+}
+
+pub struct ComputePass<'a> {
+    context: &'a mut Context,
+    name: Cow<'static, str>,
+    pipeline: graphics::ComputePipeline,
+    constant_data: utils::StructuredDataBuilder<128>,
+    dependencies: Vec<(graphics::GraphResourceIndex, graphics::AccessKind)>,
+}
+
+impl<'a> ComputePass<'a> {
+    pub fn new(
+        context: &'a mut graphics::Context,
+        name: impl Into<Cow<'static, str>>,
+        pipeline: graphics::ComputePipeline,
+    ) -> Self {
+        Self {
+            context,
+            name: name.into(),
+            pipeline,
+            constant_data: utils::StructuredDataBuilder::new(),
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[must_use = "missing dispatch call"]
+    pub fn with_dependency<T>(mut self, handle: graphics::GraphHandle<T>, access: graphics::AccessKind) -> Self {
+        self.dependencies.push((handle.resource_index, access));
+        self
+    }
+
+    #[must_use = "missing dispatch call"]
+    pub fn with_dependencies<I>(mut self, iter: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: IntoGraphDependency,
+    {
+        self.dependencies.extend(iter.into_iter().map(|item| item.into_dependency()));
+        self
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing dispatch call"]
+    pub fn push_bytes(mut self, bytes: &[u8]) -> Self {
+        self.constant_data.push_bytes_with_align(bytes, 4);
+        self
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing dispatch call"]
+    pub fn push_bytes_with_align(mut self, bytes: &[u8], align: usize) -> Self {
+        self.constant_data.push_bytes_with_align(bytes, align);
+        self
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing dispatch call"]
+    pub fn push_data<T: bytemuck::NoUninit>(mut self, val: T) -> Self {
+        self.constant_data
+            .push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val).min(4));
+        self
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing dispatch call"]
+    pub fn read_buffer(mut self, buffer: GraphBufferHandle) -> Self {
+        self.dependencies.push((buffer.resource_index, graphics::AccessKind::ComputeShaderRead));
+        let desc_index = self.context.get_resource_descriptor_index(buffer).unwrap();
+        self.push_data(desc_index)
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing dispatch call"]
+    pub fn write_buffer(mut self, buffer: GraphBufferHandle) -> Self {
+        self.dependencies.push((buffer.resource_index, graphics::AccessKind::ComputeShaderWrite));
+        let desc_index = self.context.get_resource_descriptor_index(buffer).unwrap();
+        self.push_data(desc_index)
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing dispatch call"]
+    pub fn read_image(mut self, image: GraphImageHandle) -> Self {
+        self.dependencies.push((image.resource_index, graphics::AccessKind::ComputeShaderRead));
+        let desc_index = self.context.get_resource_descriptor_index(image).unwrap();
+        self.push_data(desc_index)
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing dispatch call"]
+    pub fn read_image_general(mut self, image: GraphImageHandle) -> Self {
+        self.dependencies.push((image.resource_index, graphics::AccessKind::ComputeShaderReadGeneral));
+        let desc_index = self.context.get_resource_descriptor_index(image).unwrap();
+        self.push_data(desc_index)
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing dispatch call"]
+    pub fn write_image(mut self, image: GraphImageHandle) -> Self {
+        self.dependencies.push((image.resource_index, graphics::AccessKind::ComputeShaderWrite));
+        let desc_index = self.context.get_resource_descriptor_index(image).unwrap();
+        self.push_data(desc_index)
+    }
+
+    pub fn dispatch(self, workgroup_count: [u32; 3]) -> graphics::GraphPassIndex {
+        self.context.graph.add_pass(
+            self.name,
+            graphics::Pass::ComputeDispatch {
+                pipeline: self.pipeline,
+                push_constant_data: self.constant_data.constants,
+                push_constant_size: self.constant_data.byte_cursor,
+                dispatch: Dispatch::DispatchWorkgroups(workgroup_count),
+            },
+            &self.dependencies,
+        )
+    }
+
+    pub fn dispatch_indirect(
+        mut self,
+        indirect_buffer: graphics::GraphBufferHandle,
+        offset: u64,
+    ) -> graphics::GraphPassIndex {
+        self.dependencies.push((indirect_buffer.resource_index, graphics::AccessKind::IndirectBuffer));
+
+        self.context.graph.add_pass(
+            self.name,
+            graphics::Pass::ComputeDispatch {
+                pipeline: self.pipeline,
+                push_constant_data: self.constant_data.constants,
+                push_constant_size: self.constant_data.byte_cursor,
+                dispatch: Dispatch::DispatchIndirect(indirect_buffer, offset),
+            },
+            &self.dependencies,
+        )
     }
 }
 
@@ -1025,7 +1196,8 @@ fn record_batch(
 
     for pass in batch_ref.passes {
         recorder.begin_debug_label(&pass.name, None);
-        (pass.func)(&recorder, compiled_graph);
+        // (pass.func)(&recorder, compiled_graph);
+        pass.func.record(&recorder, compiled_graph);
         recorder.end_debug_label();
     }
 

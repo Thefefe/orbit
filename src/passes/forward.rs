@@ -315,10 +315,14 @@ impl ForwardRenderer {
             if mesh_shading {
                 let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
                 desc = desc
-                    .task_shader(ShaderStage::spv("shaders/forward/forward_depth_prepass.task.spv")
-                        .spec_u32(0, meshlet_dispatch_size(context)))
-                    .mesh_shader(ShaderStage::spv("shaders/forward/forward_depth_prepass.mesh.spv")
-                        .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations));
+                    .task_shader(
+                        ShaderStage::spv("shaders/forward/forward_depth_prepass.task.spv")
+                            .spec_u32(0, meshlet_dispatch_size(context)),
+                    )
+                    .mesh_shader(
+                        ShaderStage::spv("shaders/forward/forward_depth_prepass.mesh.spv")
+                            .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                    );
             } else {
                 desc = desc.vertex_shader(graphics::ShaderSource::spv(
                     "shaders/forward/forward_depth_prepass.vert.spv",
@@ -483,7 +487,14 @@ impl ForwardRenderer {
             }),
         );
 
-        let brdf_integration_map = context.import(&self.brdf_integration_map);
+        let brdf_integration_map = context.import_with(
+            "brdf_integration_map",
+            &self.brdf_integration_map,
+            graphics::GraphResourceImportDesc {
+                initial_access: AccessKind::AllGraphicsRead,
+                ..Default::default()
+            },
+        );
         let jitter_texture = context.import(&self.jitter_offset_texture);
 
         let visibility_buffer = context.import_with(

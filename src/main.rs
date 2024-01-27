@@ -274,7 +274,7 @@ impl Settings {
                     }
                 });
         });
-        
+
         ui.horizontal(|ui| {
             ui.label("MSAA");
             egui::ComboBox::from_id_source("msaa").selected_text(format!("{}", self.msaa)).show_ui(ui, |ui| {
@@ -288,7 +288,6 @@ impl Settings {
         ui.checkbox(&mut self.bloom_enabled, "Bloom");
 
         ui.collapsing("Mesh Settings", |ui| {
-            
             ui.add_enabled(
                 device.mesh_shader_fns.is_some(),
                 egui::Checkbox::new(&mut self.use_mesh_shading, "use mesh shading"),
@@ -301,7 +300,7 @@ impl Settings {
                     0..=self.max_mesh_lod.min(MAX_MESH_LODS - 1),
                 ));
             });
-    
+
             ui.horizontal(|ui| {
                 ui.label("max mesh lod");
                 ui.add(egui::Slider::new(
@@ -309,7 +308,7 @@ impl Settings {
                     0.max(self.min_mesh_lod)..=MAX_MESH_LODS - 1,
                 ));
             });
-    
+
             ui.horizontal(|ui| {
                 ui.label("lod base");
                 ui.add(egui::DragValue::new(&mut self.lod_base));
@@ -319,15 +318,15 @@ impl Settings {
                 ui.add(egui::DragValue::new(&mut self.lod_step));
             });
         });
-        
+
         ui.collapsing("Shadow Settings", |ui| self.shadow_settings.edit(ui));
-        
+
         ui.collapsing("Post Proccessing Settings", |ui| {
             ui.horizontal(|ui| {
                 ui.label("camera exposure");
                 ui.add(egui::DragValue::new(&mut self.camera_exposure).clamp_range(0.1..=16.0).speed(0.1));
             });
-            
+
             ui.heading("SSAO Settings");
             self.ssao_settings.edit(ui);
 
@@ -683,7 +682,7 @@ impl App {
         time: &Time,
         egui_ctx: &egui::Context,
         context: &mut graphics::Context,
-        control_flow: &mut ControlFlow, 
+        control_flow: &mut ControlFlow,
     ) {
         puffin::profile_function!();
 
@@ -1048,7 +1047,16 @@ impl App {
             &mut self.debug_renderer,
         );
 
-        let skybox = self.environment_map.as_ref().map(|e| context.import(&e.skybox));
+        let skybox = self.environment_map.as_ref().map(|e| {
+            context.import_with(
+                "skybox",
+                &e.skybox,
+                graphics::GraphResourceImportDesc {
+                    initial_access: graphics::AccessKind::AllGraphicsRead,
+                    ..Default::default()
+                },
+            )
+        });
 
         let selected_light = self
             .selected_entity_index
@@ -1121,7 +1129,7 @@ impl App {
 
                 let aabb = assets_shared.mesh_infos[mesh].aabb;
                 let bounding_sphere = assets_shared.mesh_infos[mesh].bounding_sphere;
-                
+
                 let transform_matrix = entity.transform.compute_matrix();
 
                 if show_bounding_boxes {
@@ -1220,13 +1228,7 @@ impl App {
             &mut self.debug_renderer,
         );
 
-        self.debug_renderer.render(
-            context,
-            &self.settings,
-            &self.assets,
-            target_attachments,
-            &self.camera,
-        );
+        self.debug_renderer.render(context, &self.settings, &self.assets, target_attachments, &self.camera);
 
         let show_depth_pyramid = self.settings.camera_debug_settings.show_depth_pyramid;
         let depth_pyramid_level = self.settings.camera_debug_settings.depth_pyramid_level;

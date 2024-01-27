@@ -410,6 +410,7 @@ impl ShadowRenderer {
                 -settings.depth_bias_slope_factor,
             )
             .push_data_ref(&view_projection)
+            .with_index_buffer(assets.meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT)
             .read_buffer(draw_commands_buffer)
             .read_buffer(cull_info_buffer)
             .read_buffer(assets.vertex_buffer)

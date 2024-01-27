@@ -543,45 +543,45 @@ impl App {
         // for _ in 0..20_000 {
         //     let mut entity = prefab.clone();
 
-        //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| rng.gen_range(pos_range.clone())));
+        //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| _rng.gen_range(pos_range.clone())));
         //     entity.transform.orientation = Quat::from_euler(
         //         glam::EulerRot::YXZ,
-        //         rng.gen_range(rot_range.clone()),
-        //         rng.gen_range(rot_range.clone()),
-        //         rng.gen_range(rot_range.clone()),
+        //         _rng.gen_range(rot_range.clone()),
+        //         _rng.gen_range(rot_range.clone()),
+        //         _rng.gen_range(rot_range.clone()),
         //     );
 
         //     scene.add_entity(entity);
         // }
 
-        let horizontal_range = -8.0..8.0;
-        let vertical_range = 0.0..=6.0;
-        for _ in 0..64 {
-            let position = Vec3 {
-                x: _rng.gen_range(horizontal_range.clone()),
-                y: _rng.gen_range(vertical_range.clone()),
-                z: _rng.gen_range(horizontal_range.clone()),
-            };
+        // let horizontal_range = -8.0..8.0;
+        // let vertical_range = 0.0..=6.0;
+        // for _ in 0..64 {
+        //     let position = Vec3 {
+        //         x: _rng.gen_range(horizontal_range.clone()),
+        //         y: _rng.gen_range(vertical_range.clone()),
+        //         z: _rng.gen_range(horizontal_range.clone()),
+        //     };
 
-            let color = egui::epaint::Hsva::new(_rng.gen_range(0.0..=1.0), 1.0, 1.0, 1.0).to_rgb();
-            let color = Vec3::from_array(color);
-            let intensity = _rng.gen_range(1.0..=6.0);
+        //     let color = egui::epaint::Hsva::new(_rng.gen_range(0.0..=1.0), 1.0, 1.0, 1.0).to_rgb();
+        //     let color = Vec3::from_array(color);
+        //     let intensity = _rng.gen_range(1.0..=6.0);
 
-            scene.add_entity(EntityData {
-                name: None,
-                transform: Transform {
-                    position,
-                    ..Default::default()
-                },
-                light: Some(Light {
-                    color,
-                    intensity,
-                    params: LightParams::Point { inner_radius: 0.1 },
-                    ..Default::default()
-                }),
-                ..Default::default()
-            });
-        }
+        //     scene.add_entity(EntityData {
+        //         name: None,
+        //         transform: Transform {
+        //             position,
+        //             ..Default::default()
+        //         },
+        //         light: Some(Light {
+        //             color,
+        //             intensity,
+        //             params: LightParams::Point { inner_radius: 0.1 },
+        //             ..Default::default()
+        //         }),
+        //         ..Default::default()
+        //     });
+        // }
 
         scene.update_scene(
             context,

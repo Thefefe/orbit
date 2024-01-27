@@ -781,7 +781,7 @@ impl ForwardRenderer {
             .with_dependency(cluster_info.light_offset_image, AccessKind::FragmentShaderReadGeneral)
             .with_dependency(cluster_info.light_index_list, AccessKind::FragmentShaderRead)
             .with_dependencies(shadow_renderer.rendered_shadow_maps().map(|h| (h, AccessKind::FragmentShaderRead)))
-            .with_index_buffer(assets.index_buffer, 0, vk::IndexType::UINT8_EXT)
+            .with_index_buffer(assets.meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT)
             .read_buffer(draw_commands_buffer)
             .read_buffer(cull_info_buffer)
             .read_buffer(frame_data)

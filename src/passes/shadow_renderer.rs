@@ -8,8 +8,8 @@ use glam::Vec2Swizzles;
 use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 use crate::{
-    assets::{AssetGraphData, GpuAssets, GpuMeshletDrawCommand},
-    graphics::{self, ShaderStage, FRAME_COUNT},
+    assets::{AssetGraphData, GpuAssets},
+    graphics::{self, DepthAttachmentDesc, DrawPass, RenderPass, ShaderStage, FRAME_COUNT},
     math,
     scene::{SceneData, SceneGraphData},
     Camera, Projection, Settings, MAX_SHADOW_CASCADE_COUNT,
@@ -18,8 +18,8 @@ use crate::{
 use super::{
     debug_renderer::DebugRenderer,
     draw_gen::{
-        create_meshlet_dispatch_command, create_meshlet_draw_commands, AlphaModeFlags, CullInfo, OcclusionCullInfo,
-        MAX_DRAW_COUNT, meshlet_dispatch_size,
+        create_meshlet_dispatch_command, create_meshlet_draw_commands, meshlet_dispatch_size, AlphaModeFlags, CullInfo,
+        OcclusionCullInfo,
     },
 };
 
@@ -343,7 +343,6 @@ impl ShadowRenderer {
         shadow_map: graphics::GraphImageHandle,
         view_projection: Mat4,
         cull_info: &CullInfo,
-        clear: bool,
         fragment_shader: bool,
         mesh_shading: bool,
 
@@ -371,11 +370,12 @@ impl ShadowRenderer {
 
         if mesh_shading {
             let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
-            pipeline_desc = pipeline_desc.
-                task_shader(ShaderStage::spv("shaders/shadow.task.spv")
-                    .spec_u32(0, meshlet_dispatch_size(context)))
-                .mesh_shader(ShaderStage::spv("shaders/shadow.mesh.spv")
-                    .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations));
+            pipeline_desc = pipeline_desc
+                .task_shader(ShaderStage::spv("shaders/shadow.task.spv").spec_u32(0, meshlet_dispatch_size(context)))
+                .mesh_shader(
+                    ShaderStage::spv("shaders/shadow.mesh.spv")
+                        .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                );
         } else {
             pipeline_desc = pipeline_desc.vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"));
         }
@@ -396,75 +396,30 @@ impl ShadowRenderer {
             );
         }
 
-        context
-            .add_pass(pass_name)
-            .with_dependency(shadow_map, graphics::AccessKind::DepthAttachmentWrite)
-            .with_dependency(draw_commands_buffer, graphics::AccessKind::IndirectBuffer)
-            .record_custom(move |cmd, graph| {
-                let shadow_map = graph.get_image(shadow_map);
+        let mut render_pass = RenderPass::new(context, pass_name).depth_attachment(DepthAttachmentDesc {
+            target: shadow_map,
+            resolve: None,
+            load_op: graphics::LoadOp::Clear(0.0),
+            store: true,
+        });
 
-                let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-                let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
-                let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
-                let entity_buffer = graph.get_buffer(scene.entity_buffer);
-                let materials_buffer = graph.get_buffer(assets.materials_buffer);
-                let draw_commands_buffer = graph.get_buffer(draw_commands_buffer);
-                let cull_info_buffer = graph.get_buffer(cull_info_buffer);
+        DrawPass::new(&mut render_pass, pipeline)
+            .with_bias(
+                -settings.depth_bias_constant_factor,
+                0.0,
+                -settings.depth_bias_slope_factor,
+            )
+            .push_data_ref(&view_projection)
+            .read_buffer(draw_commands_buffer)
+            .read_buffer(cull_info_buffer)
+            .read_buffer(assets.vertex_buffer)
+            .read_buffer(assets.meshlet_buffer)
+            .read_buffer(assets.meshlet_data_buffer)
+            .read_buffer(scene.entity_buffer)
+            .read_buffer(assets.materials_buffer)
+            .draw_meshlets(draw_commands_buffer, mesh_shading);
 
-                let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
-                    .image_view(shadow_map.view)
-                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                    .load_op(if clear {
-                        vk::AttachmentLoadOp::CLEAR
-                    } else {
-                        vk::AttachmentLoadOp::LOAD
-                    })
-                    .clear_value(vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
-                    })
-                    .store_op(vk::AttachmentStoreOp::STORE);
-
-                let rendering_info = vk::RenderingInfo::builder()
-                    .render_area(shadow_map.full_rect())
-                    .layer_count(1)
-                    .depth_attachment(&depth_attachemnt);
-
-                cmd.begin_rendering(&rendering_info);
-
-                cmd.bind_raster_pipeline(pipeline);
-                // negative becouse of reverse-z projection
-                cmd.set_depth_bias(
-                    -settings.depth_bias_constant_factor,
-                    0.0,
-                    -settings.depth_bias_slope_factor,
-                );
-
-                cmd.build_constants()
-                    .mat4(&view_projection)
-                    .buffer(draw_commands_buffer)
-                    .buffer(cull_info_buffer)
-                    .buffer(vertex_buffer)
-                    .buffer(meshlet_buffer)
-                    .buffer(meshlet_data_buffer)
-                    .buffer(entity_buffer)
-                    .buffer(materials_buffer);
-
-                if mesh_shading {
-                    cmd.draw_mesh_tasks_indirect(draw_commands_buffer, 0, 1, 0);
-                } else {
-                    cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
-                    cmd.draw_indexed_indirect_count(
-                        draw_commands_buffer,
-                        4,
-                        draw_commands_buffer,
-                        0,
-                        MAX_DRAW_COUNT as u32,
-                        std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
-                    );
-                }
-
-                cmd.end_rendering();
-            });
+        render_pass.finish();
     }
 
     pub fn render_cascaded_shadow(
@@ -743,7 +698,6 @@ impl ShadowRenderer {
                     lod_target_pos_view_space: light_matrix.transform_point3(camera.transform.position),
                     debug_print: false,
                 },
-                true,
                 true,
                 global_settings.use_mesh_shading,
                 imported_assets,

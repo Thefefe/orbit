@@ -92,10 +92,83 @@ pub enum LoadOp<T> {
     DontCare,
 }
 
+impl<T> LoadOp<T> {
+    pub fn vk_load_op(self) -> vk::AttachmentLoadOp {
+        match self {
+            LoadOp::Load => vk::AttachmentLoadOp::LOAD,
+            LoadOp::Clear(_) => vk::AttachmentLoadOp::CLEAR,
+            LoadOp::DontCare => vk::AttachmentLoadOp::DONT_CARE,
+        }
+    }
+}
+
+impl LoadOp<[f32; 4]> {
+    pub fn clear_value(self) -> vk::ClearValue {
+        match self {
+            LoadOp::Clear(float32) => vk::ClearValue {
+                color: vk::ClearColorValue { float32 },
+            },
+            _ => vk::ClearValue::default(),
+        }
+    }
+}
+
+impl LoadOp<[i32; 4]> {
+    pub fn clear_value(self) -> vk::ClearValue {
+        match self {
+            LoadOp::Clear(int32) => vk::ClearValue {
+                color: vk::ClearColorValue { int32 },
+            },
+            _ => vk::ClearValue::default(),
+        }
+    }
+}
+
+impl LoadOp<[u32; 4]> {
+    pub fn clear_value(self) -> vk::ClearValue {
+        match self {
+            LoadOp::Clear(uint32) => vk::ClearValue {
+                color: vk::ClearColorValue { uint32 },
+            },
+            _ => vk::ClearValue::default(),
+        }
+    }
+}
+
+impl LoadOp<f32> {
+    pub fn clear_value(self) -> vk::ClearValue {
+        match self {
+            LoadOp::Clear(depth) => vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue { depth, stencil: 0 },
+            },
+            _ => vk::ClearValue::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ResolveMode {
+    SampleZero,
+    Min,
+    Max,
+    Average,
+}
+
+impl ResolveMode {
+    pub fn vk_flags(self) -> vk::ResolveModeFlags {
+        match self {
+            ResolveMode::SampleZero => vk::ResolveModeFlags::SAMPLE_ZERO,
+            ResolveMode::Min => vk::ResolveModeFlags::MIN,
+            ResolveMode::Max => vk::ResolveModeFlags::MAX,
+            ResolveMode::Average => vk::ResolveModeFlags::AVERAGE,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ColorAttachmentDesc {
     pub target: graphics::GraphImageHandle,
-    pub resolve: Option<graphics::GraphImageHandle>,
+    pub resolve: Option<(graphics::GraphImageHandle, ResolveMode)>,
     pub load_op: LoadOp<[f32; 4]>,
     pub store: bool,
 }
@@ -103,7 +176,7 @@ pub struct ColorAttachmentDesc {
 #[derive(Debug, Clone, Copy)]
 pub struct DepthAttachmentDesc {
     pub target: graphics::GraphImageHandle,
-    pub resolve: Option<graphics::GraphImageHandle>,
+    pub resolve: Option<(graphics::GraphImageHandle, ResolveMode)>,
     pub load_op: LoadOp<f32>,
     pub store: bool,
 }
@@ -114,6 +187,68 @@ pub enum Dispatch {
     DispatchIndirect(graphics::GraphBufferHandle, u64),
 }
 
+#[derive(Debug, Clone)]
+pub struct RenderPassDraw {
+    pub pipeline: graphics::RasterPipeline,
+    pub depth_test_enable: Option<bool>,
+    pub depth_bias: Option<[f32; 3]>,
+    pub index_buffer: Option<(graphics::GraphBufferHandle, u64, vk::IndexType)>,
+    pub constant_data: [u8; 128],
+    pub constant_size: usize,
+    pub draw_command: DrawCommand,
+}
+
+#[derive(Debug, Clone)]
+pub enum DrawCommand {
+    Draw {
+        vertex_range: Range<u32>,
+        instance_range: Range<u32>,
+    },
+    DrawIndexed {
+        index_range: Range<u32>,
+        instance_range: Range<u32>,
+        vertex_offset: i32,
+    },
+    DrawIndexedIndirect {
+        draw_buffer: graphics::GraphBufferHandle,
+        draw_buffer_offset: u64,
+        draw_count: u32,
+        stride: u32,
+    },
+    DrawIndexedIndirectCount {
+        draw_buffer: graphics::GraphBufferHandle,
+        draw_buffer_offset: u64,
+        count_buffer: graphics::GraphBufferHandle,
+        count_buffer_offset: u64,
+        max_draw_count: u32,
+        stride: u32,
+    },
+    DrawMeshTasksIndirect {
+        task_buffer: graphics::GraphBufferHandle,
+        task_buffer_offset: vk::DeviceSize,
+        draw_count: u32,
+        stride: u32,
+    },
+}
+
+impl DrawCommand {
+    pub fn draw_buffer(&self) -> Option<graphics::GraphBufferHandle> {
+        match self {
+            DrawCommand::DrawIndexedIndirect { draw_buffer, .. } => Some(*draw_buffer),
+            DrawCommand::DrawIndexedIndirectCount { draw_buffer, .. } => Some(*draw_buffer),
+            DrawCommand::DrawMeshTasksIndirect { task_buffer, .. } => Some(*task_buffer),
+            _ => None,
+        }
+    }
+
+    pub fn count_buffer(&self) -> Option<graphics::GraphBufferHandle> {
+        match self {
+            DrawCommand::DrawIndexedIndirectCount { count_buffer, .. } => Some(*count_buffer),
+            _ => None,
+        }
+    }
+}
+
 pub enum Pass {
     CustomPass(PassFn),
     ComputeDispatch {
@@ -121,6 +256,13 @@ pub enum Pass {
         push_constant_data: [u8; 128],
         push_constant_size: usize,
         dispatch: Dispatch,
+    },
+    RenderPass {
+        color_attachments: [ColorAttachmentDesc; graphics::MAX_COLOR_ATTACHMENT_COUNT],
+        color_attachment_count: usize,
+        depth_attachment: Option<DepthAttachmentDesc>,
+        render_area: [u32; 2],
+        draw_range: Range<usize>,
     },
 }
 
@@ -142,6 +284,143 @@ impl Pass {
                         cmd.dispatch_indirect(graph.get_buffer(*indirect_buffer), *offset);
                     }
                 }
+            }
+            Pass::RenderPass {
+                color_attachments,
+                color_attachment_count,
+                depth_attachment,
+                render_area,
+                draw_range,
+            } => {
+                let color_attachments = color_attachments.map(|a| {
+                    let mut attachment = vk::RenderingAttachmentInfo::default();
+                    attachment.image_view = graph.get_image(a.target).view;
+                    attachment.image_layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+                    attachment.load_op = a.load_op.vk_load_op();
+                    attachment.clear_value = a.load_op.clear_value();
+
+                    if let Some((image, mode)) = a.resolve {
+                        attachment.resolve_image_view = graph.get_image(image).view;
+                        attachment.resolve_image_layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+                        attachment.resolve_mode = mode.vk_flags();
+                    }
+
+                    attachment
+                });
+
+                let depth_attachment = depth_attachment.map(|a| {
+                    let mut attachment = vk::RenderingAttachmentInfo::default();
+
+                    attachment.image_view = graph.get_image(a.target).view;
+                    attachment.image_layout = vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL;
+                    attachment.load_op = a.load_op.vk_load_op();
+                    attachment.clear_value = a.load_op.clear_value();
+
+                    if let Some((image, mode)) = a.resolve {
+                        attachment.resolve_image_view = graph.get_image(image).view;
+                        attachment.resolve_image_layout = vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL;
+                        attachment.resolve_mode = mode.vk_flags();
+                    }
+
+                    attachment
+                });
+
+                let mut rendering_info = vk::RenderingInfo::builder()
+                    .color_attachments(&color_attachments[..*color_attachment_count])
+                    .layer_count(1)
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: vk::Extent2D {
+                            width: render_area[0],
+                            height: render_area[1],
+                        },
+                    });
+
+                if let Some(depth_attachment) = depth_attachment.as_ref() {
+                    rendering_info = rendering_info.depth_attachment(depth_attachment);
+                }
+
+                cmd.begin_rendering(&rendering_info);
+
+                let mut current_pipeline = None;
+                let mut current_index_binding = None;
+
+                for draw in &graph.draws[draw_range.clone()] {
+                    if current_pipeline != Some(draw.pipeline) {
+                        current_pipeline = Some(draw.pipeline);
+                        cmd.bind_raster_pipeline(draw.pipeline);
+                    }
+
+                    if draw.index_buffer != current_index_binding && draw.index_buffer.is_some() {
+                        current_index_binding = draw.index_buffer;
+                        if let Some((buffer, offset, index_type)) = draw.index_buffer {
+                            cmd.bind_index_buffer(graph.get_buffer(buffer), offset, index_type);
+                        }
+                    }
+
+                    if let Some(depth_test) = draw.depth_test_enable {
+                        cmd.set_depth_test_enable(depth_test);
+                    }
+
+                    if let Some([constant_factor, clamp, slope_factor]) = draw.depth_bias {
+                        cmd.set_depth_bias(constant_factor, clamp, slope_factor);
+                    }
+
+                    if draw.constant_size != 0 {
+                        cmd.push_constants(&draw.constant_data[..draw.constant_size], 0);
+                    }
+
+                    match &draw.draw_command {
+                        DrawCommand::Draw {
+                            vertex_range,
+                            instance_range,
+                        } => cmd.draw(vertex_range.clone(), instance_range.clone()),
+                        DrawCommand::DrawIndexed {
+                            index_range,
+                            instance_range,
+                            vertex_offset,
+                        } => cmd.draw_indexed(index_range.clone(), instance_range.clone(), *vertex_offset),
+                        DrawCommand::DrawIndexedIndirect {
+                            draw_buffer,
+                            draw_buffer_offset,
+                            draw_count,
+                            stride,
+                        } => cmd.draw_indexed_indirect(
+                            graph.get_buffer(*draw_buffer),
+                            *draw_buffer_offset,
+                            *draw_count,
+                            *stride,
+                        ),
+                        DrawCommand::DrawIndexedIndirectCount {
+                            draw_buffer,
+                            draw_buffer_offset,
+                            count_buffer,
+                            count_buffer_offset,
+                            max_draw_count,
+                            stride,
+                        } => cmd.draw_indexed_indirect_count(
+                            graph.get_buffer(*draw_buffer),
+                            *draw_buffer_offset,
+                            graph.get_buffer(*count_buffer),
+                            *count_buffer_offset,
+                            *max_draw_count,
+                            *stride,
+                        ),
+                        DrawCommand::DrawMeshTasksIndirect {
+                            task_buffer,
+                            task_buffer_offset,
+                            draw_count,
+                            stride,
+                        } => cmd.draw_mesh_tasks_indirect(
+                            graph.get_buffer(*task_buffer),
+                            *task_buffer_offset,
+                            *draw_count,
+                            *stride,
+                        ),
+                    }
+                }
+
+                cmd.end_rendering();
             }
         }
     }
@@ -186,6 +465,8 @@ pub struct GraphResourceImportDesc {
 pub struct RenderGraph {
     pub resources: Vec<GraphResourceData>,
     pub passes: arena::Arena<PassData>,
+    pub draws: Vec<RenderPassDraw>,
+
     dependencies: Vec<DependencyData>,
 
     pub import_cache: HashMap<graphics::AnyResourceHandle, GraphResourceIndex>,
@@ -198,6 +479,7 @@ impl RenderGraph {
         Self {
             resources: Vec::new(),
             passes: arena::Arena::new(),
+            draws: Vec::new(),
             dependencies: Vec::new(),
             import_cache: HashMap::new(),
             dont_wait_semaphores: Mutex::new(HashSet::new()),
@@ -208,6 +490,7 @@ impl RenderGraph {
     pub fn clear(&mut self) {
         self.resources.clear();
         self.passes.clear();
+        self.draws.clear();
         self.import_cache.clear();
         self.dont_wait_semaphores.get_mut().clear();
         self.dont_signal_semaphores.clear();
@@ -486,6 +769,7 @@ pub struct CompiledGraphResource {
 pub struct CompiledRenderGraph {
     pub resources: Vec<CompiledGraphResource>,
     pub passes: Vec<CompiledPassData>,
+    pub draws: Vec<RenderPassDraw>,
     pub dependencies: Vec<BatchDependency>,
     pub semaphores: Vec<(graphics::Semaphore, vk::PipelineStageFlags2)>,
     pub batches: Vec<BatchData>,
@@ -531,6 +815,7 @@ impl CompiledRenderGraph {
     pub fn clear(&mut self) {
         self.resources.clear();
         self.passes.clear();
+        self.draws.clear();
         self.dependencies.clear();
         self.semaphores.clear();
         self.batches.clear();
@@ -565,6 +850,8 @@ impl RenderGraph {
     pub fn compile_and_flush(&mut self, device: &graphics::Device, compiled: &mut CompiledRenderGraph) {
         puffin::profile_function!();
         compiled.clear();
+
+        std::mem::swap(&mut compiled.draws, &mut self.draws);
 
         let mut sorted_passes = self.take_passes_with_topology_sort();
 

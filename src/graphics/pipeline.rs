@@ -154,7 +154,7 @@ impl ShaderStage {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RasterPipeline {
     pub handle: vk::Pipeline,
 }

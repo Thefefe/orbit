@@ -5,7 +5,10 @@ use glam::{vec3, Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    assets::GpuAssets, collections::arena::Index, graphics::{self, GpuDrawIndiexedIndirectCommand}, math, App, Camera, Settings,
+    assets::GpuAssets,
+    collections::arena::Index,
+    graphics::{self, ColorAttachmentDesc, DepthAttachmentDesc, DrawPass, GpuDrawIndiexedIndirectCommand, ResolveMode, LoadOp},
+    math, App, Camera, Settings,
 };
 
 use super::forward::TargetAttachments;
@@ -75,7 +78,9 @@ impl DebugRenderer {
         let mesh_draw_commands_buffer = context.create_buffer(
             "debug_mesh_draw_commands_buffer",
             &graphics::BufferDesc {
-                size: graphics::FRAME_COUNT * Self::MAX_MESH_DRAW_COMMANDS * size_of::<GpuDrawIndiexedIndirectCommand>(),
+                size: graphics::FRAME_COUNT
+                    * Self::MAX_MESH_DRAW_COMMANDS
+                    * size_of::<GpuDrawIndiexedIndirectCommand>(),
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::INDIRECT_BUFFER,
@@ -411,7 +416,9 @@ impl DebugRenderer {
         target_attachments: TargetAttachments,
         camera: &Camera,
     ) {
-        if self.line_vertices.is_empty() && self.mesh_draw_commands.is_empty() { return; }
+        if self.line_vertices.is_empty() && self.mesh_draw_commands.is_empty() {
+            return;
+        }
 
         let mesh_instance_offset = Self::MAX_MESH_INSTANCE_COUNT * context.frame_index();
         let mesh_draw_commands_buffer_byte_offset =
@@ -521,109 +528,55 @@ impl DebugRenderer {
 
         let assets = assets.import_to_graph(context);
 
-        context
-            .add_pass("debug_render")
-            .with_dependency(target_attachments.color_target, graphics::AccessKind::ColorAttachmentWrite)
-            .with_dependency(target_attachments.depth_target, graphics::AccessKind::DepthAttachmentWrite)
-            .with_dependencies(target_attachments.color_resolve.map(|h| (h, graphics::AccessKind::ColorAttachmentWrite)))
-            .record_custom(move |cmd, graph| {
-                let color_image = graph.get_image(target_attachments.color_target);
-                let color_resolve_image = target_attachments.color_resolve.map(|handle| graph.get_image(handle));
-                let depth_image = graph.get_image(target_attachments.depth_target);
-
-                let mut color_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(color_image.view)
-                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::LOAD)
-                    .store_op(vk::AttachmentStoreOp::STORE);
-
-                if let Some(resolve_image) = color_resolve_image {
-                    color_attachment = color_attachment
-                        .resolve_image_view(resolve_image.view)
-                        .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                        .resolve_mode(vk::ResolveModeFlags::AVERAGE);
-                }
-
-                let depth_attachemnt = vk::RenderingAttachmentInfo::builder()
-                    .image_view(depth_image.view)
-                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::LOAD)
-                    .store_op(vk::AttachmentStoreOp::NONE);
-
-                let rendering_info = vk::RenderingInfo::builder()
-                    .render_area(color_image.full_rect())
-                    .layer_count(1)
-                    .color_attachments(std::slice::from_ref(&color_attachment))
-                    .depth_attachment(&depth_attachemnt);
-
-                cmd.begin_rendering(&rendering_info);
-
-                // lines
-                if line_vertex_count > 0 {
-                    let line_buffer = graph.get_buffer(line_vertex_buffer);
-                    cmd.bind_raster_pipeline(line_pipeline);
-
-                    // back
-                    cmd.build_constants()
-                        .mat4(&view_projection_matrix)
-                        .float(0.1)
-                        .buffer(&line_buffer)
-                        .uint(line_vertex_offset as u32);
-                    cmd.set_depth_test_enable(false);
-                    cmd.draw(0..line_vertex_count as u32, 0..1);
-
-                    // front
-                    cmd.build_constants()
-                        .mat4(&view_projection_matrix)
-                        .float(1.0)
-                        .buffer(&line_buffer)
-                        .uint(line_vertex_offset as u32);
-                    cmd.set_depth_test_enable(true);
-                    cmd.draw(0..line_vertex_count as u32, 0..1);
-                }
-
-                // meshes
-                if mesh_draw_commands_count > 0 {
-                    let index_buffer = graph.get_buffer(assets.index_buffer);
-                    let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-
-                    let instance_buffer = graph.get_buffer(mesh_instance_buffer);
-                    let draw_commands_buffer = graph.get_buffer(mesh_draw_commands_buffer);
-
-                    cmd.bind_raster_pipeline(mesh_wireframe_pipeline);
-                    cmd.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
-
-                    // back
-                    // cmd.build_constants()
-                    //     .mat4(&view_projection_matrix)
-                    //     .buffer(vertex_buffer)
-                    //     .buffer(instance_buffer)
-                    //     .float(0.1);
-                    // cmd.set_depth_test_enable(false);
-                    // cmd.draw_indexed_indirect(
-                    //     draw_commands_buffer,
-                    //     mesh_draw_commands_buffer_byte_offset as u64,
-                    //     mesh_draw_commands_count as u32,
-                    //     size_of::<GpuDrawIndiexedIndirectCommand>() as u32,
-                    // );
-
-                    // front
-                    cmd.build_constants()
-                        .mat4(&view_projection_matrix)
-                        .buffer(vertex_buffer)
-                        .buffer(instance_buffer)
-                        .float(1.0);
-                    cmd.set_depth_test_enable(true);
-                    cmd.draw_indexed_indirect(
-                        draw_commands_buffer,
-                        mesh_draw_commands_buffer_byte_offset as u64,
-                        mesh_draw_commands_count as u32,
-                        size_of::<GpuDrawIndiexedIndirectCommand>() as u32,
-                    );
-                }
-
-                cmd.end_rendering();
+        let mut render_pass = graphics::RenderPass::new(context, "debug_render")
+            .color_attachments(&[ColorAttachmentDesc {
+                target: target_attachments.color_target,
+                resolve: target_attachments.color_resolve.map(|i| (i, ResolveMode::Average)),
+                load_op: LoadOp::Load,
+                store: true,
+            }])
+            .depth_attachment(DepthAttachmentDesc {
+                target: target_attachments.depth_target,
+                resolve: None,
+                load_op: LoadOp::Load,
+                store: false,
             });
+
+        if line_vertex_count > 0 {
+            DrawPass::new(&mut render_pass, line_pipeline)
+                .with_depth_test(false)
+                .push_data_ref(&view_projection_matrix)
+                .push_data(0.1f32)
+                .read_buffer(line_vertex_buffer)
+                .push_data(line_vertex_offset as u32)
+                .draw(0..line_vertex_count as u32, 0..1);
+
+            DrawPass::new(&mut render_pass, line_pipeline)
+                .with_depth_test(true)
+                .push_data_ref(&view_projection_matrix)
+                .push_data(1.0f32)
+                .read_buffer(line_vertex_buffer)
+                .push_data(line_vertex_offset as u32)
+                .draw(0..line_vertex_count as u32, 0..1);
+        }
+
+        if mesh_draw_commands_count > 0 {
+            DrawPass::new(&mut render_pass, mesh_wireframe_pipeline)
+                .with_depth_test(true)
+                .with_index_buffer(assets.index_buffer, 0, vk::IndexType::UINT32)
+                .push_data_ref(&view_projection_matrix)
+                .read_buffer(assets.vertex_buffer)
+                .read_buffer(mesh_instance_buffer)
+                .push_data(1.0f32)
+                .draw_command(graphics::DrawCommand::DrawIndexedIndirect {
+                    draw_buffer: mesh_draw_commands_buffer,
+                    draw_buffer_offset: mesh_draw_commands_buffer_byte_offset as u64,
+                    draw_count: mesh_draw_commands_count as u32,
+                    stride: size_of::<GpuDrawIndiexedIndirectCommand>() as u32
+                });
+        }
+
+        render_pass.finish();
 
         self.line_vertices.clear();
         self.mesh_instances.clear();

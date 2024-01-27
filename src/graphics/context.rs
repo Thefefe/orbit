@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, marker::PhantomData, sync::Arc, time::Instant};
+use std::{borrow::Cow, collections::HashMap, marker::PhantomData, ops::Range, sync::Arc, time::Instant};
 
 use ash::vk;
 use parking_lot::Mutex;
@@ -6,12 +6,12 @@ use rayon::prelude::*;
 use winit::window::Window;
 
 use crate::{
-    graphics::{self, QueueType},
-    utils,
+    assets::GpuMeshletDrawCommand, graphics::{self, QueueType}, passes::draw_gen::MAX_DRAW_COUNT, utils
 };
 
 use super::{
-    graph::{self, CompiledRenderGraph, RenderGraph}, BatchDependency, Dispatch, ResourceKind, TransientResourceCache
+    graph::{self, CompiledRenderGraph, RenderGraph},
+    BatchDependency, Dispatch, ResourceKind, TransientResourceCache,
 };
 
 #[repr(C)]
@@ -558,6 +558,14 @@ impl<T> Clone for GraphHandle<T> {
 
 impl<T> Copy for GraphHandle<T> {}
 
+impl<T> PartialEq for GraphHandle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.resource_index == other.resource_index
+    }
+}
+
+impl<T> Eq for GraphHandle<T> {}
+
 pub type GraphBufferHandle = GraphHandle<graphics::BufferRaw>;
 pub type GraphImageHandle = GraphHandle<graphics::ImageRaw>;
 
@@ -776,6 +784,327 @@ impl<'a> ComputePass<'a> {
             },
             &self.dependencies,
         )
+    }
+}
+
+pub struct RenderPass<'a> {
+    context: &'a mut graphics::Context,
+    name: Cow<'static, str>,
+    color_attachments: [graphics::ColorAttachmentDesc; graphics::MAX_COLOR_ATTACHMENT_COUNT],
+    color_attachment_count: usize,
+    depth_attachment: Option<graphics::DepthAttachmentDesc>,
+    draw_range: Range<usize>,
+    dependencies: Vec<(graphics::GraphResourceIndex, graphics::AccessKind)>,
+}
+
+impl<'a> RenderPass<'a> {
+    pub fn new(context: &'a mut graphics::Context, name: impl Into<Cow<'static, str>>) -> Self {
+        let dummy_color_attachment = graphics::ColorAttachmentDesc {
+            target: graphics::GraphImageHandle::uninit(),
+            resolve: None,
+            load_op: graphics::LoadOp::Load,
+            store: false,
+        };
+
+        let draw_range = context.graph.draws.len()..context.graph.draws.len();
+
+        Self {
+            context,
+            name: name.into(),
+            color_attachments: [dummy_color_attachment; graphics::MAX_COLOR_ATTACHMENT_COUNT],
+            color_attachment_count: 0,
+            depth_attachment: None,
+            draw_range,
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[track_caller]
+    pub fn color_attachments(mut self, color_attachments: &[graphics::ColorAttachmentDesc]) -> Self {
+        assert!(color_attachments.len() <= graphics::MAX_COLOR_ATTACHMENT_COUNT);
+        self.color_attachments[..color_attachments.len()].copy_from_slice(color_attachments);
+        self.color_attachment_count = color_attachments.len();
+        self
+    }
+
+    pub fn depth_attachment(mut self, depth_attachment: graphics::DepthAttachmentDesc) -> Self {
+        self.depth_attachment = Some(depth_attachment);
+        self
+    }
+
+    pub fn finish(mut self) -> graphics::GraphPassIndex {
+        assert!(
+            self.depth_attachment.is_some() || self.color_attachment_count > 0,
+            "all render passes should have at least one attachment"
+        );
+
+        let get_render_area = |handle| {
+            let dimensions = self.context.get_image_desc(handle).dimensions;
+            [dimensions[0], dimensions[1]]
+        };
+
+        let render_area = if let Some(depth_attachment) = self.depth_attachment.as_ref() {
+            get_render_area(depth_attachment.target)
+        } else {
+            get_render_area(self.color_attachments[0].target)
+        };
+
+        for attachment in &self.color_attachments[..self.color_attachment_count] {
+            assert_eq!(
+                render_area,
+                get_render_area(attachment.target),
+                "all attachments must have the same dimensions"
+            );
+
+            let access = if attachment.store || matches!(attachment.load_op, graphics::LoadOp::Clear(_)) {
+                graphics::AccessKind::ColorAttachmentWrite
+            } else {
+                graphics::AccessKind::ColorAttachmentRead
+            };
+            self.dependencies.push((attachment.target.resource_index, access));
+            if let Some((resolve, _)) = attachment.resolve {
+                self.dependencies.push((resolve.resource_index, graphics::AccessKind::ColorAttachmentWrite));
+                assert_eq!(
+                    render_area,
+                    get_render_area(resolve),
+                    "all attachments must have the same dimensions"
+                );
+            }
+        }
+
+        if let Some(attachment) = self.depth_attachment {
+            assert_eq!(
+                render_area,
+                get_render_area(attachment.target),
+                "all attachments must have the same dimensions"
+            );
+
+            let access = if attachment.store || matches!(attachment.load_op, graphics::LoadOp::Clear(_)) {
+                graphics::AccessKind::DepthAttachmentWrite
+            } else {
+                graphics::AccessKind::DepthAttachmentRead
+            };
+            self.dependencies.push((attachment.target.resource_index, access));
+            if let Some((resolve, _)) = attachment.resolve {
+                self.dependencies.push((resolve.resource_index, graphics::AccessKind::DepthAttachmentWrite));
+                assert_eq!(
+                    render_area,
+                    get_render_area(resolve),
+                    "all attachments must have the same dimensions"
+                );
+            }
+        }
+
+        self.draw_range.end = self.context.graph.draws.len();
+
+        let pass = graphics::Pass::RenderPass {
+            color_attachments: self.color_attachments,
+            color_attachment_count: self.color_attachment_count,
+            depth_attachment: self.depth_attachment,
+            render_area,
+            draw_range: self.draw_range,
+        };
+
+        self.context.graph.add_pass(self.name, pass, &self.dependencies)
+    }
+}
+
+pub struct DrawPass<'a, 'b> {
+    render_pass: &'b mut graphics::RenderPass<'a>,
+    pipeline: graphics::RasterPipeline,
+    depth_test_enable: Option<bool>,
+    depth_bias: Option<[f32; 3]>,
+    index_buffer: Option<(graphics::GraphBufferHandle, u64, vk::IndexType)>,
+    constant_data: utils::StructuredDataBuilder<128>,
+}
+
+impl<'a: 'b, 'b> DrawPass<'a, 'b> {
+    pub fn new(render_pass: &'b mut graphics::RenderPass<'a>, pipeline: graphics::RasterPipeline) -> Self {
+        Self {
+            render_pass,
+            pipeline,
+            depth_test_enable: None,
+            depth_bias: None,
+            index_buffer: None,
+            constant_data: utils::StructuredDataBuilder::new(),
+        }
+    }
+
+    #[must_use = "missing draw call"]
+    pub fn with_depth_test(mut self, depth_test: bool) -> Self {
+        self.depth_test_enable = Some(depth_test);
+        self
+    }
+
+    #[must_use = "missing draw call"]
+    pub fn with_bias(mut self, constant_factor: f32, clamp: f32, slope_factor: f32) -> Self {
+        self.depth_bias = Some([constant_factor, clamp, slope_factor]);
+        self
+    }
+
+    #[must_use = "missing draw call"]
+    pub fn with_index_buffer(mut self, buffer: GraphBufferHandle, offset: u64, index_type: vk::IndexType) -> Self {
+        self.index_buffer = Some((buffer, offset, index_type));
+        self
+    }
+
+    #[must_use = "missing draw call"]
+    pub fn with_dependency<T>(self, handle: graphics::GraphHandle<T>, access: graphics::AccessKind) -> Self {
+        self.render_pass.dependencies.push((handle.resource_index, access));
+        self
+    }
+
+    #[must_use = "missing draw call"]
+    pub fn with_dependencies<I>(self, iter: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: IntoGraphDependency,
+    {
+        self.render_pass.dependencies.extend(iter.into_iter().map(|item| item.into_dependency()));
+        self
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing draw call"]
+    pub fn push_bytes_with_align(mut self, bytes: &[u8], align: usize) -> Self {
+        self.constant_data.push_bytes_with_align(bytes, align);
+        self
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing draw call"]
+    pub fn push_data<T: bytemuck::NoUninit>(mut self, val: T) -> Self {
+        self.constant_data
+            .push_bytes_with_align(bytemuck::bytes_of(&val), std::mem::align_of_val(&val).min(4));
+        self
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing draw call"]
+    pub fn push_data_ref<T: bytemuck::NoUninit>(mut self, val: &T) -> Self {
+        self.constant_data
+            .push_bytes_with_align(bytemuck::bytes_of(val), std::mem::align_of_val(val).min(4));
+        self
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing draw call"]
+    pub fn read_buffer(self, buffer: GraphBufferHandle) -> Self {
+        self.render_pass.dependencies.push((buffer.resource_index, graphics::AccessKind::AllGraphicsRead));
+        let desc_index = self.render_pass.context.get_resource_descriptor_index(buffer).unwrap();
+        self.push_data(desc_index)
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing draw call"]
+    pub fn write_buffer(self, buffer: GraphBufferHandle) -> Self {
+        self.render_pass.dependencies.push((buffer.resource_index, graphics::AccessKind::AllGraphicsWrite));
+        let desc_index = self.render_pass.context.get_resource_descriptor_index(buffer).unwrap();
+        self.push_data(desc_index)
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing draw call"]
+    pub fn read_image(self, image: impl Into<Option<GraphImageHandle>>) -> Self {
+        let index = if let Some(image) = image.into() {
+            self.render_pass.dependencies.push((image.resource_index, graphics::AccessKind::AllGraphicsRead));
+            self.render_pass.context.get_resource_descriptor_index(image).unwrap()
+        } else {
+            u32::MAX
+        };
+        
+        self.push_data(index)
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing draw call"]
+    pub fn read_image_general(self, image: impl Into<Option<GraphImageHandle>>) -> Self {
+        let index = if let Some(image) = image.into() {
+            self.render_pass.dependencies.push((image.resource_index, graphics::AccessKind::AllGraphicsReadGeneral));
+            self.render_pass.context.get_resource_descriptor_index(image).unwrap()
+        } else {
+            u32::MAX
+        };
+        
+        self.push_data(index)
+    }
+
+    #[track_caller]
+    #[inline(always)]
+    #[must_use = "missing draw call"]
+    pub fn write_image(self, image: impl Into<Option<GraphImageHandle>>) -> Self {
+        let index = if let Some(image) = image.into() {
+            self.render_pass.dependencies.push((image.resource_index, graphics::AccessKind::AllGraphicsWrite));
+            self.render_pass.context.get_resource_descriptor_index(image).unwrap()
+        } else {
+            u32::MAX
+        };
+        
+        self.push_data(index)
+    }
+
+    pub fn draw_command(self, draw_command: graphics::DrawCommand) {
+        if let Some((index_buffer, _, _)) = self.index_buffer {
+            self.render_pass.dependencies.push((index_buffer.resource_index, graphics::AccessKind::IndexBuffer));
+        }
+
+        if let Some(draw_buffer) = draw_command.draw_buffer() {
+            self.render_pass
+                .dependencies
+                .push((draw_buffer.resource_index, graphics::AccessKind::IndirectBuffer));
+        }
+
+        if let Some(count_buffer) = draw_command.count_buffer() {
+            self.render_pass
+                .dependencies
+                .push((count_buffer.resource_index, graphics::AccessKind::IndirectBuffer));
+        }
+
+        self.render_pass.context.graph.draws.push(graphics::RenderPassDraw {
+            pipeline: self.pipeline,
+            depth_test_enable: self.depth_test_enable,
+            depth_bias: self.depth_bias,
+            index_buffer: self.index_buffer,
+            constant_data: self.constant_data.constants,
+            constant_size: self.constant_data.byte_cursor,
+            draw_command,
+        });
+    }
+
+    // see draw_gen.rs
+    pub fn draw_meshlets(self, draw_buffer: graphics::GraphBufferHandle, mesh_shading: bool) {
+        let command = if mesh_shading {
+            graphics::DrawCommand::DrawMeshTasksIndirect {
+                task_buffer: draw_buffer,
+                task_buffer_offset: 0,
+                draw_count: 1,
+                stride: 0,
+            }
+        } else {
+            graphics::DrawCommand::DrawIndexedIndirectCount {
+                draw_buffer: draw_buffer,
+                draw_buffer_offset: 4,
+                count_buffer: draw_buffer,
+                count_buffer_offset: 0,
+                max_draw_count: MAX_DRAW_COUNT as u32,
+                stride: std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
+            }
+        };
+        self.draw_command(command);
+    }
+
+    pub fn draw(self, vertex_range: Range<u32>, instance_range: Range<u32>) {
+        self.draw_command(graphics::DrawCommand::Draw {
+            vertex_range,
+            instance_range,
+        });
     }
 }
 

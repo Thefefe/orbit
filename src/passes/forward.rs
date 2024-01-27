@@ -4,7 +4,10 @@ use rand::prelude::Distribution;
 
 use crate::{
     assets::{AssetGraphData, GpuAssets, GpuMeshletDrawCommand},
-    graphics::{self, AccessKind, ShaderStage},
+    graphics::{
+        self, AccessKind, ColorAttachmentDesc, DepthAttachmentDesc, DrawPass, LoadOp, RenderPass, ResolveMode,
+        ShaderStage,
+    },
     math,
     passes::draw_gen::{
         create_meshlet_dispatch_command, create_meshlet_draw_commands, meshlet_dispatch_size, AlphaModeFlags, CullInfo,
@@ -176,7 +179,7 @@ impl ForwardRenderer {
 
             cmd.begin_rendering(&rendering_info);
             cmd.bind_raster_pipeline(brdf_integration_pipeline);
-            cmd.draw(0..6, 0..1);
+            cmd.draw(0..3, 0..1);
             cmd.end_rendering();
 
             cmd.barrier(
@@ -742,157 +745,63 @@ impl ForwardRenderer {
 
         let selected_light = selected_light.map(|x| x as u32).unwrap_or(u32::MAX);
 
-        let mut pass_builder = context.add_pass("forward_pass");
+        let draw_skybox = skybox.is_some() && render_mode == RenderMode::Shaded;
 
-        pass_builder = pass_builder
-            .with_dependency(draw_commands_buffer, AccessKind::IndirectBuffer)
+        let mut render_pass = RenderPass::new(context, "forward_pass")
+            .color_attachments(&[ColorAttachmentDesc {
+                target: target_attachments.color_target,
+                resolve: target_attachments.color_resolve.map(|i| (i, ResolveMode::Average)),
+                load_op: if draw_skybox { LoadOp::DontCare } else { LoadOp::Clear([0.0, 0.0, 0.0, 1.0]) },
+                store: true,
+            }])
+            .depth_attachment(DepthAttachmentDesc {
+                target: target_attachments.depth_target,
+                resolve: target_attachments.depth_resolve.map(|i| (i, ResolveMode::Min)),
+                load_op: LoadOp::Load,
+                store: false,
+            });
+
+        if let Some(skybox) = draw_skybox.then_some(skybox).flatten() {
+            DrawPass::new(&mut render_pass, skybox_pipeline)
+                .push_data_ref(&skybox_view_projection_matrix)
+                .read_image(skybox)
+                .draw(0..36, 0..1);
+        }
+
+        let pipeline = if render_mode == RenderMode::Overdraw {
+            overdraw_pipeline
+        } else {
+            forward_pipeline
+        };
+
+        DrawPass::new(&mut render_pass, pipeline)
             .with_dependencies(
                 mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderRead)),
             )
-            .with_dependency(frame_data, AccessKind::VertexShaderRead)
             .with_dependency(cluster_info.light_offset_image, AccessKind::FragmentShaderReadGeneral)
             .with_dependency(cluster_info.light_index_list, AccessKind::FragmentShaderRead)
-            .with_dependency(cluster_info.info_buffer, AccessKind::FragmentShaderRead)
-            .with_dependency(target_attachments.depth_target, AccessKind::DepthAttachmentWrite)
-            .with_dependencies(target_attachments.depth_resolve.map(|i| (i, AccessKind::DepthAttachmentWrite)))
-            .with_dependency(target_attachments.color_target, AccessKind::ColorAttachmentWrite)
-            .with_dependencies(target_attachments.color_resolve.map(|i| (i, AccessKind::ColorAttachmentWrite)))
             .with_dependencies(shadow_renderer.rendered_shadow_maps().map(|h| (h, AccessKind::FragmentShaderRead)))
-            .with_dependencies(ssao_image.map(|i| (i, AccessKind::FragmentShaderRead)));
+            .with_index_buffer(assets.index_buffer, 0, vk::IndexType::UINT8_EXT)
+            .read_buffer(draw_commands_buffer)
+            .read_buffer(cull_info_buffer)
+            .read_buffer(frame_data)
+            .read_buffer(assets.vertex_buffer)
+            .read_buffer(assets.meshlet_buffer)
+            .read_buffer(assets.meshlet_data_buffer)
+            .read_buffer(scene.entity_buffer)
+            .read_buffer(assets.materials_buffer)
+            .read_buffer(cluster_info.info_buffer)
+            .push_data(scene.light_count as u32)
+            .read_buffer(scene.light_data_buffer)
+            .read_buffer(shadow_data_buffer)
+            .read_buffer(shadow_settings_buffer)
+            .push_data(selected_light)
+            .read_image(brdf_integration_map)
+            .read_image(jitter_texture)
+            .read_image(ssao_image)
+            .draw_meshlets(draw_commands_buffer, mesh_shading);
 
-        pass_builder.record_custom(move |cmd, graph| {
-            let color_target = graph.get_image(target_attachments.color_target);
-            let color_resolve = target_attachments.color_resolve.map(|i| graph.get_image(i));
-            let depth_target = graph.get_image(target_attachments.depth_target);
-            let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
-
-            let brdf_integration_map = graph.get_image(brdf_integration_map);
-            let jitter_texture = graph.get_image(jitter_texture);
-
-            let skybox = skybox.map(|h| graph.get_image(h));
-            let ssao_image = ssao_image.map(|h| graph.get_image(h));
-
-            let per_frame_data = graph.get_buffer(frame_data);
-            let cluster_info_buffer = graph.get_buffer(cluster_info.info_buffer);
-
-            let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-            let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
-            let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
-            let materials_buffer = graph.get_buffer(assets.materials_buffer);
-
-            let entity_buffer = graph.get_buffer(scene.entity_buffer);
-            let light_buffer = graph.get_buffer(scene.light_data_buffer);
-            let draw_commands_buffer = graph.get_buffer(draw_commands_buffer);
-            let cull_info_buffer = graph.get_buffer(cull_info_buffer);
-
-            let shadow_data_buffer = graph.get_buffer(shadow_data_buffer);
-            let shadow_settings_buffer = graph.get_buffer(shadow_settings_buffer);
-
-            let mut color_attachment = vk::RenderingAttachmentInfo::builder()
-                .image_view(color_target.view)
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(if skybox.is_none() || render_mode != RenderMode::Shaded {
-                    vk::AttachmentLoadOp::CLEAR
-                } else {
-                    vk::AttachmentLoadOp::DONT_CARE
-                    // vk::AttachmentLoadOp::CLEAR
-                })
-                .clear_value(vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        // float32: [1.0, 0.0, 1.0, 0.0],
-                        float32: [0.0, 0.0, 0.0, 1.0],
-                    },
-                })
-                .store_op(vk::AttachmentStoreOp::STORE);
-
-            if let Some(color_resolve) = color_resolve {
-                color_attachment = color_attachment
-                    .resolve_image_view(color_resolve.view)
-                    .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .resolve_mode(vk::ResolveModeFlags::AVERAGE);
-            }
-
-            let mut depth_attachment = vk::RenderingAttachmentInfo::builder()
-                .image_view(depth_target.view)
-                .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::LOAD)
-                .clear_value(vk::ClearValue {
-                    depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
-                })
-                .store_op(vk::AttachmentStoreOp::STORE);
-
-            if let Some(depth_resolve) = depth_resolve {
-                depth_attachment = depth_attachment
-                    .resolve_image_view(depth_resolve.view)
-                    .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                    .resolve_mode(vk::ResolveModeFlags::MIN);
-            }
-
-            let rendering_info = vk::RenderingInfo::builder()
-                .render_area(color_target.full_rect())
-                .layer_count(1)
-                .color_attachments(std::slice::from_ref(&color_attachment))
-                .depth_attachment(&depth_attachment);
-
-            cmd.begin_rendering(&rendering_info);
-
-            if let Some(skybox) = (render_mode == RenderMode::Shaded).then_some(skybox).flatten() {
-                cmd.bind_raster_pipeline(skybox_pipeline);
-
-                cmd.build_constants().mat4(&skybox_view_projection_matrix).sampled_image(skybox);
-
-                cmd.draw(0..36, 0..1);
-            }
-
-            cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
-
-            if render_mode == RenderMode::Overdraw {
-                cmd.bind_raster_pipeline(overdraw_pipeline);
-            } else {
-                cmd.bind_raster_pipeline(forward_pipeline);
-            }
-
-            let mut constants = cmd.build_constants()
-                .buffer(draw_commands_buffer)
-                .buffer(cull_info_buffer)
-                .buffer(per_frame_data)
-                .buffer(vertex_buffer)
-                .buffer(meshlet_buffer)
-                .buffer(meshlet_data_buffer)
-                .buffer(entity_buffer)
-                .buffer(materials_buffer)
-                .buffer(cluster_info_buffer)
-                .uint(scene.light_count as u32)
-                .buffer(light_buffer)
-                .buffer(shadow_data_buffer)
-                .buffer(shadow_settings_buffer)
-                .uint(selected_light)
-                .sampled_image(brdf_integration_map)
-                .sampled_image(jitter_texture);
-
-            if let Some(ssao_image) = ssao_image {
-                constants = constants.sampled_image(ssao_image);
-            } else {
-                constants = constants.uint(u32::MAX);
-            }
-
-            constants.push();
-
-            if mesh_shading {
-                cmd.draw_mesh_tasks_indirect(&draw_commands_buffer, 0, 1, 0);
-            } else {
-                cmd.draw_indexed_indirect_count(
-                    draw_commands_buffer,
-                    4,
-                    draw_commands_buffer,
-                    0,
-                    MAX_DRAW_COUNT as u32,
-                    std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
-                );
-            }
-
-            cmd.end_rendering();
-        });
+        render_pass.finish();
     }
 }
 

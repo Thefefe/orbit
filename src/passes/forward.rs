@@ -3,7 +3,7 @@ use glam::{vec3, Mat4, Vec3};
 use rand::prelude::Distribution;
 
 use crate::{
-    assets::{AssetGraphData, GpuAssets, GpuMeshletDrawCommand},
+    assets::{AssetGraphData, GpuAssets},
     graphics::{
         self, AccessKind, ColorAttachmentDesc, DepthAttachmentDesc, DrawPass, LoadOp, RenderPass, ResolveMode,
         ShaderStage,
@@ -315,14 +315,10 @@ impl ForwardRenderer {
             if mesh_shading {
                 let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
                 desc = desc
-                    .task_shader(
-                        ShaderStage::spv("shaders/forward/forward_depth_prepass.task.spv")
-                            .spec_u32(0, meshlet_dispatch_size(context)),
-                    )
-                    .mesh_shader(
-                        ShaderStage::spv("shaders/forward/forward_depth_prepass.mesh.spv")
-                            .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
-                    );
+                    .task_shader(ShaderStage::spv("shaders/forward/forward_depth_prepass.task.spv")
+                        .spec_u32(0, meshlet_dispatch_size(context)))
+                    .mesh_shader(ShaderStage::spv("shaders/forward/forward_depth_prepass.mesh.spv")
+                        .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations));
             } else {
                 desc = desc.vertex_shader(graphics::ShaderSource::spv(
                     "shaders/forward/forward_depth_prepass.vert.spv",
@@ -332,77 +328,29 @@ impl ForwardRenderer {
             context.create_raster_pipeline("forward_depth_prepass_pipeline", &desc)
         };
 
-        context
-            .add_pass("early_forward_depth_prepass")
-            .with_dependency(target_attachments.depth_target, AccessKind::DepthAttachmentWrite)
-            .with_dependencies(target_attachments.depth_resolve.map(|i| (i, AccessKind::DepthAttachmentWrite)))
-            .with_dependency(draw_commands_buffer, AccessKind::IndirectBuffer)
-            .with_dependencies(
-                mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderRead)),
-            )
-            .record_custom(move |cmd, graph| {
-                let depth_target = graph.get_image(target_attachments.depth_target);
-                let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
-
-                let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-                let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
-                let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
-                let entity_buffer = graph.get_buffer(scene.entity_buffer);
-                let draw_commands_buffer = graph.get_buffer(draw_commands_buffer);
-                let materials_buffer = graph.get_buffer(assets.materials_buffer);
-                let cull_info_buffer = graph.get_buffer(cull_info_buffer);
-
-                let mut depth_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(depth_target.view)
-                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::CLEAR)
-                    .clear_value(vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
-                    })
-                    .store_op(vk::AttachmentStoreOp::STORE);
-
-                if let Some(depth_resolve) = depth_resolve {
-                    depth_attachment = depth_attachment
-                        .resolve_image_view(depth_resolve.view)
-                        .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                        .resolve_mode(vk::ResolveModeFlags::MIN);
-                }
-
-                let rendering_info = vk::RenderingInfo::builder()
-                    .render_area(depth_target.full_rect())
-                    .layer_count(1)
-                    .depth_attachment(&depth_attachment);
-
-                cmd.begin_rendering(&rendering_info);
-
-                cmd.bind_raster_pipeline(depth_prepass_pipeline);
-                cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
-
-                cmd.build_constants()
-                    .mat4(&camera_view_projection_matrix)
-                    .buffer(draw_commands_buffer)
-                    .buffer(cull_info_buffer)
-                    .buffer(vertex_buffer)
-                    .buffer(meshlet_buffer)
-                    .buffer(meshlet_data_buffer)
-                    .buffer(entity_buffer)
-                    .buffer(materials_buffer);
-
-                if mesh_shading {
-                    cmd.draw_mesh_tasks_indirect(&draw_commands_buffer, 0, 1, 0);
-                } else {
-                    cmd.draw_indexed_indirect_count(
-                        draw_commands_buffer,
-                        4,
-                        draw_commands_buffer,
-                        0,
-                        MAX_DRAW_COUNT as u32,
-                        std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
-                    );
-                }
-
-                cmd.end_rendering();
+        let mut render_pass =
+            RenderPass::new(context, "early_forward_depth_prepass").depth_attachment(DepthAttachmentDesc {
+                target: target_attachments.depth_target,
+                resolve: target_attachments.depth_resolve.map(|i| (i, ResolveMode::Min)),
+                load_op: LoadOp::Clear(0.0),
+                store: true,
             });
+
+        let meshlet_visibility_buffer = mesh_shading.then_some(scene.meshlet_visibility_buffer);
+
+        DrawPass::new(&mut render_pass, depth_prepass_pipeline)
+            .with_dependencies(meshlet_visibility_buffer.map(|b| (b, AccessKind::TaskShaderRead)))
+            .push_data_ref(&camera_view_projection_matrix)
+            .read_buffer(draw_commands_buffer)
+            .read_buffer(cull_info_buffer)
+            .read_buffer(assets.vertex_buffer)
+            .read_buffer(assets.meshlet_buffer)
+            .read_buffer(assets.meshlet_data_buffer)
+            .read_buffer(scene.entity_buffer)
+            .read_buffer(assets.materials_buffer)
+            .draw_meshlets(draw_commands_buffer, mesh_shading);
+
+        render_pass.finish();
 
         if !occlusion_culling {
             return;
@@ -451,78 +399,31 @@ impl ForwardRenderer {
             );
         }
 
-        context
-            .add_pass("late_forward_depth_prepass")
-            .with_dependency(target_attachments.depth_target, AccessKind::DepthAttachmentWrite)
-            .with_dependencies(target_attachments.depth_resolve.map(|i| (i, AccessKind::DepthAttachmentWrite)))
-            .with_dependency(draw_commands_buffer, AccessKind::IndirectBuffer)
-            .with_dependencies(
-                mesh_shading.then_some(scene.meshlet_visibility_buffer).map(|b| (b, AccessKind::TaskShaderWrite)),
-            )
-            .with_dependencies(mesh_shading.then_some(depth_pyramid).map(|i| (i, AccessKind::TaskShaderReadGeneral)))
-            .record_custom(move |cmd, graph| {
-                let depth_target = graph.get_image(target_attachments.depth_target);
-                let depth_resolve = target_attachments.depth_resolve.map(|i| graph.get_image(i));
-
-                let vertex_buffer = graph.get_buffer(assets.vertex_buffer);
-                let meshlet_buffer = graph.get_buffer(assets.meshlet_buffer);
-                let meshlet_data_buffer = graph.get_buffer(assets.meshlet_data_buffer);
-                let entity_buffer = graph.get_buffer(scene.entity_buffer);
-                let draw_commands_buffer = graph.get_buffer(draw_commands_buffer);
-                let materials_buffer = graph.get_buffer(assets.materials_buffer);
-                let cull_info_buffer = graph.get_buffer(cull_info_buffer);
-
-                let mut depth_attachment = vk::RenderingAttachmentInfo::builder()
-                    .image_view(depth_target.view)
-                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                    .load_op(vk::AttachmentLoadOp::LOAD)
-                    .clear_value(vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 },
-                    })
-                    .store_op(vk::AttachmentStoreOp::STORE);
-
-                if let Some(depth_resolve) = depth_resolve {
-                    depth_attachment = depth_attachment
-                        .resolve_image_view(depth_resolve.view)
-                        .resolve_image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-                        .resolve_mode(vk::ResolveModeFlags::MIN);
-                }
-
-                let rendering_info = vk::RenderingInfo::builder()
-                    .render_area(depth_target.full_rect())
-                    .layer_count(1)
-                    .depth_attachment(&depth_attachment);
-
-                cmd.begin_rendering(&rendering_info);
-
-                cmd.bind_raster_pipeline(depth_prepass_pipeline);
-                cmd.bind_index_buffer(&meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT);
-
-                cmd.build_constants()
-                    .mat4(&camera_view_projection_matrix)
-                    .buffer(draw_commands_buffer)
-                    .buffer(cull_info_buffer)
-                    .buffer(vertex_buffer)
-                    .buffer(meshlet_buffer)
-                    .buffer(meshlet_data_buffer)
-                    .buffer(entity_buffer)
-                    .buffer(materials_buffer);
-
-                if mesh_shading {
-                    cmd.draw_mesh_tasks_indirect(&draw_commands_buffer, 0, 1, 0);
-                } else {
-                    cmd.draw_indexed_indirect_count(
-                        draw_commands_buffer,
-                        4,
-                        draw_commands_buffer,
-                        0,
-                        MAX_DRAW_COUNT as u32,
-                        std::mem::size_of::<GpuMeshletDrawCommand>() as u32,
-                    );
-                }
-
-                cmd.end_rendering();
+        let mut render_pass =
+            RenderPass::new(context, "early_forward_depth_prepass").depth_attachment(DepthAttachmentDesc {
+                target: target_attachments.depth_target,
+                resolve: target_attachments.depth_resolve.map(|i| (i, ResolveMode::Min)),
+                load_op: LoadOp::Load,
+                store: true,
             });
+
+        let meshlet_visibility_buffer = mesh_shading.then_some(scene.meshlet_visibility_buffer);
+        let depth_pyramid = mesh_shading.then_some(depth_pyramid);
+
+        DrawPass::new(&mut render_pass, depth_prepass_pipeline)
+            .with_dependencies(meshlet_visibility_buffer.map(|b| (b, AccessKind::TaskShaderWrite)))
+            .with_dependencies(depth_pyramid.map(|i| (i, AccessKind::TaskShaderReadGeneral)))
+            .push_data_ref(&camera_view_projection_matrix)
+            .read_buffer(draw_commands_buffer)
+            .read_buffer(cull_info_buffer)
+            .read_buffer(assets.vertex_buffer)
+            .read_buffer(assets.meshlet_buffer)
+            .read_buffer(assets.meshlet_data_buffer)
+            .read_buffer(scene.entity_buffer)
+            .read_buffer(assets.materials_buffer)
+            .draw_meshlets(draw_commands_buffer, mesh_shading);
+
+        render_pass.finish();
     }
 
     pub fn render(
@@ -751,7 +652,11 @@ impl ForwardRenderer {
             .color_attachments(&[ColorAttachmentDesc {
                 target: target_attachments.color_target,
                 resolve: target_attachments.color_resolve.map(|i| (i, ResolveMode::Average)),
-                load_op: if draw_skybox { LoadOp::DontCare } else { LoadOp::Clear([0.0, 0.0, 0.0, 1.0]) },
+                load_op: if draw_skybox {
+                    LoadOp::DontCare
+                } else {
+                    LoadOp::Clear([0.0, 0.0, 0.0, 1.0])
+                },
                 store: true,
             }])
             .depth_attachment(DepthAttachmentDesc {

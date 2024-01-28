@@ -5,8 +5,6 @@
 
 #include "cluster_common.glsl"
 
-RegisterUintImageFormat(rg32ui);
-
 RegisterBuffer(ClusterLightCullInfoBuffer, { 
     mat4 world_to_view_matrix;
 	mat4 screen_to_view_matrix;    
@@ -149,5 +147,5 @@ void main() {
     }
 
     uvec3 cluster_id = cluster_id_from_volume_index(input_buffer.cluster_count, cluster_index);
-    imageStore(GetImage3D(rg32ui, input_buffer.cluster_offset_image), ivec3(cluster_id), uvec4(light_offset, light_count, 0, 0));
+    imageStore(GetImage(uimage3D, rg32ui, input_buffer.cluster_offset_image), ivec3(cluster_id), uvec4(light_offset, light_count, 0, 0));
 }

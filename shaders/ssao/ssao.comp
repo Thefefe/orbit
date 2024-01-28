@@ -1,0 +1,159 @@
+#version 460
+
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+#include "../include/functions.glsl"
+
+RegisterBuffer(SSAOInfoBuffer, {
+    mat4 projection_matrix;
+    mat4 inverse_projection_matrix;
+    uvec2 resolution;
+    uint depth_texture;
+    uint ssao_image;
+    uint noise_texture;
+    uint noise_size;
+    uint samples_texture;
+    uint samples_size;
+    
+    uint sample_count;
+    float min_radius;
+    float max_radius;
+});
+
+layout(push_constant, std430) uniform PushConstants {
+    uint info_buffer;
+};
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+
+const uint BLOCKSIZE = 8; // 8x8 pixel tile
+const uint TILE_BORDER = 1;
+const uint TILE_SIZE = BLOCKSIZE + TILE_BORDER * 2;
+shared vec2 tile_xy[TILE_SIZE*TILE_SIZE]; // view space position XY
+shared float tile_z[TILE_SIZE*TILE_SIZE]; // view space position Z
+
+vec3 hemispherepoint_uniform(float u, float v) {
+	float phi = v * 2 * PI;
+	float cosTheta = 1 - u;
+	float sinTheta = sqrt(1 - cosTheta * cosTheta);
+	return vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+}
+
+uvec2 unflatten2D(uint idx, uvec2 dim) {
+    return uvec2(idx % dim.x, idx / dim.x);
+}
+
+uint flatten2D(uvec2 coord, uvec2 dim) {
+    return coord.x + coord.y * dim.x;
+}
+
+vec3 reconstruct_position(vec2 uv, float z) {
+    float x = uv.x * 2.0f - 1.0f;
+    float y = (1.0 - uv.y) * 2.0f - 1.0f;
+    vec4 position = GetBuffer(SSAOInfoBuffer, info_buffer).inverse_projection_matrix * vec4(x, y, z, 1.0f);
+    return position.xyz / position.w;
+}
+
+void main() {
+    vec2 resolution_rcp = 1.0 / vec2(GetBuffer(SSAOInfoBuffer, info_buffer).resolution);
+
+    // https://wickedengine.net/2019/09/22/improved-normal-reconstruction-from-depth/
+    const ivec2 tile_upperleft = ivec2(gl_WorkGroupID.xy * BLOCKSIZE - TILE_BORDER);
+    for (uint t = gl_LocalInvocationIndex; t < TILE_SIZE * TILE_SIZE; t += BLOCKSIZE * BLOCKSIZE)
+    {
+        const uvec2 pixel = tile_upperleft + unflatten2D(t, uvec2(TILE_SIZE));
+        const vec2 uv = (pixel + 0.5f) * resolution_rcp;
+        const float depth = texture(GetSampledTexture2D(GetBuffer(SSAOInfoBuffer, info_buffer).depth_texture), uv).x;
+        const vec3 position = reconstruct_position(uv, depth);
+        tile_xy[t] = position.xy;
+        tile_z[t] = position.z;
+    }
+
+    memoryBarrierShared();
+    groupMemoryBarrier();
+    memoryBarrierShared();
+    barrier();
+
+    const uint cross_idx[5] = {
+        flatten2D(TILE_BORDER + gl_LocalInvocationID.xy, uvec2(TILE_SIZE)),			        // 0: center
+        flatten2D(TILE_BORDER + gl_LocalInvocationID.xy + ivec2(1, 0), uvec2(TILE_SIZE)),	// 1: right
+        flatten2D(TILE_BORDER + gl_LocalInvocationID.xy + ivec2(-1, 0), uvec2(TILE_SIZE)),	// 2: left
+        flatten2D(TILE_BORDER + gl_LocalInvocationID.xy + ivec2(0, 1), uvec2(TILE_SIZE)),	// 3: down
+        flatten2D(TILE_BORDER + gl_LocalInvocationID.xy + ivec2(0, -1), uvec2(TILE_SIZE)),	// 4: up
+    };
+
+    const float center_z = tile_z[cross_idx[0]];
+
+    const uint best_z_horizontal = abs(tile_z[cross_idx[1]] - center_z) < abs(tile_z[cross_idx[2]] - center_z) ? 1 : 2;
+    const uint best_z_vertical = abs(tile_z[cross_idx[3]] - center_z) < abs(tile_z[cross_idx[4]] - center_z) ? 3 : 4;
+    vec3 p1 = vec3(0.0);
+    vec3 p2 = vec3(0.0);
+
+    if (best_z_horizontal == 1 && best_z_vertical == 4)
+    {
+        p1 = vec3(tile_xy[cross_idx[1]], tile_z[cross_idx[1]]);
+        p2 = vec3(tile_xy[cross_idx[4]], tile_z[cross_idx[4]]);
+    }
+    else if (best_z_horizontal == 1 && best_z_vertical == 3)
+    {
+        p1 = vec3(tile_xy[cross_idx[3]], tile_z[cross_idx[3]]);
+        p2 = vec3(tile_xy[cross_idx[1]], tile_z[cross_idx[1]]);
+    }
+    else if (best_z_horizontal == 2 && best_z_vertical == 4)
+    {
+        p1 = vec3(tile_xy[cross_idx[4]], tile_z[cross_idx[4]]);
+        p2 = vec3(tile_xy[cross_idx[2]], tile_z[cross_idx[2]]);
+    }
+    else if (best_z_horizontal == 2 && best_z_vertical == 3)
+    {
+        p1 = vec3(tile_xy[cross_idx[2]], tile_z[cross_idx[2]]);
+        p2 = vec3(tile_xy[cross_idx[3]], tile_z[cross_idx[3]]);
+    }
+
+    const vec3 p0 = vec3(tile_xy[cross_idx[0]], tile_z[cross_idx[0]]);
+    vec3 normal = normalize(cross(p2 - p0, p1 - p0));
+
+    // imageStore(GetImage2D(rgba8_snorm, GetBuffer(SSAOInfoBuffer, info_buffer).ssao_image), ivec2(pixel_id), vec4(vec3(normal), 1.0));
+    // return;
+
+    vec2 noise_uv = vec2(gl_GlobalInvocationID.xy) / vec2(GetBuffer(SSAOInfoBuffer, info_buffer).noise_size);
+    vec2 noise = texture(GetSampledTexture2D(GetBuffer(SSAOInfoBuffer, info_buffer).noise_texture), noise_uv).xy;
+    vec3 random_vec = normalize(vec3(noise, 0.0));
+
+    vec3 tangent = normalize(random_vec - normal * dot(random_vec, normal));
+    vec3 bitangent = cross(normal, tangent);
+
+    mat3 tbn = mat3(tangent, bitangent, normal);
+
+    float radius_min = GetBuffer(SSAOInfoBuffer, info_buffer).min_radius;
+    float radius_max = GetBuffer(SSAOInfoBuffer, info_buffer).max_radius;
+    uint sample_count = GetBuffer(SSAOInfoBuffer, info_buffer).sample_count;
+    
+    float occlusion = 0.0;
+    for(uint i = 0; i < sample_count; ++i) {
+        float fi = i / float(sample_count);
+        vec2 hamm = hammersley_2d(i, sample_count);
+        vec3 sample_coord = texture(GetSampledTexture1D(GetBuffer(SSAOInfoBuffer, info_buffer).samples_texture), fi).xyz;
+        // vec3 hemisphere = hemispherepoint_uniform(sample_coord.x, sample_coord.y);
+        vec3 hemisphere = hemispherepoint_uniform(hamm.x, hamm.y);
+        vec3 cone = tbn * hemisphere;
+        vec3 sample_point = p0 - cone * mix(radius_min, radius_max, sample_coord.z * sample_coord.z);
+        vec4 proj_coord = GetBuffer(SSAOInfoBuffer, info_buffer).projection_matrix * vec4(sample_point, 1.0);
+        proj_coord.xyz /= proj_coord.w;
+        proj_coord.xy = proj_coord.xy * vec2(0.5, -0.5) + 0.5;
+
+        if (proj_coord.xyz == clamp(proj_coord.xyz, 0.0, 1.0)) {
+            float sample_depth = texture(GetSampledTexture2D(GetBuffer(SSAOInfoBuffer, info_buffer).depth_texture), proj_coord.xy).x;
+            
+            float sample_depth_lin = 0.01 / sample_depth;
+            float proj_depth_lin = 0.01 / proj_coord.z;
+
+            float range_check = smoothstep(0.0, 1.0, radius_min / abs(sample_depth_lin - proj_coord.w));
+            occlusion += (sample_depth >= proj_coord.z ? 1.0 : 0.0) * range_check;
+        }
+    }
+
+    occlusion = 1.0 - (occlusion / sample_count);
+    imageStore(GetImage(image2D, r8, GetBuffer(SSAOInfoBuffer, info_buffer).ssao_image), ivec2(gl_GlobalInvocationID.xy), vec4(occlusion));
+}

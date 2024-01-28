@@ -1,0 +1,15 @@
+#version 460
+
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+#include "../include/functions.glsl"
+
+layout(push_constant, std430) uniform PushConstants {
+    uint info_buffer;
+};
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+
+}

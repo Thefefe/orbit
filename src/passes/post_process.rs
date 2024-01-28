@@ -19,7 +19,7 @@ pub fn render_post_process(
     let pipeline = context.create_raster_pipeline(
         "blit_pipeline",
         &graphics::RasterPipelineDesc::builder()
-            .vertex_shader(graphics::ShaderSource::spv("shaders/blit.vert.spv"))
+            .vertex_shader(graphics::ShaderSource::spv("shaders/utils/blit.vert.spv"))
             .fragment_shader(graphics::ShaderSource::spv("shaders/post_process.frag.spv"))
             .rasterizer(graphics::RasterizerDesc {
                 cull_mode: vk::CullModeFlags::NONE,

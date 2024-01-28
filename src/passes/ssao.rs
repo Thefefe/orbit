@@ -146,10 +146,10 @@ impl SsaoRenderer {
         let ssao_info_buffer = context.transient_storage_data("ssao_info_buffer", bytemuck::bytes_of(&ssao_info));
 
         let ssao_pipeline =
-            context.create_compute_pipeline("ssao_pipeline", graphics::ShaderStage::spv("shaders/ssao.comp.spv"));
+            context.create_compute_pipeline("ssao_pipeline", graphics::ShaderStage::spv("shaders/ssao/ssao.comp.spv"));
 
         let blur_pipeline =
-            context.create_compute_pipeline("ssao_pipeline", graphics::ShaderStage::spv("shaders/ssao_blur.comp.spv"));
+            context.create_compute_pipeline("ssao_pipeline", graphics::ShaderStage::spv("shaders/ssao/ssao_blur.comp.spv"));
         
         ComputePass::new(context, "ssao_pass", ssao_pipeline)
             .with_dependency(depth_buffer, AccessKind::ComputeShaderRead)

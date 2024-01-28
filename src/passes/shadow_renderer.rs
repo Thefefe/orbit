@@ -365,19 +365,19 @@ impl ShadowRenderer {
             }));
 
         if fragment_shader {
-            pipeline_desc = pipeline_desc.fragment_shader(graphics::ShaderSource::spv("shaders/shadow.frag.spv"));
+            pipeline_desc = pipeline_desc.fragment_shader(graphics::ShaderSource::spv("shaders/shadow/shadow.frag.spv"));
         }
 
         if mesh_shading {
             let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
             pipeline_desc = pipeline_desc
-                .task_shader(ShaderStage::spv("shaders/shadow.task.spv").spec_u32(0, meshlet_dispatch_size(context)))
+                .task_shader(ShaderStage::spv("shaders/shadow/shadow.task.spv").spec_u32(0, meshlet_dispatch_size(context)))
                 .mesh_shader(
-                    ShaderStage::spv("shaders/shadow.mesh.spv")
+                    ShaderStage::spv("shaders/shadow/shadow.mesh.spv")
                         .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
                 );
         } else {
-            pipeline_desc = pipeline_desc.vertex_shader(graphics::ShaderSource::spv("shaders/shadow.vert.spv"));
+            pipeline_desc = pipeline_desc.vertex_shader(graphics::ShaderSource::spv("shaders/shadow/shadow.vert.spv"));
         }
 
         let pipeline = context.create_raster_pipeline("shadow_pipeline", &pipeline_desc);

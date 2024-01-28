@@ -20,23 +20,64 @@ layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture3D _u_texture3
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform texture2DMS _u_texture2dms_registry[];
 layout(set = 1, binding = IMMUTABLE_SAMPLER_COUNT) uniform textureCube _u_texture_cube_registry[];
 
-#define RegisterFloatImageFormat(Format) \
-    layout(set = 2, binding = 0, Format) uniform image2D _u_image2d_##Format##_registry[]; \
-    layout(set = 2, binding = 0, Format) uniform image3D _u_image3d_##Format##_registry[]
+#define RegisterImageFormat(Type, Format) \
+    layout(set = 2, binding = 0, Format) uniform Type##2D _u_##Type##2D##_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform Type##3D _u_##Type##3D##_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform Type##Cube _u_##Type##Cube##_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform Type##2DArray _u_##Type##2DArray##_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform Type##CubeArray _u_##Type##CubeArray##_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform Type##1D _u_##Type##1D##_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform Type##1DArray _u_##Type##1DArray##_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform Type##2DMS _u_##Type##2DMS##_##Format##_registry[]; \
+    layout(set = 2, binding = 0, Format) uniform Type##2DMSArray _u_##Type##2DMSArray##_##Format##_registry[]
 
-#define RegisterIntImageFormat(Format) \
-    layout(set = 2, binding = 0, Format) uniform iimage2D _u_image2d_##Format##_registry[]; \
-    layout(set = 2, binding = 0, Format) uniform iimage3D _u_image3d_##Format##_registry[]
+// float
+RegisterImageFormat(image, rgba32f);
+RegisterImageFormat(image, rgba16f);
+RegisterImageFormat(image, rg32f);
+RegisterImageFormat(image, rg16f);
+RegisterImageFormat(image, r11f_g11f_b10f);
+RegisterImageFormat(image, r32f);
+RegisterImageFormat(image, r16f);
+RegisterImageFormat(image, rgba16);
+RegisterImageFormat(image, rgb10_a2);
+RegisterImageFormat(image, rgba8);
+RegisterImageFormat(image, rg16);
+RegisterImageFormat(image, rg8);
+RegisterImageFormat(image, r16);
+RegisterImageFormat(image, r8);
+RegisterImageFormat(image, rgba16_snorm);
+RegisterImageFormat(image, rgba8_snorm);
+RegisterImageFormat(image, rg16_snorm);
+RegisterImageFormat(image, rg8_snorm);
+RegisterImageFormat(image, r16_snorm);
+RegisterImageFormat(image, r8_snorm);
 
-#define RegisterUintImageFormat(Format) \
-    layout(set = 2, binding = 0, Format) uniform uimage2D _u_image2d_##Format##_registry[]; \
-    layout(set = 2, binding = 0, Format) uniform uimage3D _u_image3d_##Format##_registry[]
+// signed int
+RegisterImageFormat(iimage, rgba32i);
+RegisterImageFormat(iimage, rgba16i);
+RegisterImageFormat(iimage, rgba8i);
+RegisterImageFormat(iimage, rg32i);
+RegisterImageFormat(iimage, rg16i);
+RegisterImageFormat(iimage, rg8i);
+RegisterImageFormat(iimage, r32i);
+RegisterImageFormat(iimage, r16i);
+RegisterImageFormat(iimage, r8i);
 
-#define GetImage2D(Format, Index) \
-    _u_image2d_##Format##_registry[nonuniformEXT(Index)]
+//unsigned image format
+RegisterImageFormat(uimage, rgba32ui);
+RegisterImageFormat(uimage, rgba16ui);
+RegisterImageFormat(uimage, rgb10_a2ui);
+RegisterImageFormat(uimage, rgba8ui);
+RegisterImageFormat(uimage, rg32ui);
+RegisterImageFormat(uimage, rg16ui);
+RegisterImageFormat(uimage, rg8ui);
+RegisterImageFormat(uimage, r32ui);
+RegisterImageFormat(uimage, r16ui);
+RegisterImageFormat(uimage, r8ui);
 
-#define GetImage3D(Format, Index) \
-    _u_image3d_##Format##_registry[nonuniformEXT(Index)]
+#define GetImage(TypeWithDim, Format, Index) \
+    _u_##TypeWithDim##_##Format##_registry[nonuniformEXT(Index)]
 
 #define GetBufferRegistryName(Name) _u_##Name##Registry
 

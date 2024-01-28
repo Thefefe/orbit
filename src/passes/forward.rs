@@ -112,8 +112,8 @@ impl ForwardRenderer {
         let brdf_integration_pipeline = context.create_raster_pipeline(
             "brdf_integration_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/blit.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/brdf_integration.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/utils/blit.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/utils/brdf_integration.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     cull_mode: vk::CullModeFlags::NONE,
                     ..Default::default()

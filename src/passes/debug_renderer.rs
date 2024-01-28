@@ -469,8 +469,8 @@ impl DebugRenderer {
         let line_pipeline = context.create_raster_pipeline(
             "debug_line_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/debug_line.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/debug_color.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/debug/debug_line.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/debug/debug_color.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::LINE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -498,8 +498,8 @@ impl DebugRenderer {
         let mesh_wireframe_pipeline = context.create_raster_pipeline(
             "debug_mesh_wireframe_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/debug_mesh.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/debug_color.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/debug/debug_mesh.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/debug/debug_color.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::LINE,

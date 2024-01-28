@@ -132,8 +132,8 @@ impl EnvironmentMap {
         let equirectangular_to_cube_pipeline = context.create_raster_pipeline(
             "equirectangular_to_cube_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/equirectangular_cube_map.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/utils/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/env_map/equirectangular_cube_map.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -150,8 +150,8 @@ impl EnvironmentMap {
         let cube_map_convolution_pipeline = context.create_raster_pipeline(
             "cubemap_convolution_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/cubemap_convolution.frag.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/utils/unit_cube.vert.spv"))
+                .fragment_shader(graphics::ShaderSource::spv("shaders/env_map/cubemap_convolution.frag.spv"))
                 .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -168,9 +168,9 @@ impl EnvironmentMap {
         let cube_map_prefilter_pipeline = context.create_raster_pipeline(
             "cubemap_prefilter_pipeline",
             &graphics::RasterPipelineDesc::builder()
-                .vertex_shader(graphics::ShaderSource::spv("shaders/unit_cube.vert.spv"))
+                .vertex_shader(graphics::ShaderSource::spv("shaders/utils/unit_cube.vert.spv"))
                 .fragment_shader(graphics::ShaderSource::spv(
-                    "shaders/environmental_map_prefilter.frag.spv",
+                    "shaders/env_map/environmental_map_prefilter.frag.spv",
                 ))
                 .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,

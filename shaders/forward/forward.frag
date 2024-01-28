@@ -7,8 +7,6 @@
 
 #include "forward_common.glsl"
 
-RegisterUintImageFormat(rg32ui);
-
 layout(location = 0) in VERTEX_OUTPUT vout;
 
 layout(location = 0) out vec4 out_color;
@@ -360,7 +358,7 @@ void main() {
 
     uvec3 cluster_id = uvec3(tile_id, depth_slice);
     uint image_index = GetBuffer(ClusterBuffer, cluster_buffer).light_offset_image;
-    uvec2 cluster_slice = imageLoad(GetImage3D(rg32ui, image_index), ivec3(cluster_id)).xy;
+    uvec2 cluster_slice = imageLoad(GetImage(uimage3D, rg32ui, image_index), ivec3(cluster_id)).xy;
     uint light_offset = cluster_slice.x;
     uint light_count = clamp(cluster_slice.y, 0, 256);
 

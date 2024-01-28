@@ -81,12 +81,12 @@ pub fn compute_bloom(
 
     let downsample_pipeline = context.create_compute_pipeline(
         "bloom_downsample_pipeline",
-        ShaderStage::spv("shaders/bloom_downsample.comp.spv"),
+        ShaderStage::spv("shaders/bloom/bloom_downsample.comp.spv"),
     );
 
     let upsample_pipeline = context.create_compute_pipeline(
         "bloom_upsample_pipeline",
-        ShaderStage::spv("shaders/bloom_upsample.comp.spv"),
+        ShaderStage::spv("shaders/bloom/bloom_upsample.comp.spv"),
     );
 
     let filter_radius = settings.filter_radius;

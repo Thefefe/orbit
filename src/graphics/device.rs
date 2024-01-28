@@ -597,6 +597,8 @@ impl Device {
             .shader_int64(true)
             .shader_int16(true)
             .fragment_stores_and_atomics(true)
+            .image_cube_array(true)
+            .shader_storage_image_multisample(true)
             .build();
 
         let mut vulkan11_features = vk::PhysicalDeviceVulkan11Features::builder()

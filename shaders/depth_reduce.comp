@@ -3,8 +3,6 @@
 #include "include/common.glsl"
 #include "include/types.glsl"
 
-RegisterFloatImageFormat(r32f);
-
 layout(push_constant, std430) uniform PushConstants {
     uvec2 dimensions;
     uint src_image;
@@ -18,5 +16,5 @@ void main() {
 
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     float depth = texture(sampler2D(GetTexture2D(src_image), GetSampler(REDUCE_MIN_SAMPLER)), (vec2(pos) + vec2(0.5)) / vec2(dimensions)).r;
-    imageStore(GetImage2D(r32f, dst_image), pos, vec4(depth));
+    imageStore(GetImage(image2D, r32f, dst_image), pos, vec4(depth));
 }

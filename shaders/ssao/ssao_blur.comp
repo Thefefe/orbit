@@ -1,0 +1,35 @@
+#version 460
+
+#include "../include/common.glsl"
+#include "../include/types.glsl"
+#include "../include/functions.glsl"
+
+layout(push_constant, std430) uniform PushConstants {
+    uvec2 image_size;
+    uint input_image;
+    uint output_image;
+};
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+    if (gl_GlobalInvocationID.x >= image_size.x || gl_GlobalInvocationID.y >= image_size.y) return;
+
+    vec2 pixel = vec2(gl_GlobalInvocationID.xy);
+    vec2 size = vec2(image_size);
+    
+    vec4 samples_0 = textureGather(GetSampledTexture2D(input_image), (pixel + vec2(0.5) - vec2(0, 0)) / size, 0);
+    vec4 samples_1 = textureGather(GetSampledTexture2D(input_image), (pixel + vec2(0.5) - vec2(2, 0)) / size, 0);
+    vec4 samples_2 = textureGather(GetSampledTexture2D(input_image), (pixel + vec2(0.5) - vec2(0, 2)) / size, 0);
+    vec4 samples_3 = textureGather(GetSampledTexture2D(input_image), (pixel + vec2(0.5) - vec2(2, 2)) / size, 0);
+    
+    float sum = dot(vec4(
+        dot(samples_0, vec4(1.0)),
+        dot(samples_1, vec4(1.0)),
+        dot(samples_2, vec4(1.0)),
+        dot(samples_3, vec4(1.0))
+    ), vec4(1.0));
+    sum *= 0.0625;
+
+    imageStore(GetImage(image2D, r8, output_image), ivec2(gl_GlobalInvocationID.xy), vec4(sum));
+}

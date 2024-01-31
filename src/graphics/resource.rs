@@ -225,37 +225,52 @@ impl<'a> From<&'a graphics::Image> for AnyResource {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum AnyResourceRef<'a> {
     Buffer(&'a graphics::BufferRaw),
     Image(&'a graphics::ImageRaw),
 }
 
-impl AnyResourceRef<'_> {
-    pub fn kind(&self) -> ResourceKind {
+impl<'a> AnyResourceRef<'a> {
+    pub fn kind(self) -> ResourceKind {
         match self {
             AnyResourceRef::Buffer(_) => ResourceKind::Buffer,
             AnyResourceRef::Image(_) => ResourceKind::Image,
         }
     }
 
-    pub fn handle(&self) -> AnyResourceHandle {
+    pub fn handle(self) -> AnyResourceHandle {
         match self {
             AnyResourceRef::Buffer(buffer) => AnyResourceHandle::Buffer(buffer.handle),
             AnyResourceRef::Image(image) => AnyResourceHandle::Image(image.handle),
         }
     }
 
-    pub fn descriptor_index(&self) -> Option<u32> {
+    pub fn descriptor_index(self) -> Option<u32> {
         match self {
             AnyResourceRef::Buffer(buffer) => buffer.descriptor_index,
             AnyResourceRef::Image(image) => (!image._descriptor_flags.is_empty()).then_some(image._descriptor_index),
         }
     }
 
-    pub fn name(&self) -> &Cow<'static, str> {
+    pub fn name(self) -> &'a Cow<'static, str> {
         match self {
             AnyResourceRef::Buffer(buffer) => &buffer.name,
             AnyResourceRef::Image(image) => &image.name,
+        }
+    }
+
+    pub fn as_buffer(self) -> Option<&'a graphics::BufferRaw> {
+        match self {
+            AnyResourceRef::Buffer(buffer) => Some(buffer),
+            AnyResourceRef::Image(_) => None,
+        }
+    }
+
+    pub fn as_image(self) -> Option<&'a graphics::ImageRaw> {
+        match self {
+            AnyResourceRef::Buffer(_) => None,
+            AnyResourceRef::Image(image) => Some(image),
         }
     }
 }

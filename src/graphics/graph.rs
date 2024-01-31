@@ -7,7 +7,10 @@ use std::{
 use ash::vk;
 use parking_lot::Mutex;
 
-use crate::{collections::arena, graphics};
+use crate::{
+    collections::arena,
+    graphics::{self, ResourceKind},
+};
 
 pub type GraphResourceIndex = usize;
 pub type GraphPassIndex = arena::Index;
@@ -35,7 +38,7 @@ impl ResourceSource {
 
 #[derive(Debug)]
 pub struct GraphResourceVersion {
-    pub last_access: graphics::AccessKind,
+    pub image_layout: vk::ImageLayout,
     pub source_pass: Option<GraphPassIndex>,
     pub read_by: Vec<GraphPassIndex>,
 }
@@ -58,7 +61,7 @@ pub struct GraphResourceData {
 }
 
 impl GraphResourceData {
-    fn kind(&self) -> graphics::ResourceKind {
+    fn kind(&self) -> ResourceKind {
         match &self.source {
             ResourceSource::Create { desc, .. } => desc.kind(),
             ResourceSource::Import { resource, .. } => resource.kind(),
@@ -70,13 +73,14 @@ impl GraphResourceData {
     }
 
     fn curent_layout(&self) -> vk::ImageLayout {
-        self.versions.last().unwrap().last_access.image_layout()
+        // self.versions.last().unwrap().last_access.image_layout()
+        self.versions.last().unwrap().image_layout
     }
 
-    fn last_access(&self, version: usize) -> graphics::AccessKind {
-        assert!(version < self.versions.len());
-        self.versions[version].last_access
-    }
+    // fn last_access(&self, version: usize) -> graphics::AccessKind {
+    //     assert!(version < self.versions.len());
+    //     self.versions[version].last_access
+    // }
 
     fn source_pass(&self, version: usize) -> Option<GraphPassIndex> {
         self.versions[version].source_pass
@@ -515,7 +519,7 @@ impl RenderGraph {
         }
 
         resource_data.versions = vec![GraphResourceVersion {
-            last_access: resource_data.initial_access,
+            image_layout: resource_data.initial_access.image_layout(),
             source_pass: None,
             read_by: vec![],
         }];
@@ -550,19 +554,17 @@ impl RenderGraph {
             if let Some(other_acc) = prev_deps.get(&res) {
                 let res_name = self.resources[res].name.as_ref();
 
-                assert_eq!(
-                    acc.read_write_kind(),
-                    graphics::ReadWriteKind::Read,
+                assert!(
+                    acc.read_only(),
                     "read and write or multiple writes in pass '{name}' for resource {res_name}"
                 );
 
-                assert_eq!(
-                    other_acc.read_write_kind(),
-                    graphics::ReadWriteKind::Read,
+                assert!(
+                    other_acc.read_only(),
                     "read and write or multiple writes in pass '{name}' for resource {res_name}"
                 );
 
-                if self.resources[res].kind() == graphics::ResourceKind::Image {
+                if self.resources[res].kind() == ResourceKind::Image {
                     let layout = acc.image_layout();
                     let other_layout = other_acc.image_layout();
                     assert_eq!(
@@ -597,19 +599,24 @@ impl RenderGraph {
             resource_version,
         });
 
-        // self.passes[pass_handle].dependency_range.push(dependency);
-
         let resource = &self.resources[resource_handle];
         let needs_layout_transition =
-            resource.kind() == graphics::ResourceKind::Image && resource.curent_layout() != access.image_layout();
+            resource.kind() == ResourceKind::Image && resource.curent_layout() != access.image_layout();
 
-        if access.read_write_kind() == graphics::ReadWriteKind::Write || needs_layout_transition {
+        if access.writes() {
             self.resources[resource_handle].versions.push(GraphResourceVersion {
-                last_access: access,
+                image_layout: access.image_layout(),
                 source_pass: Some(pass_handle),
                 read_by: Vec::new(),
             });
-        } else if access.read_write_kind() == graphics::ReadWriteKind::Read {
+        } else if needs_layout_transition {
+            let source_pass = self.resources[resource_handle].versions.last().map(|v| v.source_pass).flatten();
+            self.resources[resource_handle].versions.push(GraphResourceVersion {
+                image_layout: access.image_layout(),
+                source_pass,
+                read_by: vec![pass_handle],
+            });
+        } else if access.read_only() {
             self.resources[resource_handle].versions.last_mut().unwrap().read_by.push(pass_handle);
         }
 
@@ -725,17 +732,21 @@ impl TransientResourceCache {
 pub struct BatchData {
     pub wait_semaphore_range: Range<usize>,
     pub begin_dependency_range: Range<usize>,
+    pub begin_image_barrier_range: Range<usize>,
 
+    pub memory_barrier: vk::MemoryBarrier2,
     pub pass_range: Range<usize>,
 
     pub finish_dependency_range: Range<usize>,
+    pub finish_image_barrier_range: Range<usize>,
     pub signal_semaphore_range: Range<usize>,
 }
+
+unsafe impl Sync for BatchData {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct BatchDependency {
     pub resource_index: usize,
-    pub src_access: graphics::AccessKind,
     pub dst_access: graphics::AccessKind,
 }
 
@@ -759,6 +770,13 @@ impl std::fmt::Debug for CompiledPassData {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GraphImageBarrier {
+    pub image_index: usize,
+    pub src_access: graphics::AccessFlags,
+    pub dst_access: graphics::AccessFlags,
+}
+
 #[derive(Debug)]
 pub struct CompiledGraphResource {
     pub resource: graphics::AnyResource,
@@ -771,6 +789,7 @@ pub struct CompiledRenderGraph {
     pub passes: Vec<CompiledPassData>,
     pub draws: Vec<RenderPassDraw>,
     pub dependencies: Vec<BatchDependency>,
+    pub image_barriers: Vec<GraphImageBarrier>,
     pub semaphores: Vec<(graphics::Semaphore, vk::PipelineStageFlags2)>,
     pub batches: Vec<BatchData>,
 }
@@ -778,30 +797,34 @@ pub struct CompiledRenderGraph {
 pub struct BatchRef<'a> {
     pub wait_semaphores: &'a [(graphics::Semaphore, vk::PipelineStageFlags2)],
     pub begin_dependencies: &'a [BatchDependency],
+    pub begin_image_barriers: &'a [GraphImageBarrier],
 
+    pub memory_barrier: vk::MemoryBarrier2,
     pub passes: &'a [CompiledPassData],
 
     pub finish_dependencies: &'a [BatchDependency],
+    pub finish_image_barriers: &'a [GraphImageBarrier],
     pub signal_semaphores: &'a [(graphics::Semaphore, vk::PipelineStageFlags2)],
 }
 
+unsafe impl Sync for BatchRef<'_> {}
+
 impl CompiledRenderGraph {
     pub fn iter_batches(&self) -> impl Iterator<Item = BatchRef> {
-        self.batches.iter().map(|batch_data| BatchRef {
-            wait_semaphores: &self.semaphores[batch_data.wait_semaphore_range.clone()],
-            begin_dependencies: &self.dependencies[batch_data.begin_dependency_range.clone()],
-            passes: &self.passes[batch_data.pass_range.clone()],
-            finish_dependencies: &self.dependencies[batch_data.finish_dependency_range.clone()],
-            signal_semaphores: &self.semaphores[batch_data.signal_semaphore_range.clone()],
-        })
+        self.batches.iter().map(|batch_data| self.get_batch_ref(batch_data))
     }
 
     pub fn get_batch_ref(&self, batch_data: &BatchData) -> BatchRef {
         BatchRef {
             wait_semaphores: &self.semaphores[batch_data.wait_semaphore_range.clone()],
             begin_dependencies: &self.dependencies[batch_data.begin_dependency_range.clone()],
+            begin_image_barriers: &self.image_barriers[batch_data.begin_image_barrier_range.clone()],
+
+            memory_barrier: batch_data.memory_barrier,
             passes: &self.passes[batch_data.pass_range.clone()],
+
             finish_dependencies: &self.dependencies[batch_data.finish_dependency_range.clone()],
+            finish_image_barriers: &self.image_barriers[batch_data.finish_image_barrier_range.clone()],
             signal_semaphores: &self.semaphores[batch_data.signal_semaphore_range.clone()],
         }
     }
@@ -817,6 +840,7 @@ impl CompiledRenderGraph {
         self.passes.clear();
         self.draws.clear();
         self.dependencies.clear();
+        self.image_barriers.clear();
         self.semaphores.clear();
         self.batches.clear();
     }
@@ -853,12 +877,23 @@ impl RenderGraph {
 
         std::mem::swap(&mut compiled.draws, &mut self.draws);
 
+        let mut src_accesses: Vec<graphics::AccessFlags> =
+            self.resources.iter().map(|r| r.initial_access.access_flags()).collect();
+
+        let mut dst_accesses = vec![graphics::AccessFlags::default(); self.resources.len()];
+
+        let mut pending_image_barriers = Vec::new();
+        let mut pending_res_semaphores = Vec::new();
+
         let mut sorted_passes = self.take_passes_with_topology_sort();
 
         for pass_range in sorted_passes.ranges.iter() {
+            pending_image_barriers.clear();
+            pending_res_semaphores.clear();
+
+            let mut memory_barrier = vk::MemoryBarrier2::default();
             // first pass of dependencies, order matters for limiting allocations
             // while preserving data contiguity
-            let wait_semaphore_start = compiled.semaphores.len();
             let begin_dependency_start = compiled.dependencies.len();
             for slot in pass_range.clone() {
                 let (_, pass) = sorted_passes.passes.get_slot(slot as u32).unwrap();
@@ -866,31 +901,67 @@ impl RenderGraph {
                 for dependency in &self.dependencies[pass.dependency_range.clone()] {
                     let resource_data = &mut self.resources[dependency.resource_handle];
 
-                    if dependency.resource_version == 0 {
-                        if let Some(semaphore) = resource_data.wait_semaphore.take() {
-                            if self.dont_wait_semaphores.get_mut().insert(semaphore.handle) {
-                                compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
-                            }
-                        }
+                    if dependency.resource_version == 0 && resource_data.wait_semaphore.is_some() {
+                        pending_res_semaphores.push(dependency.resource_handle);
                     }
 
-                    let src_access = resource_data.last_access(dependency.resource_version);
-                    let dst_access = dependency.access;
+                    match resource_data.kind() {
+                        ResourceKind::Buffer => {
+                            dst_accesses[dependency.resource_handle].extend_buffer_access(dependency.access);
+                            graphics::extend_memory_barrier(
+                                &mut memory_barrier,
+                                src_accesses[dependency.resource_handle],
+                                dst_accesses[dependency.resource_handle],
+                            );
+                        }
+                        ResourceKind::Image => {
+                            if src_accesses[dependency.resource_handle].layout != dependency.access.image_layout() {
+                                pending_image_barriers.push(dependency.resource_handle);
+                            }
+                            dst_accesses[dependency.resource_handle].layout = dependency.access.image_layout();
+                            dst_accesses[dependency.resource_handle].extend_image_access(dependency.access);
+                        }
+                    }
 
                     // TODO: remove duplicate dependencies
                     compiled.dependencies.push(BatchDependency {
                         resource_index: dependency.resource_handle,
-                        src_access,
-                        dst_access,
+                        dst_access: dependency.access,
                     })
                 }
             }
-            let wait_semaphore_end = compiled.semaphores.len();
             let begin_dependency_end = compiled.dependencies.len();
+
+            // finish image barriers
+            pending_image_barriers.sort_unstable();
+            pending_image_barriers.dedup();
+
+            let begin_image_barriers_start = compiled.image_barriers.len();
+            for &image_index in pending_image_barriers.iter() {
+                compiled.image_barriers.push(GraphImageBarrier {
+                    image_index,
+                    src_access: src_accesses[image_index],
+                    dst_access: dst_accesses[image_index],
+                })
+            }
+            let begin_image_barriers_end = compiled.image_barriers.len();
+
+            // wait semaphores
+            let wait_semaphore_start = compiled.semaphores.len();
+            for res_index in pending_res_semaphores.iter() {
+                let Some(semaphore) = self.resources[*res_index].wait_semaphore.take() else {
+                    continue;
+                };
+                compiled.semaphores.push((semaphore, dst_accesses[*res_index].stage_flags));
+            }
+            let wait_semaphore_end = compiled.semaphores.len();
+
+            src_accesses.copy_from_slice(&dst_accesses);
 
             // second dependency pass
             let signal_semaphore_start = compiled.semaphores.len();
             let finish_dependency_start = compiled.dependencies.len();
+            let finish_image_barrier_start = compiled.image_barriers.len();
             for slot in pass_range.clone() {
                 let pass = sorted_passes.passes.remove_slot(slot as u32).unwrap();
 
@@ -898,22 +969,30 @@ impl RenderGraph {
                     let resource_data = &mut self.resources[dependency.resource_handle];
 
                     // source of the last version of the resource
-                    if dependency.access.read_write_kind() == graphics::ReadWriteKind::Write
-                        && dependency.resource_version == resource_data.current_version() - 1
+                    if dependency.access.writes() && dependency.resource_version == resource_data.current_version() - 1
                     {
                         if let Some(semaphore) = resource_data.finish_semaphore.take() {
                             if self.dont_signal_semaphores.insert(semaphore.handle) {
-                                compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
+                                // compiled.semaphores.push((semaphore, dependency.access.stage_mask()));
+                                // might not be accurate if the resource is used in a later stage than its latest stored access
+                                compiled
+                                    .semaphores
+                                    .push((semaphore, src_accesses[dependency.resource_handle].stage_flags));
                             }
                         }
 
-                        if resource_data.kind() == graphics::ResourceKind::Image
+                        if resource_data.kind() == ResourceKind::Image
                             && resource_data.target_access != graphics::AccessKind::None
                             && dependency.access.image_layout() != resource_data.target_access.image_layout()
                         {
+                            compiled.image_barriers.push(GraphImageBarrier {
+                                image_index: dependency.resource_handle,
+                                src_access: dst_accesses[dependency.resource_handle],
+                                dst_access: resource_data.target_access.access_flags(),
+                            });
+
                             compiled.dependencies.push(BatchDependency {
                                 resource_index: dependency.resource_handle,
-                                src_access: dependency.access,
                                 dst_access: resource_data.target_access,
                             });
                         }
@@ -924,12 +1003,18 @@ impl RenderGraph {
             }
             let signal_semaphore_end = compiled.semaphores.len();
             let finish_dependency_end = compiled.dependencies.len();
+            let finish_image_barrier_end = compiled.image_barriers.len();
 
             compiled.batches.push(BatchData {
                 wait_semaphore_range: wait_semaphore_start..wait_semaphore_end,
                 begin_dependency_range: begin_dependency_start..begin_dependency_end,
+                begin_image_barrier_range: begin_image_barriers_start..begin_image_barriers_end,
+
+                memory_barrier,
                 pass_range: pass_range.clone(),
+
                 finish_dependency_range: finish_dependency_start..finish_dependency_end,
+                finish_image_barrier_range: finish_image_barrier_start..finish_image_barrier_end,
                 signal_semaphore_range: signal_semaphore_start..signal_semaphore_end,
             });
         }
@@ -1053,7 +1138,7 @@ impl RenderGraph {
                 sorted_passes.passes.insert(pass_data);
             }
 
-            // temporary fix for infinite loop
+            // just to catch some bugs if I change the render graph
             if remove_list.is_empty() {
                 log::debug!("POTENTIAL INFINITE LOOP: passes left:");
                 for (_, pass) in self.passes.iter() {
@@ -1080,12 +1165,12 @@ impl RenderGraph {
                     .iter()
                     .map(|dependency| {
                         let resource = &self.resources[dependency.resource_handle];
-                        let resource_version = &resource.versions[dependency.resource_version];
 
-                        let is_write = dependency.access.read_write_kind() == graphics::ReadWriteKind::Write;
+                        let prev_reads = (dependency.resource_version > 0)
+                            .then(|| resource.versions[dependency.resource_version - 1].read_by.iter().copied())
+                            .into_iter()
+                            .flatten();
 
-                        let prev_reads =
-                            is_write.then_some(resource_version.read_by.iter().clone()).into_iter().flatten().copied();
                         let source_pass = resource.source_pass(dependency.resource_version);
 
                         prev_reads.chain(source_pass)

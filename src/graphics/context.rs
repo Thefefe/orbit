@@ -6,12 +6,15 @@ use rayon::prelude::*;
 use winit::window::Window;
 
 use crate::{
-    assets::GpuMeshletDrawCommand, graphics::{self, QueueType}, passes::draw_gen::MAX_DRAW_COUNT, utils
+    assets::GpuMeshletDrawCommand,
+    graphics::{self, QueueType},
+    passes::draw_gen::MAX_DRAW_COUNT,
+    utils,
 };
 
 use super::{
     graph::{self, CompiledRenderGraph, RenderGraph},
-    BatchDependency, Dispatch, ResourceKind, TransientResourceCache,
+    Dispatch, TransientResourceCache,
 };
 
 #[repr(C)]
@@ -1018,7 +1021,7 @@ impl<'a: 'b, 'b> DrawPass<'a, 'b> {
         } else {
             u32::MAX
         };
-        
+
         self.push_data(index)
     }
 
@@ -1027,12 +1030,14 @@ impl<'a: 'b, 'b> DrawPass<'a, 'b> {
     #[must_use = "missing draw call"]
     pub fn read_image_general(self, image: impl Into<Option<GraphImageHandle>>) -> Self {
         let index = if let Some(image) = image.into() {
-            self.render_pass.dependencies.push((image.resource_index, graphics::AccessKind::AllGraphicsReadGeneral));
+            self.render_pass
+                .dependencies
+                .push((image.resource_index, graphics::AccessKind::AllGraphicsReadGeneral));
             self.render_pass.context.get_resource_descriptor_index(image).unwrap()
         } else {
             u32::MAX
         };
-        
+
         self.push_data(index)
     }
 
@@ -1046,7 +1051,7 @@ impl<'a: 'b, 'b> DrawPass<'a, 'b> {
         } else {
             u32::MAX
         };
-        
+
         self.push_data(index)
     }
 
@@ -1457,36 +1462,17 @@ fn record_batch(
 ) -> usize {
     puffin::profile_scope!("batch_record", format!("{batch_index}"));
 
-    let mut memory_barrier = vk::MemoryBarrier2::default();
-    let mut image_barriers = Vec::new();
-
-    for BatchDependency {
-        resource_index: resoure_index,
-        src_access,
-        dst_access,
-    } in batch_ref.begin_dependencies.iter().copied()
-    {
-        let resource = compiled_graph.resources[resoure_index].resource.as_ref();
-
-        if resource.kind() != ResourceKind::Image || src_access.image_layout() == dst_access.image_layout() {
-            if src_access.read_write_kind() == graphics::ReadWriteKind::Read
-                && dst_access.read_write_kind() == graphics::ReadWriteKind::Read
-            {
-                continue;
-            }
-            memory_barrier.src_stage_mask |= src_access.stage_mask();
-            if src_access.read_write_kind() == graphics::ReadWriteKind::Write {
-                memory_barrier.src_access_mask |= src_access.access_mask();
-            }
-
-            memory_barrier.dst_stage_mask |= dst_access.stage_mask();
-            if !memory_barrier.src_access_mask.is_empty() {
-                memory_barrier.dst_access_mask |= dst_access.access_mask();
-            }
-        } else if let graphics::AnyResourceRef::Image(image) = &resource {
-            image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
-        }
-    }
+    let mut image_barriers: Vec<vk::ImageMemoryBarrier2> = batch_ref
+        .begin_image_barriers
+        .iter()
+        .map(|b| {
+            graphics::image_barrier(
+                compiled_graph.resources[b.image_index].resource.as_ref().as_image().unwrap(),
+                b.src_access,
+                b.dst_access,
+            )
+        })
+        .collect();
 
     let cmd_buffer = command_pool.begin_new(device);
 
@@ -1508,11 +1494,12 @@ fn record_batch(
         recorder.reset_query_pool(timestamp_query_pool, 0..MAX_TIMESTAMP_COUNT);
     }
 
-    if graphics::is_memory_barrier_not_useless(&memory_barrier) {
-        recorder.barrier(&[], &image_barriers, &[memory_barrier]);
-    } else if !image_barriers.is_empty() {
-        recorder.barrier(&[], &image_barriers, &[]);
-    }
+    let memory_barrier = if graphics::is_memory_barrier_not_useless(&batch_ref.memory_barrier) {
+        std::slice::from_ref(&batch_ref.memory_barrier)
+    } else {
+        &[]
+    };
+    recorder.barrier(&[], &image_barriers, memory_barrier);
 
     batch_debug_info.timestamp_start_index = batch_index as u32 * 2;
     batch_debug_info.timestamp_end_index = batch_index as u32 * 2 + 1;
@@ -1537,17 +1524,13 @@ fn record_batch(
     );
 
     image_barriers.clear();
-
-    for BatchDependency {
-        resource_index: resoure_index,
-        src_access,
-        dst_access,
-    } in batch_ref.finish_dependencies.iter().copied()
-    {
-        if let graphics::AnyResourceRef::Image(image) = compiled_graph.resources[resoure_index].resource.as_ref() {
-            image_barriers.push(graphics::image_barrier(image, src_access, dst_access));
-        }
-    }
+    image_barriers.extend(batch_ref.finish_image_barriers.iter().map(|b| {
+        graphics::image_barrier(
+            compiled_graph.resources[b.image_index].resource.as_ref().as_image().unwrap(),
+            b.src_access,
+            b.dst_access,
+        )
+    }));
 
     if !image_barriers.is_empty() {
         recorder.barrier(&[], &image_barriers, &[]);
@@ -1580,20 +1563,39 @@ impl Context {
                             ui.label(format!("{semaphore:?}, {stage:?}"));
                         }
                     });
+                
+                
+                egui::CollapsingHeader::new("memory_barrier")
+                    .id_source([i, 1])
+                    .show(ui, |ui| {
+                        ui.label(format!("{:#?}", batch.memory_barrier));
+                    });
 
                 egui::CollapsingHeader::new(format!("begin_dependencies ({})", batch.begin_dependencies.len()))
-                    .id_source([i, 1])
+                    .id_source([i, 2])
                     .show(ui, |ui| {
                         for (j, dependency) in batch.begin_dependencies.iter().enumerate() {
                             let resource = &graph.resources[dependency.resource_index].resource.as_ref();
-                            egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 1, j]).show(ui, |ui| {
-                                ui.label(format!("src_access: {:?}", dependency.src_access));
+                            egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 2, j]).show(ui, |ui| {
                                 ui.label(format!("dst_access: {:?}", dependency.dst_access));
                             });
                         }
                     });
 
-                egui::CollapsingHeader::new(format!("passes ({})", batch.passes.len())).id_source([i, 2]).show(
+                
+                egui::CollapsingHeader::new(format!("begin_image_barriers ({})", batch.begin_image_barriers.len()))
+                    .id_source([i, 3])
+                    .show(ui, |ui| {
+                        for (j, barrier) in batch.begin_image_barriers.iter().enumerate() {
+                            let resource = &graph.resources[barrier.image_index].resource.as_ref();
+                            egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 3, j]).show(ui, |ui| {
+                                ui.label(format!("src: {:#?}", barrier.src_access));
+                                ui.label(format!("dst: {:#?}", barrier.dst_access));
+                            });
+                        }
+                    });
+
+                egui::CollapsingHeader::new(format!("passes ({})", batch.passes.len())).id_source([i,4]).show(
                     ui,
                     |ui| {
                         for pass in batch.passes {
@@ -1603,19 +1605,31 @@ impl Context {
                 );
 
                 egui::CollapsingHeader::new(format!("finish_dependencies ({})", batch.finish_dependencies.len()))
-                    .id_source([i, 3])
+                    .id_source([i, 5])
                     .show(ui, |ui| {
                         for (j, dependency) in batch.finish_dependencies.iter().enumerate() {
                             let resource = &graph.resources[dependency.resource_index].resource.as_ref();
-                            egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 3, j]).show(ui, |ui| {
-                                ui.label(format!("src_access: {:?}", dependency.src_access));
+                            egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 5, j]).show(ui, |ui| {
                                 ui.label(format!("dst_access: {:?}", dependency.dst_access));
                             });
                         }
                     });
 
+                    
+                egui::CollapsingHeader::new(format!("finish_image_barriers ({})", batch.finish_image_barriers.len()))
+                    .id_source([i, 6])
+                    .show(ui, |ui| {
+                        for (j, barrier) in batch.finish_image_barriers.iter().enumerate() {
+                            let resource = &graph.resources[barrier.image_index].resource.as_ref();
+                            egui::CollapsingHeader::new(resource.name().as_ref()).id_source([i, 6, j]).show(ui, |ui| {
+                                ui.label(format!("src: {:#?}", barrier.src_access));
+                                ui.label(format!("dst: {:#?}", barrier.dst_access));
+                            });
+                        }
+                    });
+
                 egui::CollapsingHeader::new(format!("signal_semaphores ({})", batch.signal_semaphores.len()))
-                    .id_source([i, 4])
+                    .id_source([i, 7])
                     .show(ui, |ui| {
                         for (semaphore, stage) in batch.signal_semaphores {
                             ui.label(format!("{semaphore:?}, {stage:?}"));

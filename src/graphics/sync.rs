@@ -3,12 +3,6 @@ use std::{borrow::Cow, ops::RangeBounds};
 use crate::graphics;
 use ash::vk;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReadWriteKind {
-    Read,
-    Write,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AccessKind {
     #[default]
@@ -47,40 +41,44 @@ pub enum AccessKind {
 impl AccessKind {
     #[rustfmt::skip]
     #[inline(always)]
-    pub fn read_write_kind(self) -> ReadWriteKind {
+    pub fn writes(self) -> bool {
         match self {
-            AccessKind::None                        => ReadWriteKind::Read,
-            AccessKind::IndirectBuffer              => ReadWriteKind::Read,
-            AccessKind::IndexBuffer                 => ReadWriteKind::Read,
-            AccessKind::VertexBuffer                => ReadWriteKind::Read,
-            AccessKind::AllGraphicsRead             => ReadWriteKind::Read,
-            AccessKind::AllGraphicsReadGeneral      => ReadWriteKind::Read,
-            AccessKind::AllGraphicsWrite            => ReadWriteKind::Write,
-            AccessKind::PreRasterizationRead        => ReadWriteKind::Read,
-            AccessKind::PreRasterizationReadGeneral => ReadWriteKind::Read,
-            AccessKind::PreRasterizationWrite       => ReadWriteKind::Write,
-            AccessKind::TaskShaderRead              => ReadWriteKind::Read,
-            AccessKind::TaskShaderReadGeneral       => ReadWriteKind::Read,
-            AccessKind::TaskShaderWrite             => ReadWriteKind::Write,
-            AccessKind::MeshShaderRead              => ReadWriteKind::Read,
-            AccessKind::MeshShaderWrite             => ReadWriteKind::Write,
-            AccessKind::VertexShaderRead            => ReadWriteKind::Read,
-            AccessKind::VertexShaderWrite           => ReadWriteKind::Write,
-            AccessKind::FragmentShaderRead          => ReadWriteKind::Read,
-            AccessKind::FragmentShaderReadGeneral   => ReadWriteKind::Read,
-            AccessKind::FragmentShaderWrite         => ReadWriteKind::Write,
-            AccessKind::ColorAttachmentRead         => ReadWriteKind::Read,
-            AccessKind::ColorAttachmentWrite        => ReadWriteKind::Write,
-            AccessKind::DepthAttachmentRead         => ReadWriteKind::Read,
-            AccessKind::DepthAttachmentWrite        => ReadWriteKind::Write,
-            AccessKind::ComputeShaderRead           => ReadWriteKind::Read,
-            AccessKind::ComputeShaderReadGeneral    => ReadWriteKind::Read,
-            AccessKind::ComputeShaderWrite          => ReadWriteKind::Write,
-            AccessKind::Present                     => ReadWriteKind::Read,
-            AccessKind::TransferRead                => ReadWriteKind::Write,
-            AccessKind::TransferWrite               => ReadWriteKind::Read,
+            AccessKind::None                        => false,
+            AccessKind::IndirectBuffer              => false,
+            AccessKind::IndexBuffer                 => false,
+            AccessKind::VertexBuffer                => false,
+            AccessKind::AllGraphicsRead             => false,
+            AccessKind::AllGraphicsReadGeneral      => false,
+            AccessKind::AllGraphicsWrite            => true,
+            AccessKind::PreRasterizationRead        => false,
+            AccessKind::PreRasterizationReadGeneral => false,
+            AccessKind::PreRasterizationWrite       => true,
+            AccessKind::TaskShaderRead              => false,
+            AccessKind::TaskShaderReadGeneral       => false,
+            AccessKind::TaskShaderWrite             => true,
+            AccessKind::MeshShaderRead              => false,
+            AccessKind::MeshShaderWrite             => true,
+            AccessKind::VertexShaderRead            => false,
+            AccessKind::VertexShaderWrite           => true,
+            AccessKind::FragmentShaderRead          => false,
+            AccessKind::FragmentShaderReadGeneral   => false,
+            AccessKind::FragmentShaderWrite         => true,
+            AccessKind::ColorAttachmentRead         => false,
+            AccessKind::ColorAttachmentWrite        => true,
+            AccessKind::DepthAttachmentRead         => false,
+            AccessKind::DepthAttachmentWrite        => true,
+            AccessKind::ComputeShaderRead           => false,
+            AccessKind::ComputeShaderReadGeneral    => false,
+            AccessKind::ComputeShaderWrite          => true,
+            AccessKind::Present                     => false,
+            AccessKind::TransferRead                => true,
+            AccessKind::TransferWrite               => false,
             
         }
+    }
+
+    pub fn read_only(self) -> bool {
+        !self.writes()
     }
 
     #[rustfmt::skip]
@@ -197,19 +195,64 @@ impl AccessKind {
             
         }
     }
+
+    pub fn access_flags(self) -> AccessFlags {
+        AccessFlags {
+            stage_flags: self.stage_mask(),
+            access_flags: self.access_mask(),
+            layout: self.image_layout(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AccessFlags {
+    pub stage_flags: vk::PipelineStageFlags2,
+    pub access_flags: vk::AccessFlags2,
+    pub layout: vk::ImageLayout,
+}
+
+impl From<AccessKind> for AccessFlags {
+    fn from(value: AccessKind) -> Self {
+        Self {
+            stage_flags: value.stage_mask(),
+            access_flags: value.access_mask(),
+            layout: value.image_layout(),
+        }
+    }
+}
+
+impl AccessFlags {
+    pub fn extend_buffer_access(&mut self, access: AccessKind) {
+        self.stage_flags = access.stage_mask();
+        self.access_flags = access.access_mask();
+    }
+    
+    #[track_caller]
+    pub fn extend_image_access(&mut self, access: AccessKind) {
+        if self.layout == vk::ImageLayout::UNDEFINED {
+            self.layout = access.image_layout()
+        }
+        assert_eq!(self.layout, access.image_layout());
+        self.stage_flags = access.stage_mask();
+        self.access_flags = access.access_mask();
+        self.layout = access.image_layout();
+    }
 }
 
 #[inline]
 pub fn buffer_barrier(
     buffer: &graphics::BufferView,
-    src_access: graphics::AccessKind,
-    dst_access: graphics::AccessKind,
+    src_access: impl Into<AccessFlags>,
+    dst_access: impl Into<AccessFlags>,
 ) -> vk::BufferMemoryBarrier2 {
+    let src_access = src_access.into();
+    let dst_access = dst_access.into();
     vk::BufferMemoryBarrier2 {
-        src_stage_mask: src_access.stage_mask(),
-        src_access_mask: src_access.access_mask(),
-        dst_stage_mask: dst_access.stage_mask(),
-        dst_access_mask: dst_access.access_mask(),
+        src_stage_mask: src_access.stage_flags,
+        src_access_mask: src_access.access_flags,
+        dst_stage_mask: dst_access.stage_flags,
+        dst_access_mask: dst_access.access_flags,
         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
         buffer: buffer.handle,
@@ -222,18 +265,20 @@ pub fn buffer_barrier(
 #[inline]
 pub fn image_barrier(
     image: &graphics::ImageView,
-    src_access: AccessKind,
-    dst_access: AccessKind,
+    src_access: impl Into<AccessFlags>,
+    dst_access: impl Into<AccessFlags>,
 ) -> vk::ImageMemoryBarrier2 {
+    let src_access = src_access.into();
+    let dst_access = dst_access.into();
     vk::ImageMemoryBarrier2 {
-        src_stage_mask: src_access.stage_mask(),
-        src_access_mask: src_access.access_mask(),
-        dst_stage_mask: dst_access.stage_mask(),
-        dst_access_mask: dst_access.access_mask(),
+        src_stage_mask: src_access.stage_flags,
+        src_access_mask: src_access.access_flags,
+        dst_stage_mask: dst_access.stage_flags,
+        dst_access_mask: dst_access.access_flags,
         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        old_layout: src_access.image_layout(),
-        new_layout: dst_access.image_layout(),
+        old_layout: src_access.layout,
+        new_layout: dst_access.layout,
         image: image.handle,
         subresource_range: image.subresource_range,
         ..Default::default()
@@ -245,34 +290,31 @@ pub fn image_subresource_barrier(
     image: &graphics::ImageView,
     mip_level: impl RangeBounds<u32>,
     layers: impl RangeBounds<u32>,
-    src_access: AccessKind,
-    dst_access: AccessKind,
+    src_access: impl Into<AccessFlags>,
+    dst_access: impl Into<AccessFlags>,
 ) -> vk::ImageMemoryBarrier2 {
+    let src_access = src_access.into();
+    let dst_access = dst_access.into();
     vk::ImageMemoryBarrier2 {
-        src_stage_mask: src_access.stage_mask(),
-        src_access_mask: src_access.access_mask(),
-        dst_stage_mask: dst_access.stage_mask(),
-        dst_access_mask: dst_access.access_mask(),
+        src_stage_mask: src_access.stage_flags,
+        src_access_mask: src_access.access_flags,
+        dst_stage_mask: dst_access.stage_flags,
+        dst_access_mask: dst_access.access_flags,
         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        old_layout: src_access.image_layout(),
-        new_layout: dst_access.image_layout(),
+        old_layout: src_access.layout,
+        new_layout: dst_access.layout,
         image: image.handle,
         subresource_range: image.subresource_range(mip_level, layers),
         ..Default::default()
     }
 }
 
-pub fn extend_memory_barrier(barrier: &mut vk::MemoryBarrier2, src_access: AccessKind, dst_access: AccessKind) {
-    barrier.src_stage_mask |= src_access.stage_mask();
-    if src_access.read_write_kind() == graphics::ReadWriteKind::Write {
-        barrier.src_access_mask |= src_access.access_mask();
-    }
-
-    barrier.dst_stage_mask |= dst_access.stage_mask();
-    if !barrier.src_access_mask.is_empty() {
-        barrier.dst_access_mask |= dst_access.access_mask();
-    }
+pub fn extend_memory_barrier(barrier: &mut vk::MemoryBarrier2, src_access: AccessFlags, dst_access: AccessFlags) {
+    barrier.src_stage_mask |= src_access.stage_flags;
+    barrier.src_access_mask |= src_access.access_flags;
+    barrier.dst_stage_mask |= dst_access.stage_flags;
+    barrier.dst_access_mask |= dst_access.access_flags;
 }
 
 pub fn is_memory_barrier_not_useless(barrier: &vk::MemoryBarrier2) -> bool {

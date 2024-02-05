@@ -41,14 +41,18 @@ pub fn render_post_process(
         load_op: LoadOp::DontCare,
         store: true,
     }]);
+    
+    let (pyramid_mip_level, pyramid_far_depth) = depth_pyramid_debug.map_or((0, 0.0), |(_, l, d)| (l, d));
 
     DrawPass::new(&mut render_pass, pipeline)
-        .push_data(render_mode as u32)
-        .push_data(exposure)
-        .push_data(bloom_intensity)
+        .push_data::<u32>(render_mode as u32)
+        .push_data::<f32>(exposure)
+        .push_data::<f32>(bloom_intensity)
         .read_image(src_image)
         .read_image_general(bloom_image)
         .read_image_general(depth_pyramid_debug.map(|(i,_,_)| i))
+        .push_data::<u32>(pyramid_mip_level)
+        .push_data::<f32>(pyramid_far_depth)
         .draw(0..3, 0..1);
 
     render_pass.finish();

@@ -304,7 +304,7 @@ impl Swapchain {
                 }
             }
 
-            if self.inner.config.fullscreen_mode.is_exclusive() && !minimized {
+            if app_controlled && !minimized {
                 unsafe {
                     fullscreen_fns.acquire_full_screen_exclusive_mode(self.inner.handle).unwrap();
                 }

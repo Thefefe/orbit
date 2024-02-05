@@ -10,6 +10,7 @@ use std::{
     collections::HashSet,
     ffi::{c_void, CStr, CString},
     mem::ManuallyDrop,
+    ops::{Deref, DerefMut},
     ptr::NonNull,
 };
 
@@ -119,31 +120,155 @@ pub struct QueueFamily {
     pub supports_present: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PresentModeFlags(u32);
+
+impl PresentModeFlags {
+    pub const IMMEDIATE: Self = Self(1 << vk::PresentModeKHR::IMMEDIATE.as_raw());
+    pub const MAILBOX: Self = Self(1 << vk::PresentModeKHR::MAILBOX.as_raw());
+    pub const FIFO: Self = Self(1 << vk::PresentModeKHR::FIFO.as_raw());
+    pub const FIFO_RELAXED: Self = Self(1 << vk::PresentModeKHR::FIFO_RELAXED.as_raw());
+
+    pub fn from_supported_present_modes(present_modes: &[vk::PresentModeKHR]) -> Self {
+        let mut flags = 0;
+        for present_mode in present_modes {
+            if present_mode.as_raw() < 4 {
+                flags |= 1 << present_mode.as_raw();
+            }
+        }
+        Self(flags)
+    }
+
+    pub fn contains(self, present_mode: vk::PresentModeKHR) -> bool {
+        (self.0 & (1 << present_mode.as_raw())) > 0
+    }
+
+    pub fn iter_supported(self) -> impl Iterator<Item = vk::PresentModeKHR> {
+        [
+            vk::PresentModeKHR::IMMEDIATE,
+            vk::PresentModeKHR::MAILBOX,
+            vk::PresentModeKHR::FIFO,
+            vk::PresentModeKHR::FIFO_RELAXED,
+        ]
+        .into_iter()
+        .filter(move |pm| self.contains(*pm))
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SurfaceInfo {
     pub capabilities: vk::SurfaceCapabilitiesKHR,
-    pub present_modes: Vec<vk::PresentModeKHR>,
+    pub present_modes: PresentModeFlags,
     pub formats: Vec<vk::SurfaceFormatKHR>,
+    pub exclusive_fullscreen_support: bool,
+    pub exclusive_fullscreen_disallowed_present_modes: PresentModeFlags,
+    pub exclusive_fullscreen_allowed_present_modes: PresentModeFlags,
+    pub exclusive_fullscreen_controlled_present_modes: PresentModeFlags,
 }
 
 impl SurfaceInfo {
-    fn query(surface_fns: &khr::Surface, physical_device: vk::PhysicalDevice, surface: vk::SurfaceKHR) -> Self {
+    fn query(
+        surface_fns: &khr::Surface,
+        fullscreen_stuff: Option<(&khr::GetSurfaceCapabilities2, &winit::monitor::MonitorHandle)>,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+    ) -> Self {
         unsafe {
             let capabilities = surface_fns.get_physical_device_surface_capabilities(physical_device, surface).unwrap();
             let present_modes =
                 surface_fns.get_physical_device_surface_present_modes(physical_device, surface).unwrap();
             let formats = surface_fns.get_physical_device_surface_formats(physical_device, surface).unwrap();
 
+            let present_modes = PresentModeFlags::from_supported_present_modes(&present_modes);
+
+            let mut exclusive_fullscreen_support = false;
+
+            if let Some((surface_capabilities2_fns, monitor)) = fullscreen_stuff {
+                let mut fullscreen_support = vk::SurfaceCapabilitiesFullScreenExclusiveEXT::builder();
+                let mut surface_capabilities2 =
+                    vk::SurfaceCapabilities2KHR::builder().push_next(&mut fullscreen_support);
+
+                #[cfg(windows)] use winit::platform::windows::MonitorHandleExtWindows;
+
+                #[cfg(windows)]
+                let mut win32_info = vk::SurfaceFullScreenExclusiveWin32InfoEXT::builder()
+                    .hmonitor(monitor.hmonitor() as _);
+
+                let mut info = vk::PhysicalDeviceSurfaceInfo2KHR::builder().surface(surface);
+
+                #[cfg(windows)]
+                {
+                    info = info.push_next(&mut win32_info);
+                }
+
+                (surface_capabilities2_fns.fp().get_physical_device_surface_capabilities2_khr)(
+                    physical_device,
+                    info.deref() as *const _,
+                    surface_capabilities2.deref_mut() as *mut _,
+                )
+                .result()
+                .unwrap();
+
+                exclusive_fullscreen_support = fullscreen_support.full_screen_exclusive_supported > 0;
+            }
+
             Self {
                 capabilities,
                 present_modes,
                 formats,
+                exclusive_fullscreen_support,
+                exclusive_fullscreen_disallowed_present_modes: Default::default(),
+                exclusive_fullscreen_allowed_present_modes: Default::default(),
+                exclusive_fullscreen_controlled_present_modes: Default::default(),
             }
         }
     }
 
-    pub fn new(device: &Device) -> Self {
-        Self::query(&device.surface_fns, device.gpu.handle, device.surface)
+    fn get_fullscreen_present_modes(
+        fns: &ext::FullScreenExclusive,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+        fullscreen_mode: vk::FullScreenExclusiveEXT
+    ) -> PresentModeFlags {
+        let mut fullscreen_info = vk::SurfaceFullScreenExclusiveInfoEXT::builder()
+            .full_screen_exclusive(fullscreen_mode);
+        
+        let info = vk::PhysicalDeviceSurfaceInfo2KHR::builder()
+            .surface(surface)
+            .push_next(&mut fullscreen_info);
+        
+        let present_modes = unsafe {
+            fns.get_physical_device_surface_present_modes2(physical_device, &info).unwrap()
+        };
+
+        PresentModeFlags::from_supported_present_modes(&present_modes)
+    }
+
+    pub fn query_fullscreen_present_modes(
+        &mut self, 
+        fns: &ext::FullScreenExclusive,
+        physical_device: vk::PhysicalDevice,
+        surface: vk::SurfaceKHR,
+    ) {
+        self.exclusive_fullscreen_allowed_present_modes =
+            Self::get_fullscreen_present_modes(fns, physical_device, surface, vk::FullScreenExclusiveEXT::ALLOWED);
+        self.exclusive_fullscreen_disallowed_present_modes =
+            Self::get_fullscreen_present_modes(fns, physical_device, surface, vk::FullScreenExclusiveEXT::DISALLOWED);
+        self.exclusive_fullscreen_controlled_present_modes =
+            Self::get_fullscreen_present_modes(fns, physical_device, surface,vk::FullScreenExclusiveEXT::APPLICATION_CONTROLLED);
+    }
+
+    pub fn new(device: &Device, monitor: Option<&winit::monitor::MonitorHandle>) -> Self {
+        let mut surface_info = Self::query(
+            &device.surface_fns,
+            device.surface_capabilities2_fns.as_ref().zip(monitor),
+            device.gpu.handle,
+            device.surface,
+        );
+        if let Some(fullscreen_fns) = device.fullscreen_exclusive_instance_fns.as_ref() {
+            surface_info.query_fullscreen_present_modes(fullscreen_fns, device.gpu.handle, device.surface);
+        } 
+        surface_info
     }
 
     pub fn refresh_capabilities(&mut self, device: &Device) {
@@ -171,8 +296,7 @@ impl GpuProperties {
         let mut properties12 = vk::PhysicalDeviceVulkan12Properties::default();
         let mut mesh_shader_properties = vk::PhysicalDeviceMeshShaderPropertiesEXT::default();
 
-        let mut properties = vk::PhysicalDeviceProperties2::builder()
-            .push_next(&mut properties12);
+        let mut properties = vk::PhysicalDeviceProperties2::builder().push_next(&mut properties12);
 
         if mesh_shading {
             properties = properties.push_next(&mut mesh_shader_properties);
@@ -245,6 +369,7 @@ impl GpuInfo {
 fn enumerate_gpus<'a>(
     instance: &'a ash::Instance,
     surface_fns: &'a khr::Surface,
+    fullscreen_stuff: Option<(&'a khr::GetSurfaceCapabilities2, &'a winit::monitor::MonitorHandle)>,
     surface: vk::SurfaceKHR,
 ) -> impl Iterator<Item = GpuInfo> + DoubleEndedIterator + 'a {
     unsafe {
@@ -277,11 +402,17 @@ fn enumerate_gpus<'a>(
                 .collect();
 
             let mesh_shader_support = extensions.contains(ext::MeshShader::name());
+            let fullscreen_support = extensions.contains(ext::FullScreenExclusive::name());
 
             let properties = GpuProperties::new(instance, handle, mesh_shader_support);
 
             let surface_info = if queue_families.iter().any(|queue| queue.supports_present) {
-                SurfaceInfo::query(surface_fns, handle, surface)
+                SurfaceInfo::query(
+                    surface_fns,
+                    fullscreen_support.then_some(fullscreen_stuff.clone()).flatten(),
+                    handle,
+                    surface,
+                )
             } else {
                 SurfaceInfo::default() // SAFETY: we don't use it if not supported
             };
@@ -294,7 +425,6 @@ fn enumerate_gpus<'a>(
                 extensions,
                 mesh_shader_support,
                 surface_info,
-                
             }
         })
     }
@@ -366,8 +496,15 @@ pub struct Device {
     pub debug_utils_fns: Option<ext::DebugUtils>,
     pub debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
 
+    pub win32_surface_fns: Option<khr::Win32Surface>,
+    pub surface_capabilities2_fns: Option<khr::GetSurfaceCapabilities2>,
+    
+    pub fullscreen_exclusive_fns: Option<ext::FullScreenExclusive>,
+    pub fullscreen_exclusive_instance_fns: Option<ext::FullScreenExclusive>,
+    
     pub surface_fns: khr::Surface,
     pub surface: vk::SurfaceKHR,
+    
 
     pub gpu: GpuInfo,
 
@@ -446,6 +583,11 @@ impl Device {
             extensions.push(ext::DebugUtils::name().as_ptr());
         }
 
+        let surface_capabilities2_supported = available_metadata.has_extension(khr::GetSurfaceCapabilities2::name());
+        if surface_capabilities2_supported {
+            extensions.push(khr::GetSurfaceCapabilities2::name().as_ptr());
+        }
+
         let mut instance_create_info = vk::InstanceCreateInfo::builder()
             .application_info(&application_info)
             .enabled_layer_names(&layers)
@@ -477,11 +619,9 @@ impl Device {
             extensions,
         };
 
-        let debug_utils_fns = if debug_utils_supported {
-            Some(ext::DebugUtils::new(&entry, &instance))
-        } else {
-            None
-        };
+        let debug_utils_fns = debug_utils_supported.then(|| ext::DebugUtils::new(&entry, &instance));
+        let surface_capabilities2_fns =
+            surface_capabilities2_supported.then(|| khr::GetSurfaceCapabilities2::new(&entry, &instance));
 
         let debug_messenger = debug_utils_fns.as_ref().map(|debug_utils| unsafe {
             debug_utils.create_debug_utils_messenger(&debug_messenger_create_info, None).unwrap()
@@ -500,42 +640,40 @@ impl Device {
         }
         .unwrap();
 
-        let required_device_extensions: &[&CStr] = &[
-            khr::Swapchain::name(),
-            vk::ExtIndexTypeUint8Fn::name(),
-        ];
+        let required_device_extensions: &[&CStr] = &[khr::Swapchain::name(), vk::ExtIndexTypeUint8Fn::name()];
+        let optional_device_extensions: &[&CStr] = &[ext::MeshShader::name(), ext::FullScreenExclusive::name()];
 
-        let optional_device_extensions: &[&CStr] = &[
-            ext::MeshShader::name(),
-        ];
+        let mut gpu = enumerate_gpus(
+            &instance,
+            &surface_fns,
+            surface_capabilities2_fns.as_ref().zip(window.current_monitor().as_ref()),
+            surface,
+        )
+        .rev()
+        .filter(|gpu| {
+            let universal_queue = gpu.queues().any(|queue| queue.ty == QueueType::Graphics && queue.supports_present);
+            let required_extensions = gpu.has_all_extensions(required_device_extensions);
 
-        let gpu = enumerate_gpus(&instance, &surface_fns, surface)
-            .rev()
-            .filter(|gpu| {
-                let universal_queue =
-                    gpu.queues().any(|queue| queue.ty == QueueType::Graphics && queue.supports_present);
-                let required_extensions = gpu.has_all_extensions(required_device_extensions);
+            universal_queue && required_extensions
+        })
+        .max_by_key(|gpu| {
+            let mut score = 0;
 
-                universal_queue && required_extensions
-            })
-            .max_by_key(|gpu| {
-                let mut score = 0;
+            if gpu.device_type() == vk::PhysicalDeviceType::DISCRETE_GPU {
+                score += 10;
+            } else if gpu.device_type() == vk::PhysicalDeviceType::INTEGRATED_GPU {
+                score += 1;
+            }
 
-                if gpu.device_type() == vk::PhysicalDeviceType::DISCRETE_GPU {
-                    score += 10;
-                } else if gpu.device_type() == vk::PhysicalDeviceType::INTEGRATED_GPU {
+            for extension in optional_device_extensions {
+                if gpu.has_extensions(extension) {
                     score += 1;
                 }
+            }
 
-                for extension in optional_device_extensions {
-                    if gpu.has_extensions(extension) {
-                        score += 1;
-                    }
-                }
-
-                score
-            })
-            .ok_or(DeviceCreateError::NoSuitableGpu)?;
+            score
+        })
+        .ok_or(DeviceCreateError::NoSuitableGpu)?;
 
         let required_device_extensions = required_device_extensions.iter().map(|&ext| ext.to_owned());
 
@@ -629,8 +767,8 @@ impl Device {
             .synchronization2(true)
             .maintenance4(true);
 
-        let mut index_type_uint8_features = vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::builder()
-            .index_type_uint8(true);
+        let mut index_type_uint8_features =
+            vk::PhysicalDeviceIndexTypeUint8FeaturesEXT::builder().index_type_uint8(true);
 
         let mut mesh_shader_features =
             vk::PhysicalDeviceMeshShaderFeaturesEXT::builder().mesh_shader(true).task_shader(true);
@@ -643,6 +781,7 @@ impl Device {
             .push_next(&mut index_type_uint8_features);
 
         let mesh_shading_available = enabled_device_extensions.contains(ext::MeshShader::name());
+        let fullscreen_exclusive_available = enabled_device_extensions.contains(ext::FullScreenExclusive::name());
 
         if mesh_shading_available {
             log::info!("mesh shading supported!");
@@ -711,8 +850,17 @@ impl Device {
             queue_family_count += 1;
         }
 
-        let swapchain_fns = khr::Swapchain::new(&instance, &device);
         let mesh_shader_fns = mesh_shading_available.then(|| ext::MeshShader::new(&instance, &device));
+        let swapchain_fns = khr::Swapchain::new(&instance, &device);
+        let win32_surface_fns = cfg!(windows).then(|| khr::Win32Surface::new(&entry, &instance));
+        let fullscreen_exclusive_fns =
+            fullscreen_exclusive_available.then(|| ext::FullScreenExclusive::new(&instance, &device));
+        let fullscreen_exclusive_instance_fns = fullscreen_exclusive_available
+            .then(|| ext::FullScreenExclusive::new_from_instance(&entry, &instance, vk::Device::null()));
+
+        if let Some(fullscreen_fns) = fullscreen_exclusive_instance_fns.as_ref() {
+            gpu.surface_info.query_fullscreen_present_modes(fullscreen_fns, gpu.handle, surface);
+        }
 
         let allocator_stuff = {
             let allocator = Allocator::new(&AllocatorCreateDesc {
@@ -854,8 +1002,15 @@ impl Device {
             debug_utils_fns,
             debug_messenger,
 
+            win32_surface_fns,
+            surface_capabilities2_fns,
+            
+            fullscreen_exclusive_fns,
+            fullscreen_exclusive_instance_fns,
+
             surface_fns,
             surface,
+
             gpu,
 
             raw: device,

@@ -4,13 +4,48 @@ use ash::vk;
 use graphics::QueueType;
 use std::collections::VecDeque;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SwapchainConfig {
     pub extent: vk::Extent2D,
     pub present_mode: vk::PresentModeKHR,
     pub surface_format: vk::SurfaceFormatKHR,
     pub frame_count: usize,
     pub image_count: u32,
+    pub fullscreen_mode: SwapchainFullScreenMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwapchainFullScreenMode {
+    None,
+    Exclusive(winit::monitor::MonitorHandle),
+    Borderless(winit::monitor::MonitorHandle),
+}
+
+impl SwapchainFullScreenMode {
+    pub fn is_exclusive(&self) -> bool {
+        match self {
+            SwapchainFullScreenMode::Exclusive(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn monitor(&self) -> Option<&winit::monitor::MonitorHandle> {
+        match self {
+            SwapchainFullScreenMode::None => None,
+            SwapchainFullScreenMode::Exclusive(monitor) => Some(monitor),
+            SwapchainFullScreenMode::Borderless(monitor) => Some(monitor),
+        }
+    }
+
+    pub fn exclusive_flag(&self) -> vk::FullScreenExclusiveEXT {
+        match self {
+            SwapchainFullScreenMode::None => vk::FullScreenExclusiveEXT::DISALLOWED,
+            // APPLICATION_CONTROLLED would be better so it's guaranteed to be exclusive,
+            // witch isn't the cose now but is's simpler this way
+            SwapchainFullScreenMode::Exclusive(_) => vk::FullScreenExclusiveEXT::ALLOWED,
+            SwapchainFullScreenMode::Borderless(_) => vk::FullScreenExclusiveEXT::DISALLOWED,
+        }
+    }
 }
 
 struct SwapchainInner {
@@ -24,11 +59,11 @@ struct SwapchainInner {
 impl SwapchainInner {
     fn new(
         device: &graphics::Device,
-        old_swapchain: Option<vk::SwapchainKHR>,
+        old_swapchain: Option<(vk::SwapchainKHR, &SwapchainConfig)>,
         config: SwapchainConfig,
         surface_info: &graphics::SurfaceInfo,
     ) -> Self {
-        let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
+        let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(device.surface)
             .min_image_count(config.image_count)
             .image_format(config.surface_format.format)
@@ -37,11 +72,34 @@ impl SwapchainInner {
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .present_mode(config.present_mode)
+            .present_mode(
+                surface_info.try_select_present_mode(config.fullscreen_mode.exclusive_flag(), &[config.present_mode]),
+            )
             .pre_transform(surface_info.capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .clipped(false)
-            .old_swapchain(old_swapchain.unwrap_or(vk::SwapchainKHR::null()));
+            .old_swapchain(old_swapchain.as_ref().map_or(vk::SwapchainKHR::null(), |(o, _)| *o));
+
+        let mut fullscreen_info = vk::SurfaceFullScreenExclusiveInfoEXT::builder()
+            .full_screen_exclusive(config.fullscreen_mode.exclusive_flag());
+
+        #[cfg(windows)]
+        let mut win32_fullscreen_info = vk::SurfaceFullScreenExclusiveWin32InfoEXT::builder();
+
+        if let Some(monitor) =
+            device.fullscreen_exclusive_fns.is_some().then_some(config.fullscreen_mode.monitor()).flatten()
+        {
+            assert!(device.fullscreen_exclusive_fns.is_some());
+
+            swapchain_create_info = swapchain_create_info.push_next(&mut fullscreen_info);
+
+            #[cfg(windows)]
+            {
+                use winit::platform::windows::MonitorHandleExtWindows;
+                win32_fullscreen_info = win32_fullscreen_info.hmonitor(monitor.hmonitor() as _);
+                swapchain_create_info = swapchain_create_info.push_next(&mut win32_fullscreen_info);
+            }
+        }
 
         let handle = unsafe { device.swapchain_fns.create_swapchain(&swapchain_create_info, None) }.unwrap();
 
@@ -153,11 +211,24 @@ impl graphics::SurfaceInfo {
         )
     }
 
-    pub fn try_select_present_mode(&self, target_modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {
+    pub fn try_select_present_mode(
+        &self,
+        fullscreen_mode: vk::FullScreenExclusiveEXT,
+        target_modes: &[vk::PresentModeKHR],
+    ) -> vk::PresentModeKHR {
+        let available_present_modes = match fullscreen_mode {
+            vk::FullScreenExclusiveEXT::ALLOWED => self.exclusive_fullscreen_allowed_present_modes,
+            vk::FullScreenExclusiveEXT::DISALLOWED => self.exclusive_fullscreen_disallowed_present_modes,
+            vk::FullScreenExclusiveEXT::APPLICATION_CONTROLLED => self.exclusive_fullscreen_controlled_present_modes,
+            _ => self.present_modes,
+        };
+
         target_modes
             .iter()
             .copied()
-            .find(|target_mode| self.present_modes.iter().any(|present_mode| present_mode == target_mode))
+            .find(|target_mode| {
+                available_present_modes.iter_supported().any(|present_mode| present_mode == *target_mode)
+            })
             .unwrap_or(vk::PresentModeKHR::FIFO)
     }
 }
@@ -186,17 +257,19 @@ pub struct Swapchain {
 
     config: SwapchainConfig,
     surface_info: graphics::SurfaceInfo,
+    currently_minimized: bool,
 }
 
 impl Swapchain {
     pub fn new(device: &graphics::Device, config: SwapchainConfig) -> Self {
-        let surface_info = graphics::SurfaceInfo::new(device);
+        let surface_info = graphics::SurfaceInfo::new(device, config.fullscreen_mode.monitor());
 
         Self {
-            inner: SwapchainInner::new(device, None, config, &surface_info),
+            inner: SwapchainInner::new(device, None, config.clone(), &surface_info),
             old: VecDeque::new(),
             config,
             surface_info,
+            currently_minimized: false,
         }
     }
 
@@ -209,6 +282,34 @@ impl Swapchain {
 
     pub fn set_present_mode(&mut self, present_mode: vk::PresentModeKHR) {
         self.config.present_mode = present_mode;
+    }
+
+    pub fn set_fullscreen(&mut self, mode: SwapchainFullScreenMode) {
+        self.config.fullscreen_mode = mode;
+    }
+
+    pub fn set_minimized(&mut self, device: &graphics::Device, minimized: bool) {
+        if self.currently_minimized == minimized {
+            return;
+        }
+        self.currently_minimized = minimized;
+
+        let app_controlled =
+            self.inner.config.fullscreen_mode.exclusive_flag() == vk::FullScreenExclusiveEXT::APPLICATION_CONTROLLED;
+
+        if let Some(fullscreen_fns) = device.fullscreen_exclusive_fns.as_ref() {
+            if app_controlled && minimized {
+                unsafe {
+                    fullscreen_fns.release_full_screen_exclusive_mode(self.inner.handle).unwrap();
+                }
+            }
+
+            if self.inner.config.fullscreen_mode.is_exclusive() && !minimized {
+                unsafe {
+                    fullscreen_fns.acquire_full_screen_exclusive_mode(self.inner.handle).unwrap();
+                }
+            }
+        }
     }
 
     pub fn extent(&self) -> vk::Extent2D {
@@ -226,7 +327,12 @@ impl Swapchain {
 
         self.surface_info.refresh_capabilities(device);
         self.config.extent = self.surface_info.choose_extent(self.config.extent);
-        let mut swapchain = SwapchainInner::new(&device, Some(self.inner.handle), self.config, &self.surface_info);
+        let mut swapchain = SwapchainInner::new(
+            &device,
+            Some((self.inner.handle, &self.inner.config)),
+            self.config.clone(),
+            &self.surface_info,
+        );
 
         std::mem::swap(&mut swapchain, &mut self.inner);
 
@@ -310,8 +416,8 @@ impl Swapchain {
             device
                 .swapchain_fns
                 .queue_present(device.get_queue(QueueType::Graphics).handle, &present_info)
-                .unwrap();
-        }
+                .unwrap()
+        };
     }
 
     pub fn destroy(&self, device: &graphics::Device) {

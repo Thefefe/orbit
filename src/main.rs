@@ -6,9 +6,10 @@ use ash::vk;
 use assets::{GpuAssets, MAX_MESH_LODS};
 use gltf_loader::load_gltf;
 
+use smallvec::SmallVec;
 use time::Time;
 use winit::{
-    event::{Event, MouseButton, VirtualKeyCode as KeyCode},
+    event::{Event, MouseButton, VirtualKeyCode as KeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
@@ -202,9 +203,301 @@ impl Camera {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Settings {
+#[cfg(windows)]
+// winit on windows only gets the monitor GDI not the "friendly" name
+mod monitor_name_util {
+    use std::{collections::HashMap, ffi::OsString, os::windows::ffi::OsStringExt};
+
+    use windows::Win32::{
+        Devices::Display::{
+            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+            DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+            DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS, QDC_VIRTUAL_MODE_AWARE,
+        },
+        Foundation::WIN32_ERROR,
+        Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFOEXW},
+    };
+
+    pub fn generate_gdi_to_monitor_name_lookup() -> HashMap<String, String> {
+        let mut paths: Vec<DISPLAYCONFIG_PATH_INFO> = Vec::new();
+        let mut modes: Vec<DISPLAYCONFIG_MODE_INFO> = Vec::new();
+        let flags = QDC_ONLY_ACTIVE_PATHS | QDC_VIRTUAL_MODE_AWARE;
+
+        let mut path_count: u32 = 0;
+        let mut mode_count: u32 = 0;
+        unsafe {
+            GetDisplayConfigBufferSizes(flags, &mut path_count, &mut mode_count).unwrap();
+        }
+
+        paths.resize(path_count as usize, DISPLAYCONFIG_PATH_INFO::default());
+        modes.resize(mode_count as usize, DISPLAYCONFIG_MODE_INFO::default());
+
+        unsafe {
+            QueryDisplayConfig(
+                flags,
+                &mut path_count,
+                paths.as_mut_ptr(),
+                &mut mode_count,
+                modes.as_mut_ptr(),
+                None,
+            )
+            .unwrap();
+        }
+        paths.truncate(path_count as usize);
+        modes.truncate(mode_count as usize);
+
+        paths
+            .iter()
+            .map(|path| {
+                let mut target_name = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+                target_name.header.adapterId = path.targetInfo.adapterId;
+                target_name.header.id = path.targetInfo.id;
+                target_name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+                target_name.header.size = std::mem::size_of_val(&target_name) as u32;
+                WIN32_ERROR(unsafe { DisplayConfigGetDeviceInfo(&mut target_name.header) } as u32).ok().unwrap();
+
+                let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+                source_name.header.adapterId = path.targetInfo.adapterId;
+                source_name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                source_name.header.size = std::mem::size_of_val(&source_name) as u32;
+                WIN32_ERROR(unsafe { DisplayConfigGetDeviceInfo(&mut source_name.header) } as u32).ok().unwrap();
+
+                let monitor_name = wide_to_string(&target_name.monitorFriendlyDeviceName);
+                let gdi_name = wide_to_string(&source_name.viewGdiDeviceName);
+
+                (gdi_name, monitor_name)
+            })
+            .collect()
+    }
+
+    fn wide_to_string(mut wide: &[u16]) -> String {
+        if let Some(null) = wide.iter().position(|c| *c == 0) {
+            wide = &wide[..null];
+        }
+        let os_string = OsString::from_wide(wide);
+        os_string.to_string_lossy().into()
+    }
+
+    pub fn monitor_name_form_hmonitor(lookup: &mut HashMap<String, String>, handle: isize) -> Option<String> {
+        let handle = HMONITOR(handle);
+        let mut monitor_info = MONITORINFOEXW::default();
+        monitor_info.monitorInfo.cbSize = std::mem::size_of_val(&monitor_info) as u32;
+        if unsafe { GetMonitorInfoW(handle, &mut monitor_info.monitorInfo).as_bool() } {
+            let gdi_name = wide_to_string(&monitor_info.szDevice);
+            return lookup.remove(&gdi_name);
+        }
+
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMode {
+    Windowed,
+    FullscreenBorderless,
+    FullscreenExclusive,
+}
+
+impl WindowMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            WindowMode::Windowed => "Windowed",
+            WindowMode::FullscreenBorderless => "Borderless",
+            WindowMode::FullscreenExclusive => "Fullscreen",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Monitor {
+    pub handle: winit::monitor::MonitorHandle,
+    pub name: String,
+    pub resolution_range: Range<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AvailableDisplayModes {
+    pub monitors: SmallVec<[Monitor; 4]>,
+    pub resolutions: Vec<[u32; 2]>,
+    pub present_modes: graphics::PresentModeFlags,
+}
+
+impl AvailableDisplayModes {
+    pub fn extract_from_context(context: &graphics::Context) -> Self {
+        let mut monitors = SmallVec::new();
+        let mut resolutions = Vec::new();
+
+        #[cfg(windows)]
+        let mut name_lookup = monitor_name_util::generate_gdi_to_monitor_name_lookup();
+
+        fn aspect_ratio(res: [u32; 2]) -> [u32; 2] {
+            let gcd = num_integer::gcd(res[0], res[1]);
+            res.map(|n| n / gcd)
+        }
+
+        for monitor in context.window.available_monitors() {
+            let mut main_aspect_ratio: Option<[u32; 2]> = None;
+            
+            let resolutions_range_start = resolutions.len();
+            for video_mode in monitor.video_modes() {
+                let aspect_ratio = aspect_ratio(video_mode.size().into());
+                if aspect_ratio == *main_aspect_ratio.get_or_insert(aspect_ratio) {
+                    resolutions.push(video_mode.size().into());
+                }
+            }
+            let resolution_range = resolutions_range_start..resolutions.len();
+
+            #[cfg(not(windows))]
+            let name = monitor.name().unwrap();
+
+            #[cfg(windows)]
+            let name = {
+                use winit::platform::windows::MonitorHandleExtWindows;
+                monitor_name_util::monitor_name_form_hmonitor(&mut name_lookup, monitor.hmonitor())
+                    .unwrap_or_else(|| monitor.name().unwrap())
+            };
+
+            monitors.push(Monitor {
+                handle: monitor,
+                name,
+                resolution_range,
+            })
+        }
+
+        let present_modes = context.device.gpu.surface_info.present_modes;
+
+        Self {
+            monitors,
+            resolutions,
+            present_modes,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DisplaySettings {
+    pub available_display_modes: AvailableDisplayModes,
+    pub window_mode: WindowMode,
+    pub selected_monitor: usize,
+    pub selected_resolution: usize,
     pub present_mode: vk::PresentModeKHR,
+}
+
+impl DisplaySettings {
+    pub fn new(context: &graphics::Context) -> Self {
+        Self {
+            available_display_modes: AvailableDisplayModes::extract_from_context(context),
+            window_mode: WindowMode::Windowed,
+            selected_monitor: 0,
+            selected_resolution: 0,
+            present_mode: vk::PresentModeKHR::IMMEDIATE,
+        }
+    }
+
+    pub fn edit(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Window Mode");
+            egui::ComboBox::from_id_source("window_mode")
+                .selected_text(self.window_mode.name())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.window_mode,
+                        WindowMode::FullscreenExclusive,
+                        WindowMode::FullscreenExclusive.name(),
+                    );
+                    ui.selectable_value(
+                        &mut self.window_mode,
+                        WindowMode::FullscreenBorderless,
+                        WindowMode::FullscreenBorderless.name(),
+                    );
+                    ui.selectable_value(&mut self.window_mode, WindowMode::Windowed, WindowMode::Windowed.name());
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.set_enabled(self.window_mode != WindowMode::Windowed && self.available_display_modes.monitors.len() > 1);
+            ui.label("Monitor");
+            egui::ComboBox::from_id_source("monitors")
+                .selected_text(self.available_display_modes.monitors[self.selected_monitor].name.as_str())
+                .show_ui(ui, |ui| {
+                    for (idx, monitor) in self.available_display_modes.monitors.iter().enumerate() {
+                        ui.selectable_value(&mut self.selected_monitor, idx, monitor.name.as_str());
+                    }
+                });
+        });
+
+        let resolutions = &self.available_display_modes.resolutions
+            [self.available_display_modes.monitors[self.selected_monitor].resolution_range.clone()];
+
+        ui.horizontal(|ui| {
+            ui.set_enabled(self.window_mode != WindowMode::Windowed && resolutions.len() > 1);
+            ui.label("Resolution(TODO)");
+
+            let res_display = |index: usize| {
+                format!(
+                    "{}x{}",
+                    resolutions[index][0], resolutions[index][1],
+                )
+            };
+            egui::ComboBox::from_id_source("resolutions")
+                .selected_text(res_display(self.selected_resolution))
+                .show_ui(ui, |ui| {
+                    for idx in 0..resolutions.len() {
+                        ui.selectable_value(&mut self.selected_resolution, idx, res_display(idx));
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            let present_mode_display = |p: vk::PresentModeKHR| match p {
+                vk::PresentModeKHR::FIFO => "fifo",
+                vk::PresentModeKHR::FIFO_RELAXED => "fifo_relaxed",
+                vk::PresentModeKHR::IMMEDIATE => "immediate",
+                vk::PresentModeKHR::MAILBOX => "mailbox",
+                _ => unimplemented!(),
+            };
+
+            ui.label("present mode");
+            egui::ComboBox::from_id_source("present_modes")
+                .selected_text(format!("{}", present_mode_display(self.present_mode)))
+                .show_ui(ui, |ui| {
+                    for present_mode in self.available_display_modes.present_modes.iter_supported() {
+                        ui.selectable_value(&mut self.present_mode, present_mode, present_mode_display(present_mode));
+                    }
+                });
+        });
+    }
+
+    pub fn selected_monitor(&self) -> winit::monitor::MonitorHandle {
+        self.available_display_modes.monitors[self.selected_monitor].handle.clone()
+    }
+
+    pub fn swapchain_fullscreen_mode(&self) -> graphics::SwapchainFullScreenMode {
+        match self.window_mode {
+            WindowMode::Windowed => graphics::SwapchainFullScreenMode::None,
+            WindowMode::FullscreenBorderless => graphics::SwapchainFullScreenMode::Borderless(self.selected_monitor()),
+            WindowMode::FullscreenExclusive => graphics::SwapchainFullScreenMode::Exclusive(self.selected_monitor()),
+        }
+    }
+
+    pub fn fullscreen_mode(&self) -> Option<winit::window::Fullscreen> {
+        match self.window_mode {
+            WindowMode::Windowed => None,
+            WindowMode::FullscreenBorderless => Some(winit::window::Fullscreen::Borderless(Some(self.selected_monitor()))),
+            
+            // Using borderless for exclusive too, but set to exclusive with VK_EXT_full_screen_exclusive
+            // not sure it's correct but seems to work better then to set it to exclusive here too.
+            WindowMode::FullscreenExclusive => Some(winit::window::Fullscreen::Borderless(Some(self.selected_monitor()))),
+            // WindowMode::FullscreenExclusive => Some(winit::window::Fullscreen::Exclusive(self.selected_video_mode())),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Settings {
+    pub display_settings: DisplaySettings,
+
     pub msaa: graphics::MultisampleCount,
     pub shadow_settings: ShadowSettings,
 
@@ -224,10 +517,10 @@ pub struct Settings {
     pub camera_exposure: f32,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
+impl Settings {
+    pub fn new(display_settings: DisplaySettings) -> Self {
         Self {
-            present_mode: vk::PresentModeKHR::IMMEDIATE,
+            display_settings,
             msaa: Default::default(),
             shadow_settings: Default::default(),
 
@@ -256,24 +549,8 @@ impl Settings {
     }
 
     pub fn edit_general(&mut self, device: &graphics::Device, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let present_mode_display = |p: vk::PresentModeKHR| match p {
-                vk::PresentModeKHR::FIFO => "fifo",
-                vk::PresentModeKHR::FIFO_RELAXED => "fifo_relaxed",
-                vk::PresentModeKHR::IMMEDIATE => "immediate",
-                vk::PresentModeKHR::MAILBOX => "mailbox",
-                _ => unimplemented!(),
-            };
-
-            ui.label("present mode");
-            egui::ComboBox::from_id_source("present_mode")
-                .selected_text(format!("{}", present_mode_display(self.present_mode)))
-                .show_ui(ui, |ui| {
-                    for present_mode in device.gpu.surface_info.present_modes.iter().copied() {
-                        ui.selectable_value(&mut self.present_mode, present_mode, present_mode_display(present_mode));
-                    }
-                });
-        });
+        ui.heading("Display Settings");
+        self.display_settings.edit(ui);
 
         ui.horizontal(|ui| {
             ui.label("MSAA");
@@ -462,7 +739,8 @@ impl App {
         let mut gpu_assets = GpuAssets::new(context);
         let mut scene = SceneData::new(context);
 
-        let mut settings = Settings::default();
+        let display_settings = DisplaySettings::new(context);
+        let mut settings = Settings::new(display_settings);
         let mut shadow_renderer = ShadowRenderer::new(context, settings.shadow_settings);
 
         if context.device.mesh_shader_fns.is_some() {
@@ -635,7 +913,7 @@ impl App {
             aspect_ratio,
         };
 
-        context.swapchain.set_present_mode(settings.present_mode);
+        context.swapchain.set_present_mode(settings.display_settings.present_mode);
 
         Self {
             allocator_visualizer: gpu_allocator::vulkan::AllocatorVisualizer::new(),
@@ -883,7 +1161,9 @@ impl App {
             self.allocator_visualizer.render_memory_block_visualization_windows(egui_ctx, &allocator);
         }
 
-        context.swapchain.set_present_mode(self.settings.present_mode);
+        context.window().set_fullscreen(self.settings.display_settings.fullscreen_mode());
+        context.swapchain.set_present_mode(self.settings.display_settings.present_mode);
+        context.swapchain.set_fullscreen(self.settings.display_settings.swapchain_fullscreen_mode());
 
         const RENDER_MODES: &[KeyCode] = &[
             KeyCode::Key0,
@@ -1277,6 +1557,17 @@ fn main() {
             }
         };
 
+        if let Event::WindowEvent {
+            event: WindowEvent::Focused(focused),
+            ..
+        } = &event
+        {
+            if context.window().fullscreen().is_some() {
+                context.window().set_minimized(!focused);
+                context.swapchain.set_minimized(&context.device, !focused);
+            }
+        }
+
         if event == Event::LoopDestroyed {
             unsafe {
                 context.device.raw.device_wait_idle().unwrap();
@@ -1295,9 +1586,12 @@ fn main() {
 
             let window_size = context.window().inner_size();
             if window_size.width == 0 || window_size.height == 0 {
+                let full_output = egui_ctx.end_frame();
+                egui_state.handle_platform_output(&context.window(), &egui_ctx, full_output.platform_output);
                 return;
             }
 
+            context.swapchain.set_minimized(&context.device, context.window().is_minimized().unwrap());
             context.begin_frame();
 
             let swapchain_image = context.get_swapchain_image();

@@ -223,6 +223,7 @@ impl Context {
                 surface_format,
                 frame_count: FRAME_COUNT,
                 image_count,
+                fullscreen_mode: graphics::SwapchainFullScreenMode::None,
             };
 
             graphics::Swapchain::new(&device, config)

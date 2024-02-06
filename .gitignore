@@ -1,3 +1,9 @@
+.cargo/config
+.cargo/config.toml
 /target
+/.idea
+/.vscode
+/.vs
+Cargo.lock
 log.txt
-.vscode/launch.json
+imgui.ini

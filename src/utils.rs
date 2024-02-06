@@ -88,7 +88,6 @@ pub fn range_bounds_to_base_count(bounds: impl RangeBounds<u32>, min_bound: u32,
     (base, end_bound - base)
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub struct StructuredDataBuilder<const SIZE: usize> {
     pub constants: [u8; SIZE],

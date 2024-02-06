@@ -188,11 +188,12 @@ impl SurfaceInfo {
                 let mut surface_capabilities2 =
                     vk::SurfaceCapabilities2KHR::builder().push_next(&mut fullscreen_support);
 
-                #[cfg(windows)] use winit::platform::windows::MonitorHandleExtWindows;
+                #[cfg(windows)]
+                use winit::platform::windows::MonitorHandleExtWindows;
 
                 #[cfg(windows)]
-                let mut win32_info = vk::SurfaceFullScreenExclusiveWin32InfoEXT::builder()
-                    .hmonitor(monitor.hmonitor() as _);
+                let mut win32_info =
+                    vk::SurfaceFullScreenExclusiveWin32InfoEXT::builder().hmonitor(monitor.hmonitor() as _);
 
                 let mut info = vk::PhysicalDeviceSurfaceInfo2KHR::builder().surface(surface);
 
@@ -228,24 +229,20 @@ impl SurfaceInfo {
         fns: &ext::FullScreenExclusive,
         physical_device: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
-        fullscreen_mode: vk::FullScreenExclusiveEXT
+        fullscreen_mode: vk::FullScreenExclusiveEXT,
     ) -> PresentModeFlags {
-        let mut fullscreen_info = vk::SurfaceFullScreenExclusiveInfoEXT::builder()
-            .full_screen_exclusive(fullscreen_mode);
-        
-        let info = vk::PhysicalDeviceSurfaceInfo2KHR::builder()
-            .surface(surface)
-            .push_next(&mut fullscreen_info);
-        
-        let present_modes = unsafe {
-            fns.get_physical_device_surface_present_modes2(physical_device, &info).unwrap()
-        };
+        let mut fullscreen_info =
+            vk::SurfaceFullScreenExclusiveInfoEXT::builder().full_screen_exclusive(fullscreen_mode);
+
+        let info = vk::PhysicalDeviceSurfaceInfo2KHR::builder().surface(surface).push_next(&mut fullscreen_info);
+
+        let present_modes = unsafe { fns.get_physical_device_surface_present_modes2(physical_device, &info).unwrap() };
 
         PresentModeFlags::from_supported_present_modes(&present_modes)
     }
 
     pub fn query_fullscreen_present_modes(
-        &mut self, 
+        &mut self,
         fns: &ext::FullScreenExclusive,
         physical_device: vk::PhysicalDevice,
         surface: vk::SurfaceKHR,
@@ -254,8 +251,12 @@ impl SurfaceInfo {
             Self::get_fullscreen_present_modes(fns, physical_device, surface, vk::FullScreenExclusiveEXT::ALLOWED);
         self.exclusive_fullscreen_disallowed_present_modes =
             Self::get_fullscreen_present_modes(fns, physical_device, surface, vk::FullScreenExclusiveEXT::DISALLOWED);
-        self.exclusive_fullscreen_controlled_present_modes =
-            Self::get_fullscreen_present_modes(fns, physical_device, surface,vk::FullScreenExclusiveEXT::APPLICATION_CONTROLLED);
+        self.exclusive_fullscreen_controlled_present_modes = Self::get_fullscreen_present_modes(
+            fns,
+            physical_device,
+            surface,
+            vk::FullScreenExclusiveEXT::APPLICATION_CONTROLLED,
+        );
     }
 
     pub fn new(device: &Device, monitor: Option<&winit::monitor::MonitorHandle>) -> Self {
@@ -267,7 +268,7 @@ impl SurfaceInfo {
         );
         if let Some(fullscreen_fns) = device.fullscreen_exclusive_instance_fns.as_ref() {
             surface_info.query_fullscreen_present_modes(fullscreen_fns, device.gpu.handle, device.surface);
-        } 
+        }
         surface_info
     }
 
@@ -498,13 +499,12 @@ pub struct Device {
 
     pub win32_surface_fns: Option<khr::Win32Surface>,
     pub surface_capabilities2_fns: Option<khr::GetSurfaceCapabilities2>,
-    
+
     pub fullscreen_exclusive_fns: Option<ext::FullScreenExclusive>,
     pub fullscreen_exclusive_instance_fns: Option<ext::FullScreenExclusive>,
-    
+
     pub surface_fns: khr::Surface,
     pub surface: vk::SurfaceKHR,
-    
 
     pub gpu: GpuInfo,
 
@@ -1004,7 +1004,7 @@ impl Device {
 
             win32_surface_fns,
             surface_capabilities2_fns,
-            
+
             fullscreen_exclusive_fns,
             fullscreen_exclusive_instance_fns,
 

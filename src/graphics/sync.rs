@@ -227,7 +227,7 @@ impl AccessFlags {
         self.stage_flags = access.stage_mask();
         self.access_flags = access.access_mask();
     }
-    
+
     #[track_caller]
     pub fn extend_image_access(&mut self, access: AccessKind) {
         if self.layout == vk::ImageLayout::UNDEFINED {

@@ -5,10 +5,14 @@ use glam::{vec3, Mat4, Vec3, Vec3A, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
+    app::Settings,
     assets::GpuAssets,
+    camera::Camera,
     collections::arena::Index,
-    graphics::{self, ColorAttachmentDesc, DepthAttachmentDesc, DrawPass, GpuDrawIndiexedIndirectCommand, ResolveMode, LoadOp},
-    math, App, Camera, Settings,
+    graphics::{
+        self, ColorAttachmentDesc, DepthAttachmentDesc, DrawPass, GpuDrawIndiexedIndirectCommand, LoadOp, ResolveMode,
+    },
+    math, App,
 };
 
 use super::forward::TargetAttachments;
@@ -572,7 +576,7 @@ impl DebugRenderer {
                     draw_buffer: mesh_draw_commands_buffer,
                     draw_buffer_offset: mesh_draw_commands_buffer_byte_offset as u64,
                     draw_count: mesh_draw_commands_count as u32,
-                    stride: size_of::<GpuDrawIndiexedIndirectCommand>() as u32
+                    stride: size_of::<GpuDrawIndiexedIndirectCommand>() as u32,
                 });
         }
 

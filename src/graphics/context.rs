@@ -1564,13 +1564,10 @@ impl Context {
                             ui.label(format!("{semaphore:?}, {stage:?}"));
                         }
                     });
-                
-                
-                egui::CollapsingHeader::new("memory_barrier")
-                    .id_source([i, 1])
-                    .show(ui, |ui| {
-                        ui.label(format!("{:#?}", batch.memory_barrier));
-                    });
+
+                egui::CollapsingHeader::new("memory_barrier").id_source([i, 1]).show(ui, |ui| {
+                    ui.label(format!("{:#?}", batch.memory_barrier));
+                });
 
                 egui::CollapsingHeader::new(format!("begin_dependencies ({})", batch.begin_dependencies.len()))
                     .id_source([i, 2])
@@ -1583,7 +1580,6 @@ impl Context {
                         }
                     });
 
-                
                 egui::CollapsingHeader::new(format!("begin_image_barriers ({})", batch.begin_image_barriers.len()))
                     .id_source([i, 3])
                     .show(ui, |ui| {
@@ -1596,7 +1592,7 @@ impl Context {
                         }
                     });
 
-                egui::CollapsingHeader::new(format!("passes ({})", batch.passes.len())).id_source([i,4]).show(
+                egui::CollapsingHeader::new(format!("passes ({})", batch.passes.len())).id_source([i, 4]).show(
                     ui,
                     |ui| {
                         for pass in batch.passes {
@@ -1616,7 +1612,6 @@ impl Context {
                         }
                     });
 
-                    
                 egui::CollapsingHeader::new(format!("finish_image_barriers ({})", batch.finish_image_barriers.len()))
                     .id_source([i, 6])
                     .show(ui, |ui| {

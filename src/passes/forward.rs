@@ -3,7 +3,9 @@ use glam::{vec3, Mat4, Vec3};
 use rand::prelude::Distribution;
 
 use crate::{
+    app::Settings,
     assets::{AssetGraphData, GpuAssets},
+    camera::Camera,
     graphics::{
         self, AccessKind, ColorAttachmentDesc, DepthAttachmentDesc, DrawPass, LoadOp, RenderPass, ResolveMode,
         ShaderStage,
@@ -14,7 +16,7 @@ use crate::{
         OcclusionCullInfo,
     },
     scene::{SceneData, SceneGraphData},
-    App, Camera, Settings,
+    App,
 };
 
 use super::{

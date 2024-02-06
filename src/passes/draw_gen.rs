@@ -1,14 +1,15 @@
 use std::{borrow::Cow, ops::Range};
 
 use ash::vk;
-use glam::{Mat4, Vec4, Vec3};
+use glam::{Mat4, Vec3, Vec4};
 use gpu_allocator::MemoryLocation;
 
 use crate::{
     assets::{AlphaMode, AssetGraphData, GpuMeshletDrawCommand},
+    camera::Projection,
     graphics::{self, AccessKind, ComputePass, ShaderStage},
+    math,
     scene::SceneGraphData,
-    Projection, math,
 };
 
 pub const MAX_DRAW_COUNT: usize = 2_000_000;
@@ -35,22 +36,22 @@ impl OcclusionCullInfo {
     fn visibility_buffer(&self) -> Option<graphics::GraphBufferHandle> {
         match self {
             OcclusionCullInfo::None => None,
-            OcclusionCullInfo::VisibilityRead {
-                visibility_buffer,
-                ..
-            } => Some(*visibility_buffer),
-            OcclusionCullInfo::VisibilityWrite {
-                visibility_buffer,
-                ..
-            } => Some(*visibility_buffer),
+            OcclusionCullInfo::VisibilityRead { visibility_buffer, .. } => Some(*visibility_buffer),
+            OcclusionCullInfo::VisibilityWrite { visibility_buffer, .. } => Some(*visibility_buffer),
         }
     }
 
     fn meshlet_visibility_buffer(&self) -> Option<graphics::GraphBufferHandle> {
         match self {
             OcclusionCullInfo::None => None,
-            OcclusionCullInfo::VisibilityRead { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
-            OcclusionCullInfo::VisibilityWrite { meshlet_visibility_buffer, .. } => *meshlet_visibility_buffer,
+            OcclusionCullInfo::VisibilityRead {
+                meshlet_visibility_buffer,
+                ..
+            } => *meshlet_visibility_buffer,
+            OcclusionCullInfo::VisibilityWrite {
+                meshlet_visibility_buffer,
+                ..
+            } => *meshlet_visibility_buffer,
         }
     }
 
@@ -107,12 +108,12 @@ pub struct CullInfo<'a> {
     pub projection: Projection,
     pub occlusion_culling: OcclusionCullInfo,
     pub alpha_mode_filter: AlphaModeFlags,
-    
+
     pub lod_range: Range<usize>,
     pub lod_base: f32,
     pub lod_step: f32,
     pub lod_target_pos_view_space: Vec3,
-    
+
     pub debug_print: bool,
 }
 
@@ -210,7 +211,7 @@ pub struct GpuCullInfo {
     view_matrix: Mat4,
     reprojection_matrix: Mat4,
     cull_planes: [Vec4; MAX_CULL_PLANES],
-    
+
     cull_plane_count: u32,
     alpha_mode_flags: u32,
     noskip_alpha_mode: u32,
@@ -225,12 +226,12 @@ pub struct GpuCullInfo {
     p00_or_width_recip_x2: f32,
     p11_or_height_recip_x2: f32,
     z_near: f32,
-    
+
     z_far: f32,
     lod_base: f32,
     lod_step: f32,
     min_mesh_lod: u32,
-    
+
     lod_target_pos_view_space: Vec3,
     max_mesh_lod: u32,
 }
@@ -291,26 +292,34 @@ pub fn create_draw_commands(
             cmd.fill_buffer(meshlet_draw_command_buffer, 0, 4, 0);
         });
 
-    ComputePass::new(context, format!("{draw_commands_name}_entity_culling"), entity_cull_pipeline)
-        .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
-        .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .read_buffer(scene.entity_draw_buffer)
-        .read_buffer(assets.mesh_info_buffer)
-        .write_buffer(meshlet_dispatch_buffer)
-        .read_buffer(scene.entity_buffer)
-        .read_buffer(cull_info_buffer)
-        .dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
+    ComputePass::new(
+        context,
+        format!("{draw_commands_name}_entity_culling"),
+        entity_cull_pipeline,
+    )
+    .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
+    .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
+    .read_buffer(scene.entity_draw_buffer)
+    .read_buffer(assets.mesh_info_buffer)
+    .write_buffer(meshlet_dispatch_buffer)
+    .read_buffer(scene.entity_buffer)
+    .read_buffer(cull_info_buffer)
+    .dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
 
-    ComputePass::new(context, format!("{draw_commands_name}_meshlet_culling"), meshlet_cull_pipeline)
-        .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
-        .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .read_buffer(meshlet_dispatch_buffer)
-        .read_buffer(assets.meshlet_buffer)
-        .write_buffer(meshlet_draw_command_buffer)
-        .read_buffer(scene.entity_buffer)
-        .read_buffer(cull_info_buffer)
-        .read_buffer(assets.materials_buffer)
-        .dispatch_indirect(meshlet_dispatch_buffer, 0);
+    ComputePass::new(
+        context,
+        format!("{draw_commands_name}_meshlet_culling"),
+        meshlet_cull_pipeline,
+    )
+    .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
+    .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
+    .read_buffer(meshlet_dispatch_buffer)
+    .read_buffer(assets.meshlet_buffer)
+    .write_buffer(meshlet_draw_command_buffer)
+    .read_buffer(scene.entity_buffer)
+    .read_buffer(cull_info_buffer)
+    .read_buffer(assets.materials_buffer)
+    .dispatch_indirect(meshlet_dispatch_buffer, 0);
 
     meshlet_draw_command_buffer
 }
@@ -353,15 +362,19 @@ pub fn create_meshlet_dispatch_command(
             cmd.fill_buffer(meshlet_dispatch_buffer, 4, 8, 1);
         });
 
-    ComputePass::new(context, format!("{draw_commands_name}_entity_culling"), entity_cull_pipeline)
-        .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
-        .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .read_buffer(scene.entity_draw_buffer)
-        .read_buffer(assets.mesh_info_buffer)
-        .write_buffer(meshlet_dispatch_buffer)
-        .read_buffer(scene.entity_buffer)
-        .read_buffer(cull_info_buffer)
-        .dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
+    ComputePass::new(
+        context,
+        format!("{draw_commands_name}_entity_culling"),
+        entity_cull_pipeline,
+    )
+    .with_dependencies(cull_info.occlusion_culling.visibility_buffer_dependency())
+    .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
+    .read_buffer(scene.entity_draw_buffer)
+    .read_buffer(assets.mesh_info_buffer)
+    .write_buffer(meshlet_dispatch_buffer)
+    .read_buffer(scene.entity_buffer)
+    .read_buffer(cull_info_buffer)
+    .dispatch([scene.entity_draw_count.div_ceil(256) as u32, 1, 1]);
 
     (cull_info_buffer, meshlet_dispatch_buffer)
 }
@@ -403,16 +416,20 @@ pub fn create_meshlet_draw_commands(
             cmd.fill_buffer(meshlet_draw_command_buffer, 0, 4, 0);
         });
 
-    ComputePass::new(context, format!("{draw_commands_name}_meshlet_culling"), meshlet_cull_pipeline)
-        .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
-        .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
-        .read_buffer(meshlet_dispatch_buffer)
-        .read_buffer(assets.meshlet_buffer)
-        .write_buffer(meshlet_draw_command_buffer)
-        .read_buffer(scene.entity_buffer)
-        .read_buffer(cull_info_buffer)
-        .read_buffer(assets.materials_buffer)
-        .dispatch_indirect(meshlet_dispatch_buffer, 0);
+    ComputePass::new(
+        context,
+        format!("{draw_commands_name}_meshlet_culling"),
+        meshlet_cull_pipeline,
+    )
+    .with_dependencies(cull_info.occlusion_culling.meshlet_visibility_buffer_dependency())
+    .with_dependencies(cull_info.occlusion_culling.depth_pyramid_dependency())
+    .read_buffer(meshlet_dispatch_buffer)
+    .read_buffer(assets.meshlet_buffer)
+    .write_buffer(meshlet_draw_command_buffer)
+    .read_buffer(scene.entity_buffer)
+    .read_buffer(cull_info_buffer)
+    .read_buffer(assets.materials_buffer)
+    .dispatch_indirect(meshlet_dispatch_buffer, 0);
 
     meshlet_draw_command_buffer
 }

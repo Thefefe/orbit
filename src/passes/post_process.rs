@@ -1,8 +1,8 @@
 use ash::vk;
 
 use crate::{
+    app::Settings,
     graphics::{self, ColorAttachmentDesc, DrawPass, LoadOp, RenderPass},
-    Settings,
 };
 
 use super::forward::RenderMode;
@@ -41,7 +41,7 @@ pub fn render_post_process(
         load_op: LoadOp::DontCare,
         store: true,
     }]);
-    
+
     let (pyramid_mip_level, pyramid_far_depth) = depth_pyramid_debug.map_or((0, 0.0), |(_, l, d)| (l, d));
 
     DrawPass::new(&mut render_pass, pipeline)
@@ -50,7 +50,7 @@ pub fn render_post_process(
         .push_data::<f32>(bloom_intensity)
         .read_image(src_image)
         .read_image_general(bloom_image)
-        .read_image_general(depth_pyramid_debug.map(|(i,_,_)| i))
+        .read_image_general(depth_pyramid_debug.map(|(i, _, _)| i))
         .push_data::<u32>(pyramid_mip_level)
         .push_data::<f32>(pyramid_far_depth)
         .draw(0..3, 0..1);

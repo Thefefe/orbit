@@ -379,7 +379,7 @@ impl GpuAssets {
                         &mut meshlets,
                     );
                 }
-                
+
                 // for now submeshes are only used for wireframe drawing, first lod is enough
                 if lod_index == 0 {
                     submesh_infos.push(SubmeshInfo {

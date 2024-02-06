@@ -133,7 +133,9 @@ impl EnvironmentMap {
             "equirectangular_to_cube_pipeline",
             &graphics::RasterPipelineDesc::builder()
                 .vertex_shader(graphics::ShaderSource::spv("shaders/utils/unit_cube.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/env_map/equirectangular_cube_map.frag.spv"))
+                .fragment_shader(graphics::ShaderSource::spv(
+                    "shaders/env_map/equirectangular_cube_map.frag.spv",
+                ))
                 .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,
@@ -151,7 +153,9 @@ impl EnvironmentMap {
             "cubemap_convolution_pipeline",
             &graphics::RasterPipelineDesc::builder()
                 .vertex_shader(graphics::ShaderSource::spv("shaders/utils/unit_cube.vert.spv"))
-                .fragment_shader(graphics::ShaderSource::spv("shaders/env_map/cubemap_convolution.frag.spv"))
+                .fragment_shader(graphics::ShaderSource::spv(
+                    "shaders/env_map/cubemap_convolution.frag.spv",
+                ))
                 .rasterizer(graphics::RasterizerDesc {
                     primitive_topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                     polygon_mode: vk::PolygonMode::FILL,

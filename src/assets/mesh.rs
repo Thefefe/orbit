@@ -3,7 +3,7 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4};
 
 use crate::math::{self, Aabb};
 
-use super::{MaterialHandle, GpuMeshlet, MAX_MESHLET_VERTICES, MAX_MESHLET_TRIANGLES, MESHLET_CONE_WEIGHT};
+use super::{GpuMeshlet, MaterialHandle, MAX_MESHLET_TRIANGLES, MAX_MESHLET_VERTICES, MESHLET_CONE_WEIGHT};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -45,8 +45,6 @@ impl GpuMeshVertex {
         math::unpack_normal_tangent_bitangent(self.packed_normals)
     }
 }
-
-
 
 struct SepVertexIter<'a> {
     positions: std::slice::ChunksExact<'a, f32>,
@@ -106,11 +104,11 @@ pub struct SubmeshData {
 
 impl SubmeshData {
     pub fn vertex_range(&self) -> std::ops::Range<usize> {
-        self.vertex_offset..self.vertex_offset+self.vertex_count
+        self.vertex_offset..self.vertex_offset + self.vertex_count
     }
 
     pub fn index_range(&self) -> std::ops::Range<usize> {
-        self.index_offset..self.index_offset+self.index_count
+        self.index_offset..self.index_offset + self.index_count
     }
 }
 
@@ -241,12 +239,16 @@ pub fn build_mesh_lod(
             std::mem::size_of::<GpuMeshVertex>(),
             target_index_count,
             MESH_LOD_TARGET_ERROR,
-            if lock_border { meshopt2::SimplifyOptions::LockBorder.bits() } else { 0 },
-            &mut error as *mut f32
+            if lock_border {
+                meshopt2::SimplifyOptions::LockBorder.bits()
+            } else {
+                0
+            },
+            &mut error as *mut f32,
         );
 
         output_indices.set_len(output_indices_offset + index_count);
-        let result_index_slice = &mut output_indices[output_indices_offset..output_indices_offset+index_count];
+        let result_index_slice = &mut output_indices[output_indices_offset..output_indices_offset + index_count];
 
         meshopt2::optimize_vertex_cache_in_place(result_index_slice, vertices.len());
         meshopt2::optimize_overdraw_in_place(result_index_slice, &vertex_adapter(vertices), 1.05);
@@ -275,7 +277,7 @@ pub fn compute_meshlets(
     for meshlet in raw_meshlets.iter() {
         let data_offset = meshlet_data.len();
         meshlet_data.extend_from_slice(meshlet.vertices);
-        
+
         let triangle_offset = meshlet_data.len() * 4;
         meshlet_data.resize(meshlet_data.len() + meshlet.triangles.len().div_ceil(4), 0);
         let triangle_slice: &mut [u8] = &mut bytemuck::cast_slice_mut::<_, u8>(meshlet_data)
@@ -306,7 +308,6 @@ pub fn compute_meshlets(
             triangle_count: meshlet.triangles.len() as u8 / 3,
         });
     }
-
 }
 
 pub fn optimize_mesh(
@@ -338,7 +339,7 @@ pub fn optimize_mesh(
 
     output_vertices.reserve(vertex_count);
     output_indices.reserve(input_indices.len());
-    
+
     unsafe {
         output_vertices.set_len(vertex_count);
         output_indices.set_len(input_indices.len());

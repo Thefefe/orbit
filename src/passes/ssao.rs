@@ -1,6 +1,6 @@
 use crate::{
+    camera::Camera,
     graphics::{self, AccessKind, ComputePass},
-    Camera,
 };
 use ash::vk;
 use glam::Mat4;
@@ -50,16 +50,16 @@ impl SsaoSettings {
 struct GpuSSAOInfo {
     projection_matrix: Mat4,
     inverse_projection_matrix: Mat4,
-    
+
     ssao_resolution: [u32; 2],
     depth_texture: u32,
     ssao_image: u32,
-    
+
     noise_image: u32,
     noise_size: u32,
     samples_image: u32,
     samples_size: u32,
-    
+
     sample_count: u32,
     min_radius: f32,
     max_radius: f32,
@@ -145,18 +145,22 @@ impl SsaoRenderer {
         };
         let ssao_info_buffer = context.transient_storage_data("ssao_info_buffer", bytemuck::bytes_of(&ssao_info));
 
-        let ssao_pipeline =
-            context.create_compute_pipeline("ssao_pipeline", graphics::ShaderStage::spv("shaders/ssao/ssao.comp.spv"));
+        let ssao_pipeline = context.create_compute_pipeline(
+            "ssao_pipeline",
+            graphics::ShaderStage::spv("shaders/ssao/ssao.comp.spv"),
+        );
 
-        let blur_pipeline =
-            context.create_compute_pipeline("ssao_pipeline", graphics::ShaderStage::spv("shaders/ssao/ssao_blur.comp.spv"));
-        
+        let blur_pipeline = context.create_compute_pipeline(
+            "ssao_pipeline",
+            graphics::ShaderStage::spv("shaders/ssao/ssao_blur.comp.spv"),
+        );
+
         ComputePass::new(context, "ssao_pass", ssao_pipeline)
             .with_dependency(depth_buffer, AccessKind::ComputeShaderRead)
             .with_dependency(ssao_raw_image, AccessKind::ComputeShaderWrite)
             .read_buffer(ssao_info_buffer)
             .dispatch([ssao_resolution[0].div_ceil(8), ssao_resolution[1].div_ceil(8), 1]);
-        
+
         ComputePass::new(context, "ssao_blur_pass", blur_pipeline)
             .push_data(ssao_resolution)
             .read_image_general(ssao_raw_image)

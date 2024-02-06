@@ -3,10 +3,10 @@ use glam::{vec2, vec3a, vec4, Mat4, Vec2, Vec3A, Vec3Swizzles, Vec4, Vec4Swizzle
 use gpu_allocator::MemoryLocation;
 
 use crate::{
+    camera::Camera,
     graphics::{self, AccessKind, ComputePass, ShaderStage},
     math::{self, Aabb},
     scene::SceneGraphData,
-    Camera,
 };
 
 use super::debug_renderer::DebugRenderer;
@@ -187,15 +187,15 @@ fn compute_cluster_aabb(
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
 struct ClusterCullInfo {
     world_to_view_matrix: Mat4,
-	screen_to_view_matrix: Mat4,
-    
+    screen_to_view_matrix: Mat4,
+
     cluster_count: [u32; 3],
-	tile_size_px: u32,
+    tile_size_px: u32,
 
     screen_size: [u32; 2],
-	z_near: f32,
-	z_far: f32,
-    
+    z_near: f32,
+    z_far: f32,
+
     unique_cluster_buffer: u32,
     cluster_offset_image: u32,
     light_index_buffer: u32,
@@ -375,14 +375,8 @@ pub fn compute_clusters(
     let (active_cluster_mask, depth_bounds) = mark_active_clusters(context, &settings, depth_buffer, &camera);
     let unique_cluster_buffer = compact_active_clusters(context, &settings, active_cluster_mask);
 
-    let (light_offset_image, light_index_list) = cluster_light_assignment(
-        context,
-        settings,
-        camera,
-        scene,
-        unique_cluster_buffer,
-        depth_bounds,
-    );
+    let (light_offset_image, light_index_list) =
+        cluster_light_assignment(context, settings, camera, scene, unique_cluster_buffer, depth_bounds);
 
     let data = GpuClusterInfoBuffer::new(
         context,
@@ -575,10 +569,8 @@ pub fn cluster_light_assignment(
         _padding: [0; 2],
     };
 
-    let cluster_cull_info_buffer = context.transient_storage_data(
-        "cluster_cull_info_buffer",
-        bytemuck::bytes_of(&cluster_cull_data),
-    );
+    let cluster_cull_info_buffer =
+        context.transient_storage_data("cluster_cull_info_buffer", bytemuck::bytes_of(&cluster_cull_data));
 
     context
         .add_pass("clear_light_index_buffer")

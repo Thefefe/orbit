@@ -8,11 +8,12 @@ use glam::Vec2Swizzles;
 use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 use crate::{
+    app::Settings,
     assets::{AssetGraphData, GpuAssets},
+    camera::{Camera, Projection},
     graphics::{self, DepthAttachmentDesc, DrawPass, RenderPass, ShaderStage, FRAME_COUNT},
     math,
     scene::{SceneData, SceneGraphData},
-    Camera, Projection, Settings, MAX_SHADOW_CASCADE_COUNT,
 };
 
 use super::{
@@ -22,6 +23,8 @@ use super::{
         OcclusionCullInfo,
     },
 };
+
+pub const MAX_SHADOW_CASCADE_COUNT: usize = 4;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Zeroable, bytemuck::Pod)]
@@ -365,13 +368,16 @@ impl ShadowRenderer {
             }));
 
         if fragment_shader {
-            pipeline_desc = pipeline_desc.fragment_shader(graphics::ShaderSource::spv("shaders/shadow/shadow.frag.spv"));
+            pipeline_desc =
+                pipeline_desc.fragment_shader(graphics::ShaderSource::spv("shaders/shadow/shadow.frag.spv"));
         }
 
         if mesh_shading {
             let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
             pipeline_desc = pipeline_desc
-                .task_shader(ShaderStage::spv("shaders/shadow/shadow.task.spv").spec_u32(0, meshlet_dispatch_size(context)))
+                .task_shader(
+                    ShaderStage::spv("shaders/shadow/shadow.task.spv").spec_u32(0, meshlet_dispatch_size(context)),
+                )
                 .mesh_shader(
                     ShaderStage::spv("shaders/shadow/shadow.mesh.spv")
                         .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),

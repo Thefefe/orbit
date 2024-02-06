@@ -464,10 +464,8 @@ impl graphics::Context {
         let mut add_shader_stage = |shader_stage: &ShaderStage, stage: vk::ShaderStageFlags, spci: usize| {
             let module = self.get_shader_module(&shader_stage.source);
 
-            let mut desc = vk::PipelineShaderStageCreateInfo::builder()
-                .stage(stage)
-                .module(module)
-                .name(cstr::cstr!("main"));
+            let mut desc =
+                vk::PipelineShaderStageCreateInfo::builder().stage(stage).module(module).name(cstr::cstr!("main"));
 
             if shader_stage.has_spec_constants() {
                 spec_infos[spci] = shader_stage.spec_info();

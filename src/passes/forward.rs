@@ -346,6 +346,7 @@ impl ForwardRenderer {
 
         DrawPass::new(&mut render_pass, depth_prepass_pipeline)
             .with_dependencies(meshlet_visibility_buffer.map(|b| (b, AccessKind::TaskShaderRead)))
+            .with_index_buffer(assets.meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT)
             .push_data_ref(&camera_view_projection_matrix)
             .read_buffer(draw_commands_buffer)
             .read_buffer(cull_info_buffer)
@@ -419,6 +420,7 @@ impl ForwardRenderer {
         DrawPass::new(&mut render_pass, depth_prepass_pipeline)
             .with_dependencies(meshlet_visibility_buffer.map(|b| (b, AccessKind::TaskShaderWrite)))
             .with_dependencies(depth_pyramid.map(|i| (i, AccessKind::TaskShaderReadGeneral)))
+            .with_index_buffer(assets.meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT)
             .push_data_ref(&camera_view_projection_matrix)
             .read_buffer(draw_commands_buffer)
             .read_buffer(cull_info_buffer)

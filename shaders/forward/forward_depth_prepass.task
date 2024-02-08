@@ -121,7 +121,6 @@ void main() {
     bool meshlet_occlusion_culling = cull_info.meshlet_visibility_buffer != 0xFFFFFFFF;
     bool visible = true;
 
-    // TODO: remove
 	if (gl_LocalInvocationID.x < dispatch.meshlet_count) {
         uint meshlet_index = dispatch.meshlet_offset + gl_LocalInvocationID.x;
         Meshlet meshlet = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index];

@@ -26,6 +26,7 @@ use crate::{
 use glam::{vec2, vec3, vec3a, vec4, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 use ash::vk;
+use rand::SeedableRng;
 
 use crate::time::Time;
 use smallvec::SmallVec;
@@ -569,9 +570,6 @@ impl App {
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
     pub fn new(
-        // context: &mut graphics::Context,
-        // gltf_path: Option<std::path::PathBuf>,
-        // env_map_path: Option<std::path::PathBuf>,
         args: Args,
         event_loop: &EventLoop<()>,
         window: winit::window::Window,
@@ -661,12 +659,12 @@ impl App {
 
         #[allow(unused_imports)]
         use rand::Rng;
-        let mut _rng = rand::thread_rng();
+        let mut _rng = rand::rngs::StdRng::from_seed([69; 32]);
 
         // let prefab = scene.entities.pop().unwrap();
         // let pos_range = -128.0..=128.0;
         // let rot_range = 0.0..=2.0 * PI;
-        // for _ in 0..20_000 {
+        // for _ in 0..200_000 {
         //     let mut entity = prefab.clone();
 
         //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| _rng.gen_range(pos_range.clone())));

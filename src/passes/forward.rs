@@ -12,8 +12,7 @@ use crate::{
     },
     math,
     passes::draw_gen::{
-        create_meshlet_dispatch_command, create_meshlet_draw_commands, meshlet_dispatch_size, AlphaModeFlags, CullInfo,
-        OcclusionCullInfo,
+        create_meshlet_dispatch_command, create_meshlet_draw_commands, AlphaModeFlags, CullInfo, OcclusionCullInfo,
     },
     scene::{SceneData, SceneGraphData},
     App,
@@ -315,15 +314,14 @@ impl ForwardRenderer {
                 });
 
             if mesh_shading {
-                let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
                 desc = desc
                     .task_shader(
                         ShaderStage::spv("shaders/forward/forward_depth_prepass.task.spv")
-                            .spec_u32(0, meshlet_dispatch_size(context)),
+                            .spec_u32(0, context.gpu().task_shader_workgroup_size()),
                     )
                     .mesh_shader(
                         ShaderStage::spv("shaders/forward/forward_depth_prepass.mesh.spv")
-                            .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                            .spec_u32(0, context.gpu().mesh_shader_workgroup_size()),
                     );
             } else {
                 desc = desc.vertex_shader(graphics::ShaderSource::spv(
@@ -342,10 +340,8 @@ impl ForwardRenderer {
                 store: true,
             });
 
-        let meshlet_visibility_buffer = mesh_shading.then_some(scene.meshlet_visibility_buffer);
-
         DrawPass::new(&mut render_pass, depth_prepass_pipeline)
-            .with_dependencies(meshlet_visibility_buffer.map(|b| (b, AccessKind::TaskShaderRead)))
+        .with_dependency(scene.meshlet_visibility_buffer, AccessKind::TaskShaderWrite)
             .with_index_buffer(assets.meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT)
             .push_data_ref(&camera_view_projection_matrix)
             .read_buffer(draw_commands_buffer)
@@ -407,18 +403,17 @@ impl ForwardRenderer {
         }
 
         let mut render_pass =
-            RenderPass::new(context, "early_forward_depth_prepass").depth_attachment(DepthAttachmentDesc {
+            RenderPass::new(context, "late_forward_depth_prepass").depth_attachment(DepthAttachmentDesc {
                 target: target_attachments.depth_target,
                 resolve: target_attachments.depth_resolve.map(|i| (i, ResolveMode::Min)),
                 load_op: LoadOp::Load,
                 store: true,
             });
 
-        let meshlet_visibility_buffer = mesh_shading.then_some(scene.meshlet_visibility_buffer);
         let depth_pyramid = mesh_shading.then_some(depth_pyramid);
 
         DrawPass::new(&mut render_pass, depth_prepass_pipeline)
-            .with_dependencies(meshlet_visibility_buffer.map(|b| (b, AccessKind::TaskShaderWrite)))
+            .with_dependency(scene.meshlet_visibility_buffer, AccessKind::TaskShaderWrite)
             .with_dependencies(depth_pyramid.map(|i| (i, AccessKind::TaskShaderReadGeneral)))
             .with_index_buffer(assets.meshlet_data_buffer, 0, vk::IndexType::UINT8_EXT)
             .push_data_ref(&camera_view_projection_matrix)
@@ -572,15 +567,14 @@ impl ForwardRenderer {
                 });
 
             if mesh_shading {
-                let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
                 desc = desc
                     .task_shader(
                         ShaderStage::spv("shaders/forward/forward.task.spv")
-                            .spec_u32(0, meshlet_dispatch_size(context)),
+                            .spec_u32(0, context.gpu().task_shader_workgroup_size()),
                     )
                     .mesh_shader(
                         ShaderStage::spv("shaders/forward/forward.mesh.spv")
-                            .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                            .spec_u32(0, context.gpu().mesh_shader_workgroup_size()),
                     );
             } else {
                 desc = desc.vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward.vert.spv"));
@@ -616,15 +610,14 @@ impl ForwardRenderer {
                 });
 
             if mesh_shading {
-                let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
                 desc = desc
                     .task_shader(
                         ShaderStage::spv("shaders/forward/forward.task.spv")
-                            .spec_u32(0, meshlet_dispatch_size(context)),
+                            .spec_u32(0, context.gpu().task_shader_workgroup_size()),
                     )
                     .mesh_shader(
                         ShaderStage::spv("shaders/forward/forward.mesh.spv")
-                            .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                            .spec_u32(0, context.gpu().mesh_shader_workgroup_size()),
                     );
             } else {
                 desc = desc.vertex_shader(graphics::ShaderSource::spv("shaders/forward/forward.vert.spv"));

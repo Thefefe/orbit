@@ -3,7 +3,11 @@ use glam::{vec2, vec3, vec3a, vec4, Vec2, Vec3, Vec3A, Vec4};
 
 use crate::math::{self, Aabb};
 
-use super::{GpuMeshlet, MaterialHandle, MAX_MESHLET_TRIANGLES, MAX_MESHLET_VERTICES, MESHLET_CONE_WEIGHT};
+use super::{GpuMeshlet, MaterialHandle};
+
+pub const MAX_MESHLET_VERTICES: usize = 64;
+pub const MAX_MESHLET_TRIANGLES: usize = 64;
+pub const MESHLET_CONE_WEIGHT: f32 = 0.0;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
@@ -230,7 +234,7 @@ pub fn build_mesh_lod(
     output_indices.reserve(output_indices.len() + indices.len());
     let mut error = 0.0;
     unsafe {
-        let index_count = meshopt2::ffi::meshopt_simplify(
+        let index_count = meshopt::ffi::meshopt_simplify(
             output_indices.as_mut_ptr().add(output_indices_offset),
             indices.as_ptr(),
             indices.len(),
@@ -240,7 +244,7 @@ pub fn build_mesh_lod(
             target_index_count,
             MESH_LOD_TARGET_ERROR,
             if lock_border {
-                meshopt2::SimplifyOptions::LockBorder.bits()
+                meshopt::SimplifyOptions::LockBorder.bits()
             } else {
                 0
             },
@@ -250,8 +254,8 @@ pub fn build_mesh_lod(
         output_indices.set_len(output_indices_offset + index_count);
         let result_index_slice = &mut output_indices[output_indices_offset..output_indices_offset + index_count];
 
-        meshopt2::optimize_vertex_cache_in_place(result_index_slice, vertices.len());
-        meshopt2::optimize_overdraw_in_place(result_index_slice, &vertex_adapter(vertices), 1.05);
+        meshopt::optimize_vertex_cache_in_place(result_index_slice, vertices.len());
+        meshopt::optimize_overdraw_in_place(result_index_slice, &vertex_adapter(vertices), 1.05);
     };
 
     error
@@ -266,14 +270,14 @@ pub fn compute_meshlets(
     meshlet_data: &mut Vec<u32>,
     meshlets: &mut Vec<GpuMeshlet>,
 ) {
-    let raw_meshlets = meshopt2::build_meshlets(
+    let raw_meshlets = meshopt::build_meshlets(
         indices,
         &vertex_adapter(&vertices),
         MAX_MESHLET_VERTICES,
         MAX_MESHLET_TRIANGLES,
         MESHLET_CONE_WEIGHT,
     );
-
+    
     for meshlet in raw_meshlets.iter() {
         let data_offset = meshlet_data.len();
         meshlet_data.extend_from_slice(meshlet.vertices);
@@ -284,14 +288,9 @@ pub fn compute_meshlets(
             [triangle_offset..triangle_offset + meshlet.triangles.len()];
         triangle_slice.clone_from_slice(&meshlet.triangles);
 
-        // self.meshlet_data.extend(meshlet.triangles.chunks(4).map(|chunk| {
-        //     let mut packed = 0u32;
-        //     for (i, u) in chunk.iter().enumerate() {
-        //         packed |= (*u << (8 * i)) as u32;
-        //     }
-        //     packed
-        // }));
-        let meshlet_bounds = meshopt2::compute_meshlet_bounds(meshlet, &vertex_adapter(vertices));
+        let triangle_count: u8 = (meshlet.triangles.len() / 3).try_into().unwrap();
+
+        let meshlet_bounds = meshopt::compute_meshlet_bounds(meshlet, &vertex_adapter(vertices));
         meshlets.push(GpuMeshlet {
             bounding_sphere: Vec4::from_array([
                 meshlet_bounds.center[0],
@@ -302,10 +301,10 @@ pub fn compute_meshlets(
             cone_axis: meshlet_bounds.cone_axis_s8,
             cone_cutoff: meshlet_bounds.cone_cutoff_s8,
             vertex_offset,
-            data_offset: data_offset as u32,
+            data_offset: data_offset.try_into().unwrap(),
             material_index: material.slot() as u16,
             vertex_count: meshlet.vertices.len() as u8,
-            triangle_count: meshlet.triangles.len() as u8 / 3,
+            triangle_count,
         });
     }
 }
@@ -327,7 +326,7 @@ pub fn optimize_mesh(
 
     let vertex_count = unsafe {
         remap_buffer.set_len(input_vertices.len());
-        meshopt2::ffi::meshopt_generateVertexRemap(
+        meshopt::ffi::meshopt_generateVertexRemap(
             remap_buffer.as_mut_ptr(),
             input_indices.as_ptr(),
             input_indices.len(),
@@ -344,7 +343,7 @@ pub fn optimize_mesh(
         output_vertices.set_len(vertex_count);
         output_indices.set_len(input_indices.len());
 
-        meshopt2::ffi::meshopt_remapVertexBuffer(
+        meshopt::ffi::meshopt_remapVertexBuffer(
             output_vertices.as_mut_ptr().cast(),
             input_vertices.as_ptr().cast(),
             input_vertices.len(),
@@ -352,7 +351,7 @@ pub fn optimize_mesh(
             remap_buffer.as_ptr(),
         );
 
-        meshopt2::ffi::meshopt_remapIndexBuffer(
+        meshopt::ffi::meshopt_remapIndexBuffer(
             output_indices.as_mut_ptr(),
             input_indices.as_ptr(),
             input_indices.len(),
@@ -360,15 +359,15 @@ pub fn optimize_mesh(
         );
     };
 
-    meshopt2::optimize_vertex_cache_in_place(output_indices, vertex_count);
-    meshopt2::optimize_overdraw_in_place(output_indices, &vertex_adapter(output_vertices), 1.05);
-    meshopt2::optimize_vertex_fetch_in_place(output_indices, output_vertices);
+    meshopt::optimize_vertex_cache_in_place(output_indices, vertex_count);
+    meshopt::optimize_overdraw_in_place(output_indices, &vertex_adapter(output_vertices), 1.05);
+    meshopt::optimize_vertex_fetch_in_place(output_indices, output_vertices);
 }
 
-pub fn vertex_adapter(vertices: &[GpuMeshVertex]) -> meshopt2::VertexDataAdapter {
+pub fn vertex_adapter(vertices: &[GpuMeshVertex]) -> meshopt::VertexDataAdapter {
     let position_offset = bytemuck::offset_of!(GpuMeshVertex, position);
     let vertex_stride = std::mem::size_of::<GpuMeshVertex>();
-    meshopt2::VertexDataAdapter::new(bytemuck::cast_slice(vertices), vertex_stride, position_offset).unwrap()
+    meshopt::VertexDataAdapter::new(bytemuck::cast_slice(vertices), vertex_stride, position_offset).unwrap()
 }
 
 #[repr(C)]

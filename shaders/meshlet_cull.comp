@@ -198,7 +198,7 @@ void main() {
 			sampled_depth = textureLod(
 				sampler2D(GetTexture2D(cull_info.depth_pyramid), GetSampler(REDUCE_MIN_SAMPLER)),
 				(aabb.xy + aabb.zw) * 0.5,
-				floor(log2(max(width, height)))
+				log2(max(width, height))
 			).x;
 			visible = sphere_closest_depth >= sampled_depth;
 		}
@@ -214,8 +214,6 @@ void main() {
 
 	// draw command fill
 	if (should_draw) {
-		// uint data_offset = mesh_info.meshlet_data_offset + meshlet.data_offset;
-		// uint vertex_offset = mesh_info.vertex_offset + meshlet.vertex_offset;
 		uint data_offset = meshlet.data_offset;
 		uint vertex_offset = meshlet.vertex_offset;
 		MeshletDrawCommand draw_command;

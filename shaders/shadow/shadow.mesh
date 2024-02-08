@@ -7,7 +7,7 @@
 #extension GL_EXT_mesh_shader : require
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = 64, max_primitives = 64) out;
+layout(triangles, max_vertices = MESHLET_VERTEX_COUNT, max_primitives = MESHLET_TRIANGLE_COUNT) out;
 
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;

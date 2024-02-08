@@ -322,6 +322,10 @@ impl Context {
         }
     }
 
+    pub fn gpu(&self) -> &graphics::GpuInfo {
+        &self.device.gpu
+    }
+
     pub fn record_and_submit(&self, f: impl FnOnce(&graphics::CommandRecorder)) {
         puffin::profile_function!();
         let mut record_submit_stuff = self.record_submit_stuff.lock();

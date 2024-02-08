@@ -434,26 +434,17 @@ pub fn create_meshlet_draw_commands(
     meshlet_draw_command_buffer
 }
 
-pub fn meshlet_dispatch_size(context: &graphics::Context) -> u32 {
-    if let Some(mesh_shader) = context.device.gpu.mesh_shader_properties() {
-        // sub 32 would overcomplicate meshlet visibility offsets
-        mesh_shader.max_preferred_task_work_group_invocations.next_multiple_of(32)
-    } else {
-        64
-    }
-}
-
 fn entitiy_cull_pipeline(context: &mut graphics::Context) -> graphics::ComputePipeline {
     context.create_compute_pipeline(
         "entity_cull_pipeline",
-        ShaderStage::spv("shaders/entity_cull.comp.spv").spec_u32(0, meshlet_dispatch_size(context)),
+        ShaderStage::spv("shaders/entity_cull.comp.spv").spec_u32(0, context.gpu().task_shader_workgroup_size()),
     )
 }
 
 fn meshlet_cull_pipeline(context: &mut graphics::Context) -> graphics::ComputePipeline {
     context.create_compute_pipeline(
         "meshlet_cull_pipeline",
-        ShaderStage::spv("shaders/meshlet_cull.comp.spv").spec_u32(0, meshlet_dispatch_size(context)),
+        ShaderStage::spv("shaders/meshlet_cull.comp.spv").spec_u32(0, context.gpu().task_shader_workgroup_size()),
     )
 }
 

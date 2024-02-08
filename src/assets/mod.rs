@@ -203,10 +203,6 @@ const MAX_SUBMESH_COUNT: usize = 10_000 * 8;
 // 64 (meshlet vertex index), 24 (approx. micro index)
 const MAX_MESHLET_DATA_COUNT: usize = MAX_MESHLET_COUNT * (64 + 24);
 
-pub const MAX_MESHLET_VERTICES: usize = 64;
-pub const MAX_MESHLET_TRIANGLES: usize = 64;
-pub const MESHLET_CONE_WEIGHT: f32 = 0.0;
-
 #[derive(Clone, Copy)]
 pub struct AssetGraphData {
     pub vertex_buffer: graphics::GraphBufferHandle,
@@ -417,6 +413,7 @@ impl GpuAssets {
         for meshlet in meshlets.iter_mut() {
             meshlet.vertex_offset += vertex_range.start as u32;
             meshlet.data_offset += meshlet_data_range.start as u32;
+            // log::info!("{meshlet:?}");
         }
 
         for submesh in submesh_infos.iter_mut() {

@@ -365,6 +365,15 @@ impl GpuInfo {
             self.properties.properties10.limits.framebuffer_color_sample_counts.contains(sample_count.to_vk())
         })
     }
+
+    pub fn task_shader_workgroup_size(&self) -> u32 {
+        // sub 32 would overcomplicate meshlet visibility offsets
+        self.properties.mesh_shader_properties.max_preferred_task_work_group_invocations.next_multiple_of(32)
+    }
+
+    pub fn mesh_shader_workgroup_size(&self) -> u32 {
+        self.properties.mesh_shader_properties.max_preferred_mesh_work_group_invocations
+    }
 }
 
 fn enumerate_gpus<'a>(

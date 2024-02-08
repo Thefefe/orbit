@@ -235,10 +235,10 @@ void main() {
 				}
 			}
 #else
-			GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID/32] = 0;
+			GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).entries[gID/32] = 0;
 			barrier();
 			uint bitset = uint(visible) << (gID % 32);
-			atomicOr(GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).submeshes[gID/32], bitset);
+			atomicOr(GetBuffer(VisibilityBuffer, cull_info.visibility_buffer).entries[gID/32], bitset);
 #endif
 		}
 	}

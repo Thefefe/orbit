@@ -880,7 +880,8 @@ impl RenderGraph {
         let mut src_accesses: Vec<graphics::AccessFlags> =
             self.resources.iter().map(|r| r.initial_access.access_flags()).collect();
 
-        let mut dst_accesses = vec![graphics::AccessFlags::default(); self.resources.len()];
+        // let mut dst_accesses = vec![graphics::AccessFlags::default(); self.resources.len()];
+        let mut dst_accesses = src_accesses.clone();
 
         let mut pending_image_barriers = Vec::new();
         let mut pending_res_semaphores = Vec::new();

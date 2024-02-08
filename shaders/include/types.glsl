@@ -3,6 +3,10 @@
 #define MAX_SHADOW_CASCADE_COUNT 4
 #define MAX_MESH_LODS 8
 
+// keep in sync with the ones in src/assets/mesh.rs
+#define MESHLET_VERTEX_COUNT 64
+#define MESHLET_TRIANGLE_COUNT 64
+
 struct GlobalData {
     ivec2 screen_size;
     uint elapsed_frames;

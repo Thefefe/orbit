@@ -19,7 +19,7 @@ use crate::{
 use super::{
     debug_renderer::DebugRenderer,
     draw_gen::{
-        create_meshlet_dispatch_command, create_meshlet_draw_commands, meshlet_dispatch_size, AlphaModeFlags, CullInfo,
+        create_meshlet_dispatch_command, create_meshlet_draw_commands, AlphaModeFlags, CullInfo,
         OcclusionCullInfo,
     },
 };
@@ -373,14 +373,14 @@ impl ShadowRenderer {
         }
 
         if mesh_shading {
-            let mesh_shader_props = context.device.gpu.mesh_shader_properties().unwrap();
             pipeline_desc = pipeline_desc
                 .task_shader(
-                    ShaderStage::spv("shaders/shadow/shadow.task.spv").spec_u32(0, meshlet_dispatch_size(context)),
+                    ShaderStage::spv("shaders/shadow/shadow.task.spv")
+                        .spec_u32(0, context.gpu().task_shader_workgroup_size()),
                 )
                 .mesh_shader(
                     ShaderStage::spv("shaders/shadow/shadow.mesh.spv")
-                        .spec_u32(0, mesh_shader_props.max_preferred_mesh_work_group_invocations),
+                        .spec_u32(0, context.gpu().mesh_shader_workgroup_size()),
                 );
         } else {
             pipeline_desc = pipeline_desc.vertex_shader(graphics::ShaderSource::spv("shaders/shadow/shadow.vert.spv"));

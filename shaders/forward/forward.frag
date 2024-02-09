@@ -323,7 +323,6 @@ void main() {
             metallic *= metallic_roughness.b;
             roughness *= metallic_roughness.g;
         }
-        roughness = max(0.05, roughness);
 
         if (material.emissive_texture_index != TEXTURE_NONE) {
             emissive *= texture(GetSampledTexture2D(material.emissive_texture_index), vout.uv).rgb;

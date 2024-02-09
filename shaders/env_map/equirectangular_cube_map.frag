@@ -19,8 +19,10 @@ vec2 sample_spherical_map(vec3 v)
     return uv;
 }
 
+const vec4 MAX_COLOR = vec4(10000.0);
+
 void main() {
     vec3 normal = normalize(in_local_pos);
     vec2 uv = sample_spherical_map(normal);
-    out_color = vec4(texture(GetSampledTexture2D(image_index), uv).rgb, 1.0);
+    out_color = clamp(vec4(texture(GetSampledTexture2D(image_index), uv).rgb, 1.0), vec4(0.0), MAX_COLOR);
 }

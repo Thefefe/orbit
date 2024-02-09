@@ -62,9 +62,14 @@ RegisterBuffer(PerFrameBuffer, {
 });
 
 struct MeshVertex {
-    float position[3];
-    i8vec4 packed_normals;
-    float uv_coord[2];
+    // float position[3];
+    // i8vec4 packed_normals;
+    // float uv_coord[2];
+    vec3 position;
+    i8vec4 normal;
+    vec2 uv;
+    i8vec4 tangent;
+    uint _padding;
 };
 
 struct EntityData {

@@ -41,7 +41,7 @@ void main() {
         MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[vertex_index];
         gl_MeshVerticesEXT[vi].gl_Position = mvp_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
-        vout[vi].uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
+        vout[vi].uv = vertex.uv;
         vout[vi].material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;
     }
 

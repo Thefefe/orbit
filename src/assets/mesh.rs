@@ -9,27 +9,33 @@ pub const MAX_MESHLET_VERTICES: usize = 64;
 pub const MAX_MESHLET_TRIANGLES: usize = 64;
 pub const MESHLET_CONE_WEIGHT: f32 = 0.0;
 
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct GpuMeshVertex {
     pub position: [f32; 3],
-    pub packed_normals: [i8; 4],
+    pub normal: [i8; 4],
     pub uv_coord: [f32; 2],
+    pub tangent: [i8; 4],
+    pub _padding: u32,
 }
 impl GpuMeshVertex {
     pub fn new(position: Vec3, uv_coord: Vec2, normal: Vec3, tangent: Vec4) -> Self {
         Self {
             position: position.to_array(),
-            packed_normals: math::pack_normal_tangent_bitangent(normal, tangent),
             uv_coord: uv_coord.to_array(),
+            normal: normal.extend(0.0).to_array().map(math::pack_f32_to_snorm_u8),
+            tangent: tangent.to_array().map(math::pack_f32_to_snorm_u8),
+            _padding: 0,
         }
     }
 
     pub fn from_arrays(position: [f32; 3], uv_coord: [f32; 2], normal: [f32; 3], tangent: [f32; 4]) -> Self {
         Self {
             position,
-            packed_normals: math::pack_normal_tangent_bitangent(Vec3::from_array(normal), Vec4::from_array(tangent)),
             uv_coord,
+            normal: [normal[0], normal[1], normal[2], 0.0].map(math::pack_f32_to_snorm_u8),
+            tangent: tangent.map(math::pack_f32_to_snorm_u8),
+            _padding: 0,
         }
     }
 
@@ -42,11 +48,16 @@ impl GpuMeshVertex {
     }
 
     pub fn pack_normals(&mut self, normal: Vec3, tangent: Vec4) {
-        self.packed_normals = math::pack_normal_tangent_bitangent(normal, tangent);
+        self.normal = normal.extend(0.0).to_array().map(math::pack_f32_to_snorm_u8);
+        self.tangent = tangent.to_array().map(math::pack_f32_to_snorm_u8);
+        // self.packed_normals = math::pack_normal_tangent_bitangent(normal, tangent);
     }
 
     pub fn unpack_normals(&self) -> (Vec3, Vec4) {
-        math::unpack_normal_tangent_bitangent(self.packed_normals)
+        let normal = Vec4::from_array(self.normal.map(math::unpack_snorm_u8_to_f32)).truncate();
+        let tangent = Vec4::from_array(self.tangent.map(math::unpack_snorm_u8_to_f32));
+        (normal, tangent)
+        // math::unpack_normal_tangent_bitangent(self.packed_normals)
     }
 }
 

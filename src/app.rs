@@ -661,22 +661,22 @@ impl App {
         use rand::Rng;
         let mut _rng = rand::rngs::StdRng::from_seed([69; 32]);
 
-        let prefab = scene.entities.pop().unwrap();
-        let pos_range = -48.0..=48.0;
-        let rot_range = 0.0..=2.0 * PI;
-        for _ in 0..20_000 {
-            let mut entity = prefab.clone();
+        // let prefab = scene.entities.pop().unwrap();
+        // let pos_range = -128.0..=128.0;
+        // let rot_range = 0.0..=2.0 * PI;
+        // for _ in 0..200_000 {
+        //     let mut entity = prefab.clone();
 
-            entity.transform.position = Vec3::from_array(std::array::from_fn(|_| _rng.gen_range(pos_range.clone())));
-            entity.transform.orientation = Quat::from_euler(
-                glam::EulerRot::YXZ,
-                _rng.gen_range(rot_range.clone()),
-                _rng.gen_range(rot_range.clone()),
-                _rng.gen_range(rot_range.clone()),
-            );
+        //     entity.transform.position = Vec3::from_array(std::array::from_fn(|_| _rng.gen_range(pos_range.clone())));
+        //     entity.transform.orientation = Quat::from_euler(
+        //         glam::EulerRot::YXZ,
+        //         _rng.gen_range(rot_range.clone()),
+        //         _rng.gen_range(rot_range.clone()),
+        //         _rng.gen_range(rot_range.clone()),
+        //     );
 
-            scene.add_entity(entity);
-        }
+        //     scene.add_entity(entity);
+        // }
 
         // let horizontal_range = -8.0..8.0;
         // let vertical_range = 0.0..=6.0;

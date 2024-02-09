@@ -55,7 +55,7 @@ void main() {
 
     gl_Position = view_proj * model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
-    vout.uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
+    vout.uv = vertex.uv;
 
     uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_command_buffer).draws[gl_DrawID].meshlet_index;
     vout.material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;

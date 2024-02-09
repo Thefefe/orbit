@@ -37,13 +37,16 @@ void main() {
 
         gl_MeshVerticesEXT[vi].gl_Position = mvp_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
 
-        vout[vi].uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
+        vout[vi].uv = vertex.uv;
         
         mat3 normal_matrix = mat3(GetBuffer(EntityBuffer, entity_buffer).entities[entity_index].normal_matrix);
 
-        unpack_normal_tangent(vertex.packed_normals, vout[vi].normal, vout[vi].tangent);
-        vout[vi].normal  = normalize(normal_matrix * vout[vi].normal);
-        vout[vi].tangent = vec4(normalize(normal_matrix * vout[vi].tangent.xyz), vout[vi].tangent.w);
+        // unpack_normal_tangent(vertex.packed_normals, vout[vi].normal, vout[vi].tangent);
+        vec3 normal  = vec3(vertex.normal) / 127.0;
+        vec4 tangent = vec4(vertex.tangent) / 127.0;
+        
+        vout[vi].normal  = normalize(normal_matrix * normal);
+        vout[vi].tangent = vec4(normalize(normal_matrix * tangent.xyz), tangent.w);
 
         uint material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;
         vout[vi].material_index = GetBuffer(PerFrameBuffer, per_frame_buffer).render_mode == 9 ? meshlet_index : material_index;

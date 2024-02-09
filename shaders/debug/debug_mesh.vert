@@ -14,11 +14,7 @@ layout(push_constant) uniform PushConstants {
 };
 
 void main() {
-    vec3 position = vec3(
-        GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex].position[0],
-        GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex].position[1],
-        GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex].position[2]
-    );
+    vec3 position = GetBuffer(VertexBuffer, vertex_buffer).vertices[gl_VertexIndex].position;
     DebugMeshInstance instance = GetBuffer(DebugMeshInstanceBuffer, instance_buffer).instances[gl_InstanceIndex];
     gl_Position = view_projection_matrix * instance.matrix * vec4(position, 1.0);
     gl_Position.z += 0.00001;

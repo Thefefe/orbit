@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub const MAX_DRAW_COUNT: usize = 2_000_000;
-pub const MAX_MESHLET_DISPATCH_COUNT: usize = 1_000_000;
+pub const MAX_MESHLET_DISPATCH_COUNT: usize = 4_000_000;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum OcclusionCullInfo {

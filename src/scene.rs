@@ -300,7 +300,7 @@ pub struct SceneGraphData {
     pub meshlet_visibility_buffer: graphics::GraphBufferHandle,
 }
 
-const MAX_INSTANCE_COUNT: usize = 100_000;
+const MAX_INSTANCE_COUNT: usize = 1000_000;
 const MAX_LIGHT_COUNT: usize = 2_000;
 
 struct Buffers {

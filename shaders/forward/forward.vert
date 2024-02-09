@@ -14,18 +14,20 @@ void main() {
         GetBuffer(MeshletDataBuffer, meshlet_data_buffer).vertex_indices[gl_VertexIndex];
     MeshVertex vertex = GetBuffer(VertexBuffer, vertex_buffer).vertices[vertex_index];
     mat4 model_matrix = GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].model_matrix;
-    vout.world_pos = model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    vout.world_pos = model_matrix * vec4(vertex.position, 1.0);
 
-    // gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).view_projection * vout.world_pos;
-    gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).view_projection * model_matrix * vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0);
+    gl_Position = GetBuffer(PerFrameBuffer, per_frame_buffer).view_projection * vout.world_pos;
 
-    vout.uv = vec2(vertex.uv_coord[0], vertex.uv_coord[1]);
+    vout.uv = vertex.uv;
     
     mat3 normal_matrix = mat3(GetBuffer(EntityBuffer, entity_buffer).entities[gl_InstanceIndex].normal_matrix);
+    // unpack_normal_tangent(vertex.packed_normals, vout.normal, vout.tangent);
 
-    unpack_normal_tangent(vertex.packed_normals, vout.normal, vout.tangent);
-    vout.normal  = normalize(normal_matrix * vout.normal);
-    vout.tangent = vec4(normalize(normal_matrix * vout.tangent.xyz), vout.tangent.w);
+    vec3 normal  = vec3(vertex.normal) / 127.0;
+    vec4 tangent = vec4(vertex.tangent) / 127.0;
+    
+    vout.normal  = normalize(normal_matrix * normal);
+    vout.tangent = vec4(normalize(normal_matrix * tangent.xyz), tangent.w);
 
     uint meshlet_index = GetBuffer(MeshletDrawCommandBuffer, draw_command_buffer).draws[gl_DrawID].meshlet_index;
     uint material_index = GetBuffer(MeshletBuffer, meshlet_buffer).meshlets[meshlet_index].material_index;

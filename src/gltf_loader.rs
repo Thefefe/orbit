@@ -468,17 +468,15 @@ fn load_gltf_mesh(
         cache.input_indices.extend(index_iter);
 
         if !have_normals {
-            // log::info!("generating normals for model '{name}' primitive {prim_index}...");
-            // mesh_data.compute_normals();
             compute_normals(&mut cache.input_vertices, &mut cache.input_indices);
             have_normals = true;
         }
 
         if !have_tangents {
             if have_normals && have_uvs {
-                // log::info!("generating tangents for model '{name}' primitive {prim_index}...");
-                // mesh_data.compute_tangents();
-                compute_tangents(&mut cache.input_vertices, &mut cache.input_indices);
+                if !compute_tangents(&mut cache.input_vertices, &mut cache.input_indices) {
+                    log::error!("failed to generate tangents for '{name}' primitive {prim_index}");
+                }
             } else {
                 log::warn!(
                     "can't generate tangents for '{name}' primitive {prim_index}, because it has no uv coordinates"

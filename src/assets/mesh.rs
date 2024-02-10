@@ -18,6 +18,7 @@ pub struct GpuMeshVertex {
     pub tangent: [i8; 4],
     pub _padding: u32,
 }
+
 impl GpuMeshVertex {
     pub fn new(position: Vec3, uv_coord: Vec2, normal: Vec3, tangent: Vec4) -> Self {
         Self {
@@ -47,18 +48,34 @@ impl GpuMeshVertex {
         Vec2::from_array(self.uv_coord)
     }
 
-    pub fn pack_normals(&mut self, normal: Vec3, tangent: Vec4) {
+    pub fn pack_normal(&mut self, normal: Vec3) {
         self.normal = normal.extend(0.0).to_array().map(math::pack_f32_to_snorm_u8);
-        self.tangent = tangent.to_array().map(math::pack_f32_to_snorm_u8);
-        // self.packed_normals = math::pack_normal_tangent_bitangent(normal, tangent);
     }
 
-    pub fn unpack_normals(&self) -> (Vec3, Vec4) {
-        let normal = Vec4::from_array(self.normal.map(math::unpack_snorm_u8_to_f32)).truncate();
-        let tangent = Vec4::from_array(self.tangent.map(math::unpack_snorm_u8_to_f32));
-        (normal, tangent)
-        // math::unpack_normal_tangent_bitangent(self.packed_normals)
+    pub fn unpack_normal(&self) -> Vec3 {
+        Vec4::from_array(self.normal.map(math::unpack_snorm_u8_to_f32)).truncate()
     }
+
+    pub fn pack_tangent(&mut self, tangent: Vec4) {
+        self.tangent = tangent.to_array().map(math::pack_f32_to_snorm_u8);
+    }
+
+    pub fn unpack_tangent(&self) -> Vec4 {
+        Vec4::from_array(self.tangent.map(math::unpack_snorm_u8_to_f32))
+    }
+
+    // pub fn pack_normals(&mut self, normal: Vec3, tangent: Vec4) {
+    //     self.normal = normal.extend(0.0).to_array().map(math::pack_f32_to_snorm_u8);
+    //     self.tangent = tangent.to_array().map(math::pack_f32_to_snorm_u8);
+    //     // self.packed_normals = math::pack_normal_tangent_bitangent(normal, tangent);
+    // }
+
+    // pub fn unpack_normals(&self) -> (Vec3, Vec4) {
+    //     let normal = Vec4::from_array(self.normal.map(math::unpack_snorm_u8_to_f32)).truncate();
+    //     let tangent = Vec4::from_array(self.tangent.map(math::unpack_snorm_u8_to_f32));
+    //     (normal, tangent)
+    //     // math::unpack_normal_tangent_bitangent(self.packed_normals)
+    // }
 }
 
 struct SepVertexIter<'a> {
@@ -419,73 +436,52 @@ pub fn compute_normals(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
     }
 
     for (vertex_index, vertex) in vertices.iter_mut().enumerate() {
-        let (_, tangent) = vertex.unpack_normals();
-        vertex.pack_normals(normals[vertex_index].normalize().into(), tangent);
+        vertex.pack_normal(normals[vertex_index].normalize().into());
+    }
+}
+
+struct MikktspaceGeometry<'a> {
+    vertices: &'a mut [GpuMeshVertex],
+    indices: &'a [u32],
+}
+
+impl MikktspaceGeometry<'_> {
+    fn index(&self, face: usize, vert: usize) -> usize {
+        self.indices[face * 3 + vert] as usize
+    }
+}
+
+impl bevy_mikktspace::Geometry for MikktspaceGeometry<'_> {
+    fn num_faces(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    fn num_vertices_of_face(&self, _: usize) -> usize {
+        3
+    }
+
+    fn position(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.vertices[self.index(face, vert)].position
+    }
+
+    fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.vertices[self.index(face, vert)].unpack_normal().to_array()
+    }
+
+    fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
+        self.vertices[self.index(face, vert)].uv_coord
+    }
+
+    fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
+        self.vertices[self.index(face, vert)].pack_tangent(Vec4::from_array(tangent));
     }
 }
 
 /// Calculates the tangents for each vertex.
 ///
 /// Every vertex must have valid normals and uv coordinates
-pub fn compute_tangents(vertices: &mut [GpuMeshVertex], indices: &[u32]) {
-    let mut tan_vec = Vec::new();
-    tan_vec.resize(vertices.len() * 2, Vec3::ZERO);
-    let (tan1, tan2) = tan_vec.split_at_mut(vertices.len());
-
-    for triangle in indices.chunks_exact(3) {
-        let i1 = triangle[0] as usize;
-        let i2 = triangle[1] as usize;
-        let i3 = triangle[2] as usize;
-        let v1 = vertices[i1].position_a();
-        let v2 = vertices[i2].position_a();
-        let v3 = vertices[i3].position_a();
-        let w1 = vertices[i1].uv();
-        let w2 = vertices[i2].uv();
-        let w3 = vertices[i3].uv();
-        let x1 = v2.x - v1.x;
-        let x2 = v3.x - v1.x;
-        let y1 = v2.y - v1.y;
-        let y2 = v3.y - v1.y;
-        let z1 = v2.z - v1.z;
-        let z2 = v3.z - v1.z;
-        let s1 = w2.x - w1.x;
-        let s2 = w3.x - w1.x;
-        let t1 = w2.y - w1.y;
-        let t2 = w3.y - w1.y;
-        let r = 1.0 / (s1 * t2 - s2 * t1);
-
-        let sdir = vec3(
-            (t2 * x1 - t1 * x2) * r,
-            (t2 * y1 - t1 * y2) * r,
-            (t2 * z1 - t1 * z2) * r,
-        );
-        let tdir = vec3(
-            (s1 * x2 - s2 * x1) * r,
-            (s1 * y2 - s2 * y1) * r,
-            (s1 * z2 - s2 * z1) * r,
-        );
-        tan1[i1] += sdir;
-        tan1[i2] += sdir;
-        tan1[i3] += sdir;
-        tan2[i1] += tdir;
-        tan2[i2] += tdir;
-        tan2[i3] += tdir;
-    }
-
-    for i in 0..vertices.len() {
-        let (normal, _) = vertices[i].unpack_normals();
-        let t = tan1[i];
-        // Gram-Schmidt orthogonalize
-        let tangent = (t - normal * normal.dot(t)).normalize();
-        // Calculate handedness
-        let bitangent = if normal.cross(t).dot(tan2[i]).is_sign_negative() {
-            -1.0
-        } else {
-            1.0
-        };
-
-        vertices[i].pack_normals(normal, tangent.extend(bitangent));
-    }
+pub fn compute_tangents(vertices: &mut [GpuMeshVertex], indices: &[u32]) -> bool {
+    bevy_mikktspace::generate_tangents(&mut MikktspaceGeometry { vertices, indices })
 }
 
 pub fn sep_vertex_merge(

@@ -39,6 +39,7 @@ parking_lot = "0.12.1"
 smallvec = "1.11.2"
 meshopt = "0.2.0"
 num-integer = "0.1.45"
+bevy_mikktspace = "0.12.1"
 
 [target.'cfg(windows)'.dependencies]
 # only used to get monitor name, because winit's implementation only gets the monitor GDI

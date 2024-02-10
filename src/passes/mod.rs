@@ -7,3 +7,4 @@ pub mod forward;
 pub mod post_process;
 pub mod shadow_renderer;
 pub mod ssao;
+pub mod hdr_resolve;

@@ -469,7 +469,7 @@ impl graphics::Context {
 
             if shader_stage.has_spec_constants() {
                 spec_infos[spci] = shader_stage.spec_info();
-                desc = desc.specialization_info(&spec_infos[0]);
+                desc = desc.specialization_info(&spec_infos[spci]);
             }
 
             stages.push(desc.build());

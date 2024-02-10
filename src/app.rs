@@ -9,14 +9,7 @@ use crate::{
     input::Input,
     math,
     passes::{
-        bloom::{compute_bloom, BloomSettings},
-        cluster::{compute_clusters, debug_cluster_volumes, ClusterDebugSettings, ClusterSettings},
-        debug_renderer::DebugRenderer,
-        env_map_loader::EnvironmentMap,
-        forward::{ForwardRenderer, RenderMode, TargetAttachments},
-        post_process::render_post_process,
-        shadow_renderer::{ShadowRenderer, ShadowSettings},
-        ssao::{SsaoRenderer, SsaoSettings},
+        bloom::{compute_bloom, BloomSettings}, cluster::{compute_clusters, debug_cluster_volumes, ClusterDebugSettings, ClusterSettings}, debug_renderer::DebugRenderer, env_map_loader::EnvironmentMap, forward::{ForwardRenderer, RenderMode, TargetAttachments}, hdr_resolve::hdr_resolve, post_process::render_post_process, shadow_renderer::{ShadowRenderer, ShadowSettings}, ssao::{SsaoRenderer, SsaoSettings}
     },
     scene::{EntityData, Light, LightParams, SceneData, Transform},
     Args,
@@ -1230,6 +1223,10 @@ impl App {
             &self.frozen_camera,
             selected_light,
         );
+
+        if let Some(resolve_image) = target_attachments.color_resolve {
+            hdr_resolve(&mut self.context, target_attachments.color_target, resolve_image);
+        }
 
         let bloom_image = self.settings.bloom_enabled.then(|| {
             compute_bloom(

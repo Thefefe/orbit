@@ -198,7 +198,8 @@ const MAX_MESH_COUNT: usize = 10_000;
 const MAX_VERTEX_COUNT: usize = 4_000_000;
 const MAX_INDEX_COUNT: usize = 12_000_000;
 const MAX_MATERIAL_COUNT: usize = 1_000;
-const MAX_MESHLET_COUNT: usize = MAX_MESH_COUNT * 64;
+// const MAX_MESHLET_COUNT: usize = 240_000;
+const MAX_MESHLET_COUNT: usize = 256_000;
 const MAX_SUBMESH_COUNT: usize = 10_000 * 8;
 // 64 (meshlet vertex index), 24 (approx. micro index)
 const MAX_MESHLET_DATA_COUNT: usize = MAX_MESHLET_COUNT * (64 + 24);

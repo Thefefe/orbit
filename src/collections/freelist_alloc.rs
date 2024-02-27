@@ -19,12 +19,6 @@ struct Block {
     next_index: Option<arena::Index>,
 }
 
-#[derive(Clone, Copy)]
-struct FreeBlock {
-    index: arena::Index,
-    size: usize,
-}
-
 pub struct FreeListAllocator {
     blocks: arena::Arena<Block>,
 }
@@ -47,8 +41,8 @@ impl FreeListAllocator {
         let (free_block_index, free_block) = self
             .blocks
             .iter()
-            .filter(|(_, block)| block.free && block.range.end >= size)
-            .min_by_key(|(_, block)| block.range.end)?;
+            .filter(|(_, block)| block.free && block.range.size() >= size)
+            .min_by_key(|(_, block)| block.range.size())?;
 
         if free_block.range.size() == size {
             self.blocks[free_block_index].free = false;

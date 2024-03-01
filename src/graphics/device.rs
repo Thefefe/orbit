@@ -5,13 +5,16 @@ use ash::{
     vk::{self, Handle},
 };
 use parking_lot::Mutex;
+use smallvec::SmallVec;
 
 use std::{
     collections::HashSet,
     ffi::{c_void, CStr, CString},
     mem::ManuallyDrop,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Range},
     ptr::NonNull,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
 
 use gpu_allocator::{
@@ -76,6 +79,16 @@ pub enum QueueType {
     Graphics,
     AsyncCompute,
     AsyncTransfer,
+}
+
+impl QueueType {
+    pub fn name(&self) -> &'static str {
+        match self {
+            QueueType::Graphics => "Graphics",
+            QueueType::AsyncCompute => "AsyncCompute",
+            QueueType::AsyncTransfer => "AsyncTransfer",
+        }
+    }
 }
 
 impl QueueType {
@@ -368,7 +381,10 @@ impl GpuInfo {
 
     pub fn task_shader_workgroup_size(&self) -> u32 {
         // sub 32 would overcomplicate meshlet visibility offsets
-        self.properties.mesh_shader_properties.max_preferred_task_work_group_invocations.next_multiple_of(32)
+        self.properties
+            .mesh_shader_properties
+            .max_preferred_task_work_group_invocations
+            .next_multiple_of(32)
     }
 
     pub fn mesh_shader_workgroup_size(&self) -> u32 {
@@ -495,6 +511,8 @@ pub struct AllocatorStuff {
 pub struct Queue {
     pub handle: vk::Queue,
     pub family: QueueFamily,
+    pub semaphore: vk::Semaphore,
+    pub next_semaphore_value: AtomicU64,
 }
 
 pub struct Device {
@@ -769,7 +787,9 @@ impl Device {
             .uniform_and_storage_buffer8_bit_access(true)
             .draw_indirect_count(true)
             .host_query_reset(true)
-            .sampler_filter_minmax(true);
+            .sampler_filter_minmax(true)
+            .timeline_semaphore(true)
+            .host_query_reset(true);
 
         let mut vulkan13_features = vk::PhysicalDeviceVulkan13Features::builder()
             .dynamic_rendering(true)
@@ -826,9 +846,15 @@ impl Device {
         };
 
         let get_queue = |family: QueueFamily| unsafe {
+            let mut semaphore_type =
+                vk::SemaphoreTypeCreateInfo::builder().semaphore_type(vk::SemaphoreType::TIMELINE).initial_value(0);
+            let create_info = vk::SemaphoreCreateInfo::builder().push_next(&mut semaphore_type);
+            let semaphore = device.create_semaphore(&create_info, None).unwrap();
             Queue {
                 handle: device.get_device_queue(family.index, 0),
                 family,
+                semaphore,
+                next_semaphore_value: AtomicU64::new(1),
             }
         };
 
@@ -1061,11 +1087,6 @@ impl Device {
         &self.queue_family_indices[0..self.queue_family_count as usize]
     }
 
-    #[inline]
-    pub fn queue_submit(&self, ty: QueueType, submits: &[vk::SubmitInfo2], fence: vk::Fence) {
-        unsafe { self.raw.queue_submit2(self.get_queue(ty).handle, submits, fence).unwrap() }
-    }
-
     pub fn create_fence(&self, name: &str, signaled: bool) -> vk::Fence {
         let create_info = vk::FenceCreateInfo::builder().flags(if signaled {
             vk::FenceCreateFlags::SIGNALED
@@ -1195,6 +1216,132 @@ impl Device {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct SubmitInfo<'a> {
+    pub batches: &'a [CommandBatch],
+    pub semaphores: &'a [SemaphoreInfo],
+}
+
+#[derive(Clone, Copy)]
+pub struct SemaphoreInfo {
+    pub handle: vk::Semaphore,
+    pub stage: vk::PipelineStageFlags2,
+    pub value: u64,
+}
+
+impl SemaphoreInfo {
+    fn to_semaphore_submit_info(self) -> vk::SemaphoreSubmitInfo {
+        vk::SemaphoreSubmitInfo::builder()
+            .semaphore(self.handle)
+            .stage_mask(self.stage)
+            .value(self.value)
+            .build()
+    }
+}
+
+#[derive(Clone)]
+pub struct CommandBatch {
+    pub command_buffer: vk::CommandBuffer,
+    pub wait_semaphore_range: Range<usize>,
+    pub signal_semaphore_range: Range<usize>,
+}
+
+impl CommandBatch {
+    fn to_command_buffer_submit_info(&self) -> vk::CommandBufferSubmitInfo {
+        vk::CommandBufferSubmitInfo::builder().command_buffer(self.command_buffer).build()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SemaphoreWaitTimeout;
+
+impl std::error::Error for SemaphoreWaitTimeout {}
+
+impl std::fmt::Display for SemaphoreWaitTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the wait has reached the timeout period")
+    }
+}
+
+impl Device {
+    pub fn queue_submit(&self, ty: QueueType, submit_info: SubmitInfo) -> u64 {
+        puffin::profile_function!(ty.name());
+
+        // TODO: reuse allocations
+        let command_buffer_infos =
+            submit_info.batches.iter().map(|b| b.to_command_buffer_submit_info()).collect::<SmallVec<[_; 1]>>();
+
+        let mut semaphore_infos =
+            submit_info.semaphores.iter().map(|s| s.to_semaphore_submit_info()).collect::<SmallVec<[_; 2]>>();
+
+        let queue = self.get_queue(ty);
+        let value = queue.next_semaphore_value.fetch_add(1, Ordering::Relaxed);
+        semaphore_infos.push(
+            SemaphoreInfo {
+                handle: queue.semaphore,
+                stage: vk::PipelineStageFlags2::ALL_COMMANDS,
+                value,
+            }
+            .to_semaphore_submit_info(),
+        );
+
+        let submits = submit_info
+            .batches
+            .iter()
+            .enumerate()
+            .map(|(index, batch)| {
+                let signal_semaphore_range = if index == submit_info.batches.len() - 1 {
+                    batch.signal_semaphore_range.start..batch.signal_semaphore_range.end + 1
+                } else {
+                    batch.signal_semaphore_range.clone()
+                };
+
+                vk::SubmitInfo2::builder()
+                    .command_buffer_infos(&command_buffer_infos[index..index + 1])
+                    .wait_semaphore_infos(&semaphore_infos[batch.wait_semaphore_range.clone()])
+                    .signal_semaphore_infos(&semaphore_infos[signal_semaphore_range])
+                    .build()
+            })
+            .collect::<SmallVec<[_; 1]>>();
+
+        unsafe {
+            self.raw.queue_submit2(self.get_queue(ty).handle, &submits, vk::Fence::null()).unwrap();
+        }
+        value
+    }
+
+    pub fn wait_queue_semaphore(
+        &self,
+        ty: QueueType,
+        value: u64,
+        timeout: Option<Duration>,
+    ) -> Result<(), SemaphoreWaitTimeout> {
+        puffin::profile_function!(ty.name());
+
+        if value == 0 {
+            return Ok(());
+        }
+
+        let queue = self.get_queue(ty);
+        if unsafe { self.raw.get_semaphore_counter_value(queue.semaphore).unwrap() } < value {
+            let wait_info = vk::SemaphoreWaitInfo::builder()
+                .semaphores(std::slice::from_ref(&queue.semaphore))
+                .values(std::slice::from_ref(&value));
+
+            let timeout = timeout.map(|d| d.as_nanos().try_into().ok()).flatten().unwrap_or(u64::MAX);
+
+            unsafe {
+                self.raw.wait_semaphores(&wait_info, timeout).map_err(|e| match e {
+                    vk::Result::TIMEOUT => SemaphoreWaitTimeout,
+                    e => panic!("{e}"),
+                })?
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl Drop for Device {
     fn drop(&mut self) {
         unsafe {
@@ -1207,6 +1354,14 @@ impl Drop for Device {
 
             for descriptor_layout in &self.descriptor_layouts {
                 self.raw.destroy_descriptor_set_layout(*descriptor_layout, None);
+            }
+
+            self.raw.destroy_semaphore(self.graphics_queue.semaphore, None);
+            if let Some(queue) = &self.async_compute_queue {
+                self.raw.destroy_semaphore(queue.semaphore, None);
+            }
+            if let Some(queue) = &self.async_transfer_queue {
+                self.raw.destroy_semaphore(queue.semaphore, None);
             }
 
             ManuallyDrop::drop(&mut self.allocator_stuff.lock().allocator);

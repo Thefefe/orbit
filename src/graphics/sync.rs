@@ -318,8 +318,8 @@ pub fn extend_memory_barrier(barrier: &mut vk::MemoryBarrier2, src_access: Acces
 }
 
 pub fn is_memory_barrier_not_useless(barrier: &vk::MemoryBarrier2) -> bool {
-    barrier.src_stage_mask != vk::PipelineStageFlags2::TOP_OF_PIPE
-        || barrier.dst_stage_mask != vk::PipelineStageFlags2::BOTTOM_OF_PIPE
+    barrier.src_stage_mask != vk::PipelineStageFlags2::NONE
+        || barrier.dst_stage_mask != vk::PipelineStageFlags2::NONE
         || barrier.src_access_mask | barrier.dst_access_mask != vk::AccessFlags2::NONE
 }
 

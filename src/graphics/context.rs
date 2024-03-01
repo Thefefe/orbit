@@ -31,16 +31,14 @@ const MAX_TIMESTAMP_COUNT: u32 = 128;
 pub struct Frame {
     first_time_use: bool,
 
-    in_flight_fence: vk::Fence,
+    in_flight_fence_value: u64,
     image_available_semaphore: graphics::Semaphore,
     render_finished_semaphore: graphics::Semaphore,
-    transfer_finished_semaphore: graphics::Semaphore,
     uses_async_transfer: bool,
 
     command_pools: Vec<Mutex<graphics::CommandPool>>,
     global_buffer: graphics::BufferRaw,
 
-    // in_use_transient_resources: TransientResourceCache,
     compiled_graph: CompiledRenderGraph,
     graph_debug_info: GraphDebugInfo,
     timestamp_query_pool: vk::QueryPool,
@@ -53,120 +51,189 @@ struct RecordSubmitStuff {
 
 struct BufferCopy {
     dst_buffer: vk::Buffer,
-    region: vk::BufferCopy,
+    dst_offset: usize,
+    src_offset: usize,
+    size: usize,
 }
 
-struct TransferQueue {
+struct StagingPage {
     command_pool: graphics::CommandPool,
-    fence: vk::Fence,
-    staging_buffer: graphics::BufferRaw,
-    staging_buffer_offset: usize,
-    buffer_copies: Vec<BufferCopy>,
+    fence_value: u64,
 }
 
-impl TransferQueue {
-    const STAGING_BUFFER_SIZE: usize = 64 * 1024 * 1024;
-    fn new(device: &graphics::Device) -> Self {
-        let command_pool = graphics::CommandPool::new(device, "trasfer_command_pool", QueueType::AsyncTransfer);
-        let fence = device.create_fence("transfer_queue_fence", true);
+struct StagedTransferQueue {
+    staging_buffer: graphics::BufferRaw,
+    pages: Vec<StagingPage>,
+    page_index: usize,
+    page_size: usize,
+    
+    pending_data: Vec<u8>,
+    pending_copies: Vec<BufferCopy>,
+
+    last_fence_value: u64,
+}
+
+const STAGING_PAGE_SIZE: usize = 12 * 1024 * 1024;
+const STAGING_PAGE_COUNT: usize = 3;
+
+impl StagedTransferQueue {
+    fn new(device: &graphics::Device, page_count: usize, page_size: usize) -> Self {
+        assert!(page_count > 0, "at least one page is required");
+        assert!(page_size >= 1024, "page_size must be at least 1024 bytes");
+        
+        // TODO: handle alignment based on gpu properties
+        
         let staging_buffer = graphics::BufferRaw::create_impl(
             device,
             "transfer_queue_staging_buffer".into(),
             &graphics::BufferDesc {
-                size: Self::STAGING_BUFFER_SIZE,
+                size: page_count * page_size,
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
             },
             None,
         );
 
+        let pages = Vec::from_iter((0..page_count).map(|_| {
+            let command_pool = graphics::CommandPool::new(
+                device,
+                "staged_trasfer_command_pool",
+                QueueType::AsyncTransfer
+            );
+            
+            StagingPage { command_pool, fence_value: 0 }
+        }));
+
         Self {
-            command_pool,
-            fence,
             staging_buffer,
-            staging_buffer_offset: 0,
-            buffer_copies: Vec::new(),
+            pages,
+            page_index: 0,
+            page_size,
+            
+            pending_data: Vec::new(),
+            pending_copies: Vec::new(),
+
+            last_fence_value: 0,
         }
     }
 
     fn destroy(&self, device: &graphics::Device) {
-        self.command_pool.destroy(device);
-        unsafe {
-            device.raw.destroy_fence(self.fence, None);
+        for page in self.pages.iter() {
+            page.command_pool.destroy(device);
         }
         graphics::BufferRaw::destroy_impl(device, &self.staging_buffer);
     }
 
-    fn remaining_size(&self) -> usize {
-        Self::STAGING_BUFFER_SIZE - self.staging_buffer_offset
+    fn pending_bytes(&self) -> usize {
+        self.pending_data.len()
     }
 
+    #[track_caller]
     fn queue_write_buffer(&mut self, buffer: &graphics::BufferView, offset: usize, data: &[u8]) {
+        assert!(data.len() <= self.page_size, "copies bigger then the page size isn't yet supported");
+
         if data.len() == 0 {
             return;
         }
         puffin::profile_function!();
 
-        let buffer_copy = BufferCopy {
+        let src_offset = self.pending_data.len();
+        self.pending_data.extend_from_slice(data);
+        self.pending_copies.push(BufferCopy {
             dst_buffer: buffer.handle,
-            region: vk::BufferCopy {
-                src_offset: self.staging_buffer_offset as u64,
-                dst_offset: offset as u64,
-                size: data.len() as u64,
-            },
-        };
-        self.buffer_copies.push(buffer_copy);
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                data.as_ptr(),
-                self.staging_buffer.mapped_ptr.unwrap().as_ptr().add(self.staging_buffer_offset),
-                data.len(),
-            );
-        }
-        self.staging_buffer_offset += data.len();
+            dst_offset: offset,
+            src_offset,
+            size: data.len(),
+        });
     }
 
-    fn submit(&mut self, device: &graphics::Device, semaphore: Option<vk::Semaphore>) -> bool {
+    fn fence_value_after_submit(&self) -> u64 {
+        self.last_fence_value + self.pending_bytes().div_ceil(self.page_size) as u64
+    }
+
+    fn submit(&mut self, device: &graphics::Device) -> Option<u64> {
         puffin::profile_function!();
+        
+        if self.pending_copies.is_empty() {
+            return None;
+        }
+        
+        let mut copy_cursor = 0;
+        let mut byte_cursor = 0;
+        loop {
+            puffin::profile_scope!("transfer_submit_page");
+            let mut local_byte_count = 0;
+            let mut local_copy_count = 0;
+            loop {
+                let copy_index = copy_cursor + local_copy_count;
 
-        if self.buffer_copies.is_empty() {
-            return false;
-        }
-        unsafe {
-            puffin::profile_scope!("wait_for_trasnfer_fence");
-            device.raw.wait_for_fences(&[self.fence], false, u64::MAX).unwrap();
-        }
-        unsafe {
-            device.raw.reset_fences(&[self.fence]).unwrap();
-        }
-        self.command_pool.reset(device);
+                if copy_index >= self.pending_copies.len() {
+                    break;
+                }
 
-        let cmd = self.command_pool.begin_new(device);
-        if let Some(semaphore) = semaphore {
-            cmd.signal_semaphore(semaphore, vk::PipelineStageFlags2::TRANSFER);
-        }
-        let cmd = cmd.record(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        cmd.begin_debug_label("async_transfer", Some([1.0, 1.0, 0.0, 1.0]));
-        for buffer_copy in self.buffer_copies.drain(..) {
-            cmd.copy_buffer(
-                self.staging_buffer.handle,
-                buffer_copy.dst_buffer,
-                std::slice::from_ref(&buffer_copy.region),
+                if local_byte_count + self.pending_copies[copy_index].size > self.page_size {
+                    break;
+                }
+
+                local_byte_count += self.pending_copies[copy_index].size;
+                local_copy_count += 1;
+            }
+
+            device.wait_queue_semaphore(QueueType::AsyncTransfer, self.pages[self.page_index].fence_value, None)
+                .unwrap();
+
+            let buffer_offset = self.page_index * self.page_size;
+            unsafe {
+                puffin::profile_scope!("copy_data_to_staging_buffer");
+                std::ptr::copy_nonoverlapping(
+                    self.pending_data.as_ptr().add(byte_cursor),
+                    self.staging_buffer.mapped_ptr.unwrap().as_ptr().add(buffer_offset),
+                    local_byte_count
+                );
+            }
+
+            self.pages[self.page_index].command_pool.reset(device);
+            let recorder = self.pages[self.page_index].command_pool
+                .begin_new(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            
+            {
+                puffin::profile_scope!("record_copy_commands");
+                recorder.begin_debug_label("async_copy", Some([1.0, 1.0, 0.0, 1.0]));
+                for command in &self.pending_copies[copy_cursor..copy_cursor+local_copy_count] {
+                    let region = vk::BufferCopy {
+                        src_offset: (buffer_offset + command.src_offset - byte_cursor).try_into().unwrap(),
+                        dst_offset: command.dst_offset.try_into().unwrap(),
+                        size: command.size.try_into().unwrap(),
+                    };
+                    
+                    recorder.copy_buffer(self.staging_buffer.handle, command.dst_buffer, &[region]);
+                }
+                recorder.end_debug_label();
+            }
+
+            drop(recorder);
+
+            let fence_value = device.queue_submit(
+                QueueType::AsyncTransfer,
+                self.pages[self.page_index].command_pool.submit_info()
             );
+            self.pages[self.page_index].fence_value = fence_value;
+            self.last_fence_value = fence_value;
+
+            copy_cursor += local_copy_count;
+            byte_cursor += local_byte_count;
+            
+            self.page_index = (self.page_index + 1) % self.pages.len();
+
+            if copy_cursor == self.pending_copies.len() {
+                break;
+            }
         }
-        cmd.end_debug_label();
-        drop(cmd);
 
-        let submit_info = self.command_pool.buffers()[0].submit_info();
+        self.pending_copies.clear();
+        self.pending_data.clear();
 
-        device.queue_submit(QueueType::AsyncTransfer, &[submit_info], self.fence);
-        unsafe {
-            puffin::profile_scope!("wait_for_trasnfer_fence");
-            device.raw.wait_for_fences(&[self.fence], false, u64::MAX).unwrap();
-        }
-        self.staging_buffer_offset = 0;
-
-        true
+        Some(self.last_fence_value)
     }
 }
 
@@ -194,7 +261,7 @@ pub struct Context {
     start: Instant,
 
     record_submit_stuff: Mutex<RecordSubmitStuff>,
-    transfer_queue: Mutex<TransferQueue>,
+    transfer_queue: Mutex<StagedTransferQueue>,
 
     frame_context: Option<FrameContext>,
 }
@@ -230,16 +297,8 @@ impl Context {
         };
 
         let frames = std::array::from_fn(|_frame_index| {
-            let in_flight_fence = device.create_fence("in_flight_fence", true);
             let image_available_semaphore = device.create_semaphore("image_available_semaphore");
             let render_finished_semaphore = device.create_semaphore("render_finished_semaphore");
-            let transfer_finished_semaphore = device.create_semaphore("transfer_finished_semaphore");
-
-            // let command_pool = graphics::CommandPool::new(
-            //     &device,
-            //     &format!("command_pool_frame{frame_index}"),
-            //     QueueType::Graphics
-            // );
 
             let global_buffer = graphics::BufferRaw::create_impl(
                 &device,
@@ -263,13 +322,11 @@ impl Context {
             Frame {
                 first_time_use: true,
 
-                in_flight_fence,
+                in_flight_fence_value: 0,
                 image_available_semaphore,
                 render_finished_semaphore,
-                transfer_finished_semaphore,
                 uses_async_transfer: false,
 
-                // command_pool,
                 command_pools: (0..rayon::current_num_threads())
                     .map(|i| {
                         Mutex::new(graphics::CommandPool::new(
@@ -281,7 +338,6 @@ impl Context {
                     .collect(),
                 global_buffer,
 
-                // in_use_transient_resources: TransientResourceCache::new(),
                 compiled_graph: CompiledRenderGraph::new(),
                 graph_debug_info: GraphDebugInfo::new(),
                 timestamp_query_pool,
@@ -295,7 +351,7 @@ impl Context {
             Mutex::new(RecordSubmitStuff { command_pool, fence })
         };
 
-        let transfer_queue = Mutex::new(TransferQueue::new(&device));
+        let transfer_queue = Mutex::new(StagedTransferQueue::new(&device, STAGING_PAGE_COUNT, STAGING_PAGE_SIZE));
 
         Self {
             window,
@@ -329,19 +385,17 @@ impl Context {
     pub fn record_and_submit(&self, f: impl FnOnce(&graphics::CommandRecorder)) {
         puffin::profile_function!();
         let mut record_submit_stuff = self.record_submit_stuff.lock();
+        
         record_submit_stuff.command_pool.reset(&self.device);
-        let buffer = record_submit_stuff.command_pool.begin_new(&self.device);
-        let recorder = buffer.record(&self.device, vk::CommandBufferUsageFlags::empty());
+        let recorder = record_submit_stuff.command_pool
+            .begin_new(&self.device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        
         f(&recorder);
+        
         drop(recorder);
-        unsafe {
-            self.device.raw.reset_fences(&[record_submit_stuff.fence]).unwrap();
-        }
-        let submit_info = record_submit_stuff.command_pool.buffers()[0].submit_info();
-        self.device.queue_submit(QueueType::Graphics, &[submit_info], record_submit_stuff.fence);
-        unsafe {
-            self.device.raw.wait_for_fences(&[record_submit_stuff.fence], false, u64::MAX).unwrap();
-        }
+
+        let value = self.device.queue_submit(QueueType::Graphics, record_submit_stuff.command_pool.submit_info());
+        self.device.wait_queue_semaphore(QueueType::Graphics, value, None).unwrap();
     }
 
     #[track_caller]
@@ -357,23 +411,15 @@ impl Context {
 
         let mut transfer_queue = self.transfer_queue.lock();
 
-        if transfer_queue.remaining_size() < data_size {
-            transfer_queue.submit(&self.device, None);
-            self.graph
-                .dont_wait_semaphores
-                .lock()
-                .insert(self.frames[self.frame_index].transfer_finished_semaphore.handle);
+        if transfer_queue.pending_bytes() >= STAGING_PAGE_SIZE {
+            transfer_queue.submit(&self.device);
         }
 
         transfer_queue.queue_write_buffer(buffer, offset, data);
     }
 
     pub fn submit_pending(&mut self) {
-        self.transfer_queue.get_mut().submit(&self.device, None);
-        self.graph
-            .dont_wait_semaphores
-            .get_mut()
-            .insert(self.frames[self.frame_index].transfer_finished_semaphore.handle);
+        self.transfer_queue.get_mut().submit(&self.device);
     }
 
     pub fn window(&self) -> &Window {
@@ -401,15 +447,11 @@ impl Drop for Context {
 
         for frame in self.frames.iter_mut() {
             unsafe {
-                self.device.raw.destroy_fence(frame.in_flight_fence, None);
                 self.device.raw.destroy_semaphore(frame.image_available_semaphore.handle, None);
                 self.device.raw.destroy_semaphore(frame.render_finished_semaphore.handle, None);
-                self.device.raw.destroy_semaphore(frame.transfer_finished_semaphore.handle, None);
-
                 self.device.raw.destroy_query_pool(frame.timestamp_query_pool, None);
             }
 
-            // frame.command_pool.destroy(&self.device);
             for command_pool in frame.command_pools.iter() {
                 command_pool.lock().destroy(&self.device);
             }
@@ -461,8 +503,7 @@ impl Context {
 
         unsafe {
             puffin::profile_scope!("fence_wait");
-            self.device.raw.wait_for_fences(&[frame.in_flight_fence], false, u64::MAX).unwrap();
-            self.device.raw.reset_fences(&[frame.in_flight_fence]).unwrap();
+            self.device.wait_queue_semaphore(QueueType::Graphics, frame.in_flight_fence_value, None).unwrap();
 
             if !frame.first_time_use {
                 let timestamp_count = frame.graph_debug_info.timestamp_count;
@@ -479,11 +520,6 @@ impl Context {
             } else {
                 frame.first_time_use = false;
             }
-        }
-
-        // frame.command_pool.reset(&self.device);
-        for command_pool in frame.command_pools.iter_mut() {
-            command_pool.get_mut().reset(&self.device);
         }
 
         self.swapchain.resize(self.window.inner_size().into());
@@ -1239,10 +1275,6 @@ impl Context {
         };
 
         self.transfer_queue.get_mut().queue_write_buffer(&buffer, 0, data);
-        self.graph
-            .dont_wait_semaphores
-            .get_mut()
-            .remove(&self.frames[self.frame_index].transfer_finished_semaphore.handle);
         self.frames[self.frame_index].uses_async_transfer = true;
 
         let descriptor_index = buffer.descriptor_index;
@@ -1362,8 +1394,9 @@ impl Context {
         let frame = &mut self.frames[self.frame_index];
 
         frame.uses_async_transfer = false;
-        let transfer_submited =
-            self.transfer_queue.get_mut().submit(&self.device, Some(frame.transfer_finished_semaphore.handle));
+        
+        self.transfer_queue.get_mut().submit(&self.device);
+        let last_transfer_fence = self.transfer_queue.get_mut().last_fence_value;
 
         frame.graph_debug_info.clear();
 
@@ -1375,19 +1408,13 @@ impl Context {
             .resize(frame.compiled_graph.batches.len(), GraphBatchDebugInfo::default());
         frame.graph_debug_info.timestamp_count = frame.compiled_graph.batches.len() as u32 * 2;
 
-        // let commands = frame.compiled_graph
-        //     .iter_batches()
-        //     .zip(frame.graph_debug_info.batch_infos.iter_mut())
-        //     .enumerate()
-        //     .map(|(batch_index, (batch_ref, batch_debug_info))| record_batch(
-        //         &self.device,
-        //         &frame.compiled_graph,
-        //         &mut frame.command_pool,
-        //         frame.timestamp_query_pool,
-        //         batch_index,
-        //         batch_ref,
-        //         batch_debug_info
-        //     ));
+        unsafe {
+            self.device.raw.reset_query_pool(frame.timestamp_query_pool, 0, MAX_TIMESTAMP_COUNT);
+        }
+
+        for command_pool in frame.command_pools.iter_mut() {
+            command_pool.get_mut().mark_for_reset();
+        }
 
         let batch_cmd_indices: Vec<(usize, usize)> = {
             puffin::profile_scope!("command_recording");
@@ -1402,8 +1429,7 @@ impl Context {
                     |command_pool, (batch_index, (batch_data, batch_debug_info))| {
                         let batch_ref = frame.compiled_graph.get_batch_ref(&batch_data);
 
-                        let transfer_semaphore =
-                            (transfer_submited && batch_index == 0).then_some(frame.transfer_finished_semaphore.handle);
+                        let transfer_semaphore = (batch_index == 0).then_some(last_transfer_fence);
 
                         let command_index = record_batch(
                             &self.device,
@@ -1424,14 +1450,32 @@ impl Context {
 
         {
             puffin::profile_scope!("command_submit");
-            let submit_infos: Vec<_> = batch_cmd_indices
-                .iter()
-                .copied()
-                .map(|(pool_index, command_buffer_index)| {
-                    frame.command_pools[pool_index].get_mut().buffers()[command_buffer_index].submit_info()
-                })
-                .collect();
-            self.device.queue_submit(QueueType::Graphics, &submit_infos, frame.in_flight_fence);
+            let mut command_batches = Vec::new();
+            let mut semaphore_infos = Vec::new();
+            for (pool_index, batch_index) in batch_cmd_indices.iter().copied() {
+                let (command_buffer, wait_semaphores, signal_semaphores) = frame.command_pools[pool_index]
+                    .get_mut()
+                    .get_batch(batch_index);
+
+                let wait_start = semaphore_infos.len();
+                semaphore_infos.extend(wait_semaphores);
+                let wait_end = semaphore_infos.len();
+
+                let signal_start = semaphore_infos.len();
+                semaphore_infos.extend(signal_semaphores);
+                let signal_end = semaphore_infos.len();
+
+                command_batches.push(graphics::CommandBatch {
+                    command_buffer,
+                    wait_semaphore_range: wait_start..wait_end,
+                    signal_semaphore_range: signal_start..signal_end,
+                });
+            }
+            
+            frame.in_flight_fence_value = self.device.queue_submit(QueueType::Graphics, graphics::SubmitInfo {
+                batches: &command_batches,
+                semaphores: &semaphore_infos
+            });
         }
         {
             puffin::profile_scope!("queue_present");
@@ -1463,7 +1507,7 @@ fn record_batch(
     batch_index: usize,
     batch_ref: graph::BatchRef,
     batch_debug_info: &mut GraphBatchDebugInfo,
-    additional_semaphore: Option<vk::Semaphore>,
+    transfer_fence: Option<u64>,
 ) -> usize {
     puffin::profile_scope!("batch_record", format!("{batch_index}"));
 
@@ -1479,24 +1523,19 @@ fn record_batch(
         })
         .collect();
 
-    let cmd_buffer = command_pool.begin_new(device);
+    let mut recorder = command_pool.begin_new(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
-    if let Some(semaphore) = additional_semaphore {
-        cmd_buffer.wait_semaphore(semaphore, vk::PipelineStageFlags2::TOP_OF_PIPE);
+    if let Some(fence_value) = transfer_fence {
+        let semaphore = device.get_queue(QueueType::AsyncTransfer).semaphore;
+        recorder.wait_semaphore(semaphore, vk::PipelineStageFlags2::ALL_COMMANDS, Some(fence_value));
     }
 
     for (semaphore, stage) in batch_ref.wait_semaphores {
-        cmd_buffer.wait_semaphore(semaphore.handle, *stage);
+        recorder.wait_semaphore(semaphore.handle, *stage, None);
     }
 
     for (semaphore, stage) in batch_ref.signal_semaphores {
-        cmd_buffer.signal_semaphore(semaphore.handle, *stage);
-    }
-
-    let recorder = cmd_buffer.record(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-    if batch_index == 0 {
-        recorder.reset_query_pool(timestamp_query_pool, 0..MAX_TIMESTAMP_COUNT);
+        recorder.signal_semaphore(semaphore.handle, *stage, None);
     }
 
     let memory_barrier = if graphics::is_memory_barrier_not_useless(&batch_ref.memory_barrier) {
@@ -1510,20 +1549,19 @@ fn record_batch(
     batch_debug_info.timestamp_end_index = batch_index as u32 * 2 + 1;
 
     recorder.write_query(
-        vk::PipelineStageFlags2::TOP_OF_PIPE,
+        vk::PipelineStageFlags2::NONE,
         timestamp_query_pool,
         batch_debug_info.timestamp_start_index,
     );
 
     for pass in batch_ref.passes {
         recorder.begin_debug_label(&pass.name, None);
-        // (pass.func)(&recorder, compiled_graph);
         pass.func.record(&recorder, compiled_graph);
         recorder.end_debug_label();
     }
 
     recorder.write_query(
-        vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+        vk::PipelineStageFlags2::ALL_COMMANDS,
         timestamp_query_pool,
         batch_debug_info.timestamp_end_index,
     );
@@ -1541,7 +1579,7 @@ fn record_batch(
         recorder.barrier(&[], &image_barriers, &[]);
     }
 
-    recorder.command_buffer_index()
+    recorder.batch_index()
 }
 
 impl Context {

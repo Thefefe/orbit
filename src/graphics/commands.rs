@@ -6,10 +6,16 @@ use crate::{graphics, utils};
 
 pub struct CommandPool {
     name: String,
-    handle: vk::CommandPool,
     queue_type: graphics::QueueType,
-    command_buffers: Vec<CommandBuffer>,
+
+    handle: vk::CommandPool,
+    should_reset: bool,
+
+    command_buffers: Vec<vk::CommandBuffer>,
     used_buffers: usize,
+
+    command_batches: Vec<graphics::CommandBatch>,
+    semaphore_infos: Vec<graphics::SemaphoreInfo>,
 }
 
 impl CommandPool {
@@ -24,36 +30,71 @@ impl CommandPool {
         Self {
             name: name.to_owned(),
             handle,
+
             queue_type,
+            should_reset: false,
+
             command_buffers: Vec::new(),
             used_buffers: 0,
+
+            command_batches: Vec::new(),
+            semaphore_infos: Vec::new(),
         }
     }
 
-    #[inline(always)]
-    pub fn buffers(&self) -> &[CommandBuffer] {
-        &self.command_buffers[0..self.used_buffers]
-    }
-
     pub fn reset(&mut self, device: &graphics::Device) {
+        puffin::profile_function!(&self.name);
         unsafe {
             device.raw.reset_command_pool(self.handle, vk::CommandPoolResetFlags::empty()).unwrap();
-            for command_buffer in self.command_buffers.iter_mut() {
-                command_buffer.wait_infos.clear();
-                command_buffer.signal_infos.clear();
-            }
+            self.command_batches.clear();
+            self.semaphore_infos.clear();
             self.used_buffers = 0;
         }
     }
 
-    pub fn begin_new<'a>(&mut self, device: &graphics::Device) -> &mut CommandBuffer {
-        let index = self.get_next_command_buffer_index(device);
-        let command_buffer = &mut self.command_buffers[index];
-
-        command_buffer
+    pub fn mark_for_reset(&mut self) {
+        self.should_reset = true;
     }
 
-    fn get_next_command_buffer_index(&mut self, device: &graphics::Device) -> usize {
+    pub fn begin_new<'a>(
+        &'a mut self,
+        device: &'a graphics::Device,
+        flags: vk::CommandBufferUsageFlags,
+    ) -> CommandRecorder<'a> {
+        puffin::profile_function!(&self.name);
+        
+        if self.should_reset {
+            self.should_reset = false;
+            self.reset(device);
+        }
+
+        let command_buffer = self.get_next_command_buffer(device);
+        let init_range = self.semaphore_infos.len()..self.semaphore_infos.len();
+
+        unsafe {
+            let begin_info = vk::CommandBufferBeginInfo::builder().flags(flags);
+            device.raw.begin_command_buffer(command_buffer, &begin_info).unwrap();
+            
+            if self.queue_type.supports_graphics() {
+                device.bind_descriptors(command_buffer, vk::PipelineBindPoint::GRAPHICS);
+            }
+            
+            if self.queue_type.supports_compute() {
+                device.bind_descriptors(command_buffer, vk::PipelineBindPoint::COMPUTE);
+            }
+        }
+
+        CommandRecorder {
+            device,
+            command_pool: self,
+            command_buffer,
+            wait_semaphore_range: init_range.clone(),
+            signal_semaphore_range: init_range.clone(),
+            added_signal_semaphore: false,
+        }
+    }
+
+    fn get_next_command_buffer(&mut self, device: &graphics::Device) -> vk::CommandBuffer {
         if self.used_buffers >= self.command_buffers.len() {
             let alloc_info = vk::CommandBufferAllocateInfo::builder()
                 .command_pool(self.handle)
@@ -65,21 +106,34 @@ impl CommandPool {
             let index = self.command_buffers.len();
             device.set_debug_name(command_buffer, &format!("{}_command_buffer_#{index}", self.name));
 
-            self.command_buffers.push(CommandBuffer {
-                queue_type: self.queue_type,
-                index_within_pool: index,
-                command_buffer_info: vk::CommandBufferSubmitInfo {
-                    command_buffer,
-                    ..Default::default()
-                },
-                wait_infos: Vec::new(),
-                signal_infos: Vec::new(),
-            })
+            self.command_buffers.push(command_buffer);
         }
 
-        let index = self.used_buffers;
+        let command_buffer = self.command_buffers[self.used_buffers];
         self.used_buffers += 1;
-        index
+        command_buffer
+    }
+
+    pub fn submit_info(&self) -> graphics::SubmitInfo {
+        graphics::SubmitInfo {
+            batches: &self.command_batches,
+            semaphores: &self.semaphore_infos,
+        }
+    }
+
+    pub fn get_batch(
+        &self,
+        index: usize,
+    ) -> (
+        vk::CommandBuffer,
+        &[graphics::SemaphoreInfo],
+        &[graphics::SemaphoreInfo],
+    ) {
+        let batch = self.command_batches[index].clone();
+        let command_buffer = batch.command_buffer;
+        let wait_semaphores = &self.semaphore_infos[batch.wait_semaphore_range.clone()];
+        let signal_semaphores = &self.semaphore_infos[batch.signal_semaphore_range.clone()];
+        (command_buffer, wait_semaphores, signal_semaphores)
     }
 
     pub fn destroy(&self, device: &graphics::Device) {
@@ -89,75 +143,46 @@ impl CommandPool {
     }
 }
 
-#[derive(Debug)]
-pub struct CommandBuffer {
-    queue_type: graphics::QueueType,
-    index_within_pool: usize,
-    command_buffer_info: vk::CommandBufferSubmitInfo,
-    pub wait_infos: Vec<vk::SemaphoreSubmitInfo>,
-    pub signal_infos: Vec<vk::SemaphoreSubmitInfo>,
-}
-
-unsafe impl Sync for CommandBuffer {}
-unsafe impl Send for CommandBuffer {}
-
-impl CommandBuffer {
-    #[inline(always)]
-    pub fn handle(&self) -> vk::CommandBuffer {
-        self.command_buffer_info.command_buffer
-    }
-
-    pub fn submit_info(&self) -> vk::SubmitInfo2 {
-        vk::SubmitInfo2::builder()
-            .command_buffer_infos(std::slice::from_ref(&self.command_buffer_info))
-            .wait_semaphore_infos(&self.wait_infos)
-            .signal_semaphore_infos(&self.signal_infos)
-            .build()
-    }
-
-    pub fn wait_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
-        self.wait_infos
-            .push(vk::SemaphoreSubmitInfo::builder().semaphore(semaphore).stage_mask(stage).build())
-    }
-
-    pub fn signal_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
-        self.signal_infos
-            .push(vk::SemaphoreSubmitInfo::builder().semaphore(semaphore).stage_mask(stage).build())
-    }
-
-    pub fn record<'a>(
-        &'a mut self,
-        device: &'a graphics::Device,
-        flags: vk::CommandBufferUsageFlags,
-    ) -> CommandRecorder<'a> {
-        let begin_info = vk::CommandBufferBeginInfo::builder().flags(flags);
-
-        unsafe { device.raw.begin_command_buffer(self.handle(), &begin_info).unwrap() }
-
-        if self.queue_type.supports_graphics() {
-            device.bind_descriptors(self.handle(), vk::PipelineBindPoint::GRAPHICS);
-        }
-
-        if self.queue_type.supports_compute() {
-            device.bind_descriptors(self.handle(), vk::PipelineBindPoint::COMPUTE);
-        }
-
-        CommandRecorder {
-            device,
-            command_buffer: self,
-        }
-    }
-}
-
 pub struct CommandRecorder<'a> {
-    pub device: &'a graphics::Device,
-    pub command_buffer: &'a mut CommandBuffer,
+    device: &'a graphics::Device,
+    command_pool: &'a mut CommandPool,
+    command_buffer: vk::CommandBuffer,
+
+    wait_semaphore_range: Range<usize>,
+    signal_semaphore_range: Range<usize>,
+    added_signal_semaphore: bool,
 }
 
 impl<'a> CommandRecorder<'a> {
-    #[inline(always)]
+    pub fn wait_semaphore(&mut self, handle: vk::Semaphore, stage: vk::PipelineStageFlags2, value: Option<u64>) {
+        assert!(
+            !self.added_signal_semaphore,
+            "wait semaphores must be added before signal semaphores"
+        );
+        self.command_pool.semaphore_infos.push(graphics::SemaphoreInfo {
+            handle,
+            stage,
+            value: value.unwrap_or(0),
+        });
+        self.wait_semaphore_range.end += 1;
+    }
+
+    pub fn signal_semaphore(&mut self, handle: vk::Semaphore, stage: vk::PipelineStageFlags2, value: Option<u64>) {
+        if !self.added_signal_semaphore {
+            self.added_signal_semaphore = true;
+            let start = self.command_pool.semaphore_infos.len();
+            self.signal_semaphore_range = start..start;
+        }
+        self.command_pool.semaphore_infos.push(graphics::SemaphoreInfo {
+            handle,
+            stage,
+            value: value.unwrap_or(0),
+        });
+        self.signal_semaphore_range.end += 1;
+    }
+
     pub fn buffer(&self) -> vk::CommandBuffer {
-        self.command_buffer.handle()
+        self.command_buffer
     }
 
     pub fn begin_debug_label(&self, name: &str, color: Option<[f32; 4]>) {
@@ -611,11 +636,9 @@ impl<'a> CommandRecorder<'a> {
             &[],
         );
     }
-}
 
-impl CommandRecorder<'_> {
-    pub fn command_buffer_index(&self) -> usize {
-        self.command_buffer.index_within_pool
+    pub fn batch_index(&self) -> usize {
+        self.command_pool.command_batches.len()
     }
 }
 
@@ -624,6 +647,11 @@ impl Drop for CommandRecorder<'_> {
         unsafe {
             self.device.raw.end_command_buffer(self.buffer()).unwrap();
         }
+        self.command_pool.command_batches.push(graphics::CommandBatch {
+            command_buffer: self.buffer(),
+            wait_semaphore_range: self.wait_semaphore_range.clone(),
+            signal_semaphore_range: self.signal_semaphore_range.clone(),
+        });
     }
 }
 

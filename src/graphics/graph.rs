@@ -495,6 +495,7 @@ impl RenderGraph {
         self.resources.clear();
         self.passes.clear();
         self.draws.clear();
+        self.dependencies.clear();
         self.import_cache.clear();
         self.dont_wait_semaphores.get_mut().clear();
         self.dont_signal_semaphores.clear();

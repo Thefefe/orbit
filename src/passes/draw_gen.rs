@@ -254,6 +254,7 @@ pub fn create_draw_commands(
                 | vk::BufferUsageFlags::INDIRECT_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
+            ..Default::default()
         },
     );
 
@@ -266,6 +267,7 @@ pub fn create_draw_commands(
                     | vk::BufferUsageFlags::INDIRECT_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: MemoryLocation::GpuOnly,
+                ..Default::default()
             },
         )
     });
@@ -341,6 +343,7 @@ pub fn create_meshlet_dispatch_command(
                 | vk::BufferUsageFlags::INDIRECT_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
+            ..Default::default()
         },
     );
 
@@ -397,6 +400,7 @@ pub fn create_meshlet_draw_commands(
                 | vk::BufferUsageFlags::INDIRECT_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
+            ..Default::default()
         },
     );
 

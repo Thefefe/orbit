@@ -378,6 +378,7 @@ impl SceneData {
                 size: MESHLET_VISIBILITY_BUFFER_CHUNK_COUNT * 4,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                 memory_location: MemoryLocation::GpuOnly,
+                ..Default::default()
             },
         );
 

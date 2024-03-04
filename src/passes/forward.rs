@@ -153,6 +153,7 @@ impl ForwardRenderer {
                 size: 4 * MAX_DRAW_COUNT,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 memory_location: gpu_allocator::MemoryLocation::GpuOnly,
+                ..Default::default()
             },
         );
 
@@ -765,17 +766,18 @@ fn create_jittered_offset_texture(
             aspect: vk::ImageAspectFlags::COLOR,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
             default_sampler: Some(graphics::SamplerKind::NearestRepeat),
+            ..Default::default()
         },
     );
 
-    context.immediate_write_image(
+    // context.submit_pending();
+    context.queue_write_image(
         &image,
         0,
         0..1,
-        AccessKind::None,
-        Some(AccessKind::FragmentShaderRead),
-        bytemuck::cast_slice(data.as_slice()),
         None,
+        AccessKind::None,
+        bytemuck::cast_slice(data.as_slice()),
     );
 
     image

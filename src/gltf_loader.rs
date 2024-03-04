@@ -143,6 +143,7 @@ pub fn upload_dds_image(
             aspect: vk::ImageAspectFlags::COLOR,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
             default_sampler: Some(sampler),
+            ..Default::default()
         },
     );
 
@@ -154,6 +155,7 @@ pub fn upload_dds_image(
             size: data.len(),
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             memory_location: MemoryLocation::CpuToGpu,
+            ..Default::default()
         },
         data,
     );
@@ -279,6 +281,7 @@ pub fn upload_image_and_generate_mipmaps(
             aspect: vk::ImageAspectFlags::COLOR,
             subresource_desc: graphics::ImageSubresourceViewDesc::default(),
             default_sampler: Some(sampler),
+            ..Default::default()
         },
     );
 
@@ -290,6 +293,7 @@ pub fn upload_image_and_generate_mipmaps(
                 size: image.as_bytes().len(),
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: MemoryLocation::CpuToGpu,
+                ..Default::default()
             },
             image.as_bytes(),
         )
@@ -301,6 +305,7 @@ pub fn upload_image_and_generate_mipmaps(
                 size: image.len(),
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: MemoryLocation::CpuToGpu,
+                ..Default::default()
             },
             image.as_bytes(),
         )

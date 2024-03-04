@@ -241,6 +241,16 @@ pub struct ImageSubresourceViewDesc {
     pub layer_descrptors: ImageDescriptorFlags,
 }
 
+/// The queue ownership of the resource
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SharingMode {
+    /// The (sub)resource can only be used on one queue at a time. Queue ownership and transfer
+    /// will be managed automaticaly.
+    #[default]Exclusive,
+    /// The resource can be used concurently on multiple queues, slower than `Exclusive`
+    Concurent,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ImageDesc {
     pub ty: ImageType,
@@ -252,6 +262,7 @@ pub struct ImageDesc {
     pub aspect: vk::ImageAspectFlags,
     pub subresource_desc: ImageSubresourceViewDesc,
     pub default_sampler: Option<graphics::SamplerKind>,
+    pub sharing_mode: SharingMode,
 }
 
 #[derive(Debug, Clone)]
@@ -288,7 +299,7 @@ impl ImageRaw {
 
         let layer_count = desc.ty.layer_count();
 
-        let create_info = vk::ImageCreateInfo::builder()
+        let mut create_info = vk::ImageCreateInfo::builder()
             .flags(desc.ty.vk_image_flags())
             .image_type(desc.ty.vk_image_type())
             .extent(extent)
@@ -298,8 +309,16 @@ impl ImageRaw {
             .tiling(vk::ImageTiling::OPTIMAL)
             .samples(desc.samples.to_vk())
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(desc.usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            .usage(desc.usage);
+
+        match desc.sharing_mode {
+            graphics::SharingMode::Concurent if device.queue_family_count > 1 => {
+                create_info = create_info
+                    .sharing_mode(vk::SharingMode::CONCURRENT)
+                    .queue_family_indices(device.queue_family_indices())
+            }
+            _ => create_info = create_info.sharing_mode(vk::SharingMode::EXCLUSIVE),
+        }
 
         let handle = unsafe { device.raw.create_image(&create_info, None).unwrap() };
 
@@ -664,6 +683,7 @@ impl graphics::Context {
                 size: bytes.len(),
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: MemoryLocation::CpuToGpu,
+                ..Default::default()
             },
             bytes,
         );

@@ -415,6 +415,7 @@ pub fn mark_active_clusters(
             size: tile_count[0] * tile_count[1] * 4,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
+            ..Default::default()
         },
     );
 
@@ -424,6 +425,7 @@ pub fn mark_active_clusters(
             size: settings.linear_cluster_count() * 8,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
+            ..Default::default()
         },
     );
 
@@ -494,6 +496,7 @@ pub fn compact_active_clusters(
                 | vk::BufferUsageFlags::INDIRECT_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
+            ..Default::default()
         },
     );
 
@@ -549,6 +552,7 @@ pub fn cluster_light_assignment(
             size: 4 + settings.linear_max_allocated_cluster_count() as usize * 32 * 4,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: MemoryLocation::GpuOnly,
+            ..Default::default()
         },
     );
 

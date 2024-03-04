@@ -14,7 +14,7 @@ use crate::{
 
 use super::{
     graph::{self, CompiledRenderGraph, RenderGraph},
-    Dispatch, TransientResourceCache,
+    AccessKind, Dispatch, TransientResourceCache,
 };
 
 #[repr(C)]
@@ -37,7 +37,6 @@ pub struct Frame {
     uses_async_transfer: bool,
 
     command_pools: Vec<Mutex<graphics::CommandPool>>,
-    global_buffer: graphics::BufferRaw,
 
     compiled_graph: CompiledRenderGraph,
     graph_debug_info: GraphDebugInfo,
@@ -49,9 +48,26 @@ struct RecordSubmitStuff {
     fence: vk::Fence,
 }
 
-struct BufferCopy {
-    dst_buffer: vk::Buffer,
-    dst_offset: usize,
+#[derive(Debug, Clone)]
+enum CopyDst {
+    Buffer {
+        dst_buffer: vk::Buffer,
+        dst_offset: usize,
+    },
+    Image {
+        dst_image: vk::Image,
+        dst_mip_level: u32,
+        dst_layers: Range<u32>,
+        dst_offset: Option<vk::Offset3D>,
+        dst_extent: vk::Extent3D,
+        prev_access: AccessKind,
+        is_concurent: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct CopyCommand {
+    dst: CopyDst,
     src_offset: usize,
     size: usize,
 }
@@ -61,28 +77,31 @@ struct StagingPage {
     fence_value: u64,
 }
 
+const STAGING_PAGE_SIZE: usize = 12 * 1024 * 1024;
+const STAGING_PAGE_COUNT: usize = 3;
+
 struct StagedTransferQueue {
     staging_buffer: graphics::BufferRaw,
     pages: Vec<StagingPage>,
     page_index: usize,
     page_size: usize,
-    
+
     pending_data: Vec<u8>,
-    pending_copies: Vec<BufferCopy>,
+    pending_copy_commands: Vec<CopyCommand>,
+    pending_image_transfers: Vec<ImagePostTransferOp>,
+
+    pre_transfer_command_pool: graphics::CommandPool,
+    pre_transfer_fence: u64,
 
     last_fence_value: u64,
 }
-
-const STAGING_PAGE_SIZE: usize = 12 * 1024 * 1024;
-const STAGING_PAGE_COUNT: usize = 3;
 
 impl StagedTransferQueue {
     fn new(device: &graphics::Device, page_count: usize, page_size: usize) -> Self {
         assert!(page_count > 0, "at least one page is required");
         assert!(page_size >= 1024, "page_size must be at least 1024 bytes");
-        
         // TODO: handle alignment based on gpu properties
-        
+
         let staging_buffer = graphics::BufferRaw::create_impl(
             device,
             "transfer_queue_staging_buffer".into(),
@@ -90,28 +109,37 @@ impl StagedTransferQueue {
                 size: page_count * page_size,
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
+                ..Default::default()
             },
             None,
         );
 
         let pages = Vec::from_iter((0..page_count).map(|_| {
-            let command_pool = graphics::CommandPool::new(
-                device,
-                "staged_trasfer_command_pool",
-                QueueType::AsyncTransfer
-            );
-            
-            StagingPage { command_pool, fence_value: 0 }
+            let command_pool =
+                graphics::CommandPool::new(device, "staged_transfer_command_pool", QueueType::AsyncTransfer);
+
+            StagingPage {
+                command_pool,
+                fence_value: 0,
+            }
         }));
+
+        let pre_transfer_command_pool =
+            graphics::CommandPool::new(device, "staged_pre_transfer_command_pool", QueueType::Graphics);
 
         Self {
             staging_buffer,
             pages,
             page_index: 0,
             page_size,
-            
+
             pending_data: Vec::new(),
-            pending_copies: Vec::new(),
+            pending_copy_commands: Vec::new(),
+
+            pending_image_transfers: Vec::new(),
+
+            pre_transfer_command_pool,
+            pre_transfer_fence: 0,
 
             last_fence_value: 0,
         }
@@ -121,6 +149,7 @@ impl StagedTransferQueue {
         for page in self.pages.iter() {
             page.command_pool.destroy(device);
         }
+        self.pre_transfer_command_pool.destroy(device);
         graphics::BufferRaw::destroy_impl(device, &self.staging_buffer);
     }
 
@@ -130,18 +159,63 @@ impl StagedTransferQueue {
 
     #[track_caller]
     fn queue_write_buffer(&mut self, buffer: &graphics::BufferView, offset: usize, data: &[u8]) {
-        assert!(data.len() <= self.page_size, "copies bigger then the page size isn't yet supported");
+        puffin::profile_function!();
+        assert!(
+            data.len() <= self.page_size,
+            "copies bigger then the page size isn't yet supported"
+        );
 
         if data.len() == 0 {
             return;
         }
-        puffin::profile_function!();
 
         let src_offset = self.pending_data.len();
         self.pending_data.extend_from_slice(data);
-        self.pending_copies.push(BufferCopy {
-            dst_buffer: buffer.handle,
-            dst_offset: offset,
+        self.pending_copy_commands.push(CopyCommand {
+            dst: CopyDst::Buffer {
+                dst_buffer: buffer.handle,
+                dst_offset: offset,
+            },
+            src_offset,
+            size: data.len(),
+        });
+    }
+
+    #[track_caller]
+    fn queue_write_image(
+        &mut self,
+        image: &graphics::ImageRaw,
+        mip_level: u32,
+        layers: Range<u32>,
+        region: Option<(vk::Offset3D, vk::Extent3D)>,
+        prev_access: AccessKind,
+        data: &[u8],
+    ) {
+        puffin::profile_function!();
+        assert!(
+            data.len() <= self.page_size,
+            "copies bigger then the page size isn't yet supported"
+        );
+        assert_eq!(image.desc.aspect, vk::ImageAspectFlags::COLOR);
+
+        if data.len() == 0 {
+            return;
+        }
+
+        let (dst_offset, dst_extent) = region.unwrap_or((vk::Offset3D::default(), image.extent));
+        let dst_offset = region.is_some().then_some(dst_offset);
+        let src_offset = self.pending_data.len();
+        self.pending_data.extend_from_slice(data);
+        self.pending_copy_commands.push(CopyCommand {
+            dst: CopyDst::Image {
+                dst_image: image.handle,
+                dst_mip_level: mip_level,
+                dst_layers: layers.clone(),
+                dst_offset,
+                dst_extent,
+                prev_access,
+                is_concurent: image.desc.sharing_mode == graphics::SharingMode::Concurent
+            },
             src_offset,
             size: data.len(),
         });
@@ -151,63 +225,259 @@ impl StagedTransferQueue {
         self.last_fence_value + self.pending_bytes().div_ceil(self.page_size) as u64
     }
 
-    fn submit(&mut self, device: &graphics::Device) -> Option<u64> {
-        puffin::profile_function!();
-        
-        if self.pending_copies.is_empty() {
+    fn queue_pre_transfer(&mut self, device: &graphics::Device, copy_range: Range<usize>) -> Option<u64> {
+        let src_queue_family_index = device.get_queue(QueueType::Graphics).family.index;
+        let dst_queue_family_index = device.get_queue(QueueType::AsyncTransfer).family.index;
+
+        if src_queue_family_index == dst_queue_family_index {
             return None;
         }
-        
+
+        let mut image_barriers = Vec::new();
+        for copy_command in &self.pending_copy_commands[copy_range] {
+            if let CopyDst::Image {
+                dst_image,
+                dst_mip_level,
+                dst_layers,
+                dst_offset,
+                prev_access,
+                is_concurent,
+                ..
+            } = copy_command.dst.clone()
+            {
+                if dst_offset.is_some() && !is_concurent {
+                    let barrier = vk::ImageMemoryBarrier2 {
+                        src_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                        src_access_mask: vk::AccessFlags2::MEMORY_WRITE | vk::AccessFlags2::MEMORY_READ,
+                        old_layout: prev_access.image_layout(),
+                        new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        src_queue_family_index,
+                        dst_queue_family_index,
+                        image: dst_image,
+                        subresource_range: vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: dst_mip_level,
+                            level_count: 1,
+                            base_array_layer: dst_layers.start,
+                            layer_count: dst_layers.len().try_into().unwrap(),
+                        },
+                        ..Default::default()
+                    };
+                    image_barriers.push(barrier);
+                }
+            }
+        }
+
+        if image_barriers.is_empty() {
+            return None;
+        }
+
+        device.wait_queue_semaphore(QueueType::Graphics, self.pre_transfer_fence, None).unwrap();
+        self.pre_transfer_command_pool.reset(&device);
+
+        let recorder = self.pre_transfer_command_pool.begin_new(&device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        recorder.barrier(&[], &image_barriers, &[]);
+
+        drop(recorder);
+
+        self.pre_transfer_fence =
+            device.queue_submit(QueueType::Graphics, self.pre_transfer_command_pool.submit_info());
+
+        Some(self.pre_transfer_fence)
+    }
+
+    fn submit(&mut self, device: &graphics::Device) -> Option<u64> {
+        puffin::profile_function!();
+        if self.pending_copy_commands.is_empty() {
+            return None;
+        }
+
         let mut copy_cursor = 0;
-        let mut byte_cursor = 0;
+        // let mut byte_cursor = 0;
         loop {
             puffin::profile_scope!("transfer_submit_page");
-            let mut local_byte_count = 0;
+            let buffer_offset = self.page_index * self.page_size;
+
+            let mut local_byte_cursor = 0;
             let mut local_copy_count = 0;
             loop {
                 let copy_index = copy_cursor + local_copy_count;
 
-                if copy_index >= self.pending_copies.len() {
+                if copy_index >= self.pending_copy_commands.len() {
                     break;
                 }
 
-                if local_byte_count + self.pending_copies[copy_index].size > self.page_size {
+                let required_alignment = match &self.pending_copy_commands[copy_index].dst {
+                    CopyDst::Buffer { .. } => 4,
+                    // TODO: get the alignment of the associated format, meanwhile 64 is working for most formats
+                    CopyDst::Image { .. } => 64,
+                };
+                let padding = local_byte_cursor % required_alignment;
+
+                if local_byte_cursor + self.pending_copy_commands[copy_index].size + padding > self.page_size {
                     break;
                 }
 
-                local_byte_count += self.pending_copies[copy_index].size;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        self.pending_data.as_ptr().add(self.pending_copy_commands[copy_index].src_offset),
+                        self.staging_buffer.mapped_ptr.unwrap().as_ptr().add(buffer_offset + local_byte_cursor + padding),
+                        self.pending_copy_commands[copy_index].size,
+                    );
+                }
+                self.pending_copy_commands[copy_index].src_offset = buffer_offset + local_byte_cursor + padding;
+
+                local_byte_cursor += self.pending_copy_commands[copy_index].size + padding;
                 local_copy_count += 1;
             }
 
             device.wait_queue_semaphore(QueueType::AsyncTransfer, self.pages[self.page_index].fence_value, None)
                 .unwrap();
 
-            let buffer_offset = self.page_index * self.page_size;
-            unsafe {
-                puffin::profile_scope!("copy_data_to_staging_buffer");
-                std::ptr::copy_nonoverlapping(
-                    self.pending_data.as_ptr().add(byte_cursor),
-                    self.staging_buffer.mapped_ptr.unwrap().as_ptr().add(buffer_offset),
-                    local_byte_count
-                );
-            }
+            let copy_range = copy_cursor..copy_cursor + local_copy_count;
+            let pre_transfer_fence = self.queue_pre_transfer(device, copy_range.clone());
 
             self.pages[self.page_index].command_pool.reset(device);
-            let recorder = self.pages[self.page_index].command_pool
+            let mut recorder = self.pages[self.page_index]
+                .command_pool
                 .begin_new(device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            
+
+            if let Some(fence) = pre_transfer_fence {
+                recorder.wait_queue(QueueType::Graphics, vk::PipelineStageFlags2::TRANSFER, fence);
+            }
+
             {
                 puffin::profile_scope!("record_copy_commands");
                 recorder.begin_debug_label("async_copy", Some([1.0, 1.0, 0.0, 1.0]));
-                for command in &self.pending_copies[copy_cursor..copy_cursor+local_copy_count] {
-                    let region = vk::BufferCopy {
-                        src_offset: (buffer_offset + command.src_offset - byte_cursor).try_into().unwrap(),
-                        dst_offset: command.dst_offset.try_into().unwrap(),
-                        size: command.size.try_into().unwrap(),
-                    };
-                    
-                    recorder.copy_buffer(self.staging_buffer.handle, command.dst_buffer, &[region]);
+
+                let graphics_queue_index = device.get_queue(QueueType::Graphics).family.index;
+                let transfer_queue_index = device.get_queue(QueueType::AsyncTransfer).family.index;
+
+                let mut image_barriers = Vec::new();
+                for command in &self.pending_copy_commands[copy_range.clone()] {
+                    if let CopyDst::Image {
+                        dst_image,
+                        dst_mip_level,
+                        dst_layers,
+                        dst_offset,
+                        prev_access,
+                        is_concurent,
+                        ..
+                    } = command.dst.clone()
+                    {
+                        let discard = dst_offset.is_none();
+                        let mut barrier = vk::ImageMemoryBarrier2 {
+                            dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+                            dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+                            old_layout: if discard {
+                                vk::ImageLayout::UNDEFINED
+                            } else {
+                                prev_access.image_layout()
+                                // vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                            },
+                            new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            image: dst_image,
+                            subresource_range: vk::ImageSubresourceRange {
+                                aspect_mask: vk::ImageAspectFlags::COLOR,
+                                base_mip_level: dst_mip_level,
+                                level_count: 1,
+                                base_array_layer: dst_layers.start,
+                                layer_count: dst_layers.len().try_into().unwrap(),
+                            },
+                            ..Default::default()
+                        };
+
+                        if !discard && graphics_queue_index != transfer_queue_index && !is_concurent {
+                            barrier.src_queue_family_index = graphics_queue_index;
+                            barrier.dst_queue_family_index = transfer_queue_index;
+                        }
+                        image_barriers.push(barrier);
+                    }
                 }
+
+                recorder.barrier(&[], &image_barriers, &[]);
+
+                for command in &self.pending_copy_commands[copy_range.clone()] {
+                    match command.dst.clone() {
+                        CopyDst::Buffer { dst_buffer, dst_offset } => {
+                            let region = vk::BufferCopy {
+                                src_offset: command.src_offset.try_into().unwrap(),
+                                dst_offset: dst_offset.try_into().unwrap(),
+                                size: command.size.try_into().unwrap(),
+                            };
+
+                            recorder.copy_buffer(self.staging_buffer.handle, dst_buffer, &[region]);
+                        }
+                        CopyDst::Image {
+                            dst_image,
+                            dst_mip_level,
+                            dst_layers,
+                            dst_offset,
+                            dst_extent,
+                            ..
+                        } => {
+                            recorder.copy_buffer_to_image(
+                                self.staging_buffer.handle,
+                                dst_image,
+                                &[vk::BufferImageCopy {
+                                    buffer_offset: command.src_offset.try_into().unwrap(),
+                                    buffer_row_length: 0,
+                                    buffer_image_height: 0,
+                                    image_subresource: vk::ImageSubresourceLayers {
+                                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                                        mip_level: dst_mip_level,
+                                        base_array_layer: dst_layers.start,
+                                        layer_count: dst_layers.len().try_into().unwrap(),
+                                    },
+                                    // image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                                    image_offset: dst_offset.unwrap_or_default(),
+                                    image_extent: dst_extent,
+                                }],
+                            );
+                        }
+                    }
+                }
+
+                let transfer_queue = device.get_queue(QueueType::AsyncTransfer).family.index;
+                let graphics_queue = device.get_queue(QueueType::Graphics).family.index;
+
+                if transfer_queue != graphics_queue {
+                    for image_barrier in image_barriers.iter_mut() {
+                        let queue_transfer = image_barrier.src_queue_family_index != image_barrier.dst_queue_family_index;
+                        *image_barrier = vk::ImageMemoryBarrier2 {
+                            src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+                            src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+                            dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                            dst_access_mask: vk::AccessFlags2::NONE,
+
+                            old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+
+                            ..*image_barrier
+                        };
+
+                        if queue_transfer {
+                            image_barrier.src_queue_family_index = transfer_queue;
+                            image_barrier.dst_queue_family_index = graphics_queue;
+                        }
+
+                        let base_layer = image_barrier.subresource_range.base_array_layer;
+                        let layer_count = image_barrier.subresource_range.layer_count;
+                        let level = image_barrier.subresource_range.base_mip_level;
+                        let layers = base_layer..base_layer + layer_count;
+
+                        self.pending_image_transfers.push(ImagePostTransferOp {
+                            image: image_barrier.image,
+                            subresource: ImageSubresource::Layers { level, layers },
+                            queue_transfer: queue_transfer.then_some((transfer_queue, graphics_queue)),
+                            access: AccessKind::TransferWrite,
+                        });
+                    }
+                }
+
+                recorder.barrier(&[], &image_barriers, &[]);
+
                 recorder.end_debug_label();
             }
 
@@ -215,22 +485,22 @@ impl StagedTransferQueue {
 
             let fence_value = device.queue_submit(
                 QueueType::AsyncTransfer,
-                self.pages[self.page_index].command_pool.submit_info()
+                self.pages[self.page_index].command_pool.submit_info(),
             );
             self.pages[self.page_index].fence_value = fence_value;
             self.last_fence_value = fence_value;
 
             copy_cursor += local_copy_count;
-            byte_cursor += local_byte_count;
-            
+            // byte_cursor += local_byte_cursor;
+
             self.page_index = (self.page_index + 1) % self.pages.len();
 
-            if copy_cursor == self.pending_copies.len() {
+            if copy_cursor == self.pending_copy_commands.len() {
                 break;
             }
         }
 
-        self.pending_copies.clear();
+        self.pending_copy_commands.clear();
         self.pending_data.clear();
 
         Some(self.last_fence_value)
@@ -240,6 +510,52 @@ impl StagedTransferQueue {
 struct FrameContext {
     acquired_image: graphics::AcquiredImage,
     acquired_image_handle: GraphImageHandle,
+}
+
+enum QueueOwnership {
+    Owned { queue: QueueType },
+    Released { src_queue: QueueType, dst_queue: QueueType },
+}
+
+enum ImageSubresource {
+    Full,
+    MipLevel { level: u32 },
+    Layers { level: u32, layers: Range<u32> },
+}
+
+impl ImageSubresource {
+    fn to_subresource_range(&self) -> vk::ImageSubresourceRange {
+        match self {
+            ImageSubresource::Full => vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: vk::REMAINING_MIP_LEVELS,
+                base_array_layer: 0,
+                layer_count: vk::REMAINING_ARRAY_LAYERS,
+            },
+            ImageSubresource::MipLevel { level } => vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: *level,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: vk::REMAINING_ARRAY_LAYERS,
+            },
+            ImageSubresource::Layers { level, layers } => vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: *level,
+                level_count: 1,
+                base_array_layer: layers.start,
+                layer_count: layers.len().try_into().unwrap(),
+            },
+        }
+    }
+}
+
+struct ImagePostTransferOp {
+    image: vk::Image,
+    subresource: ImageSubresource,
+    queue_transfer: Option<(u32, u32)>,
+    access: AccessKind,
 }
 
 pub struct Context {
@@ -300,17 +616,6 @@ impl Context {
             let image_available_semaphore = device.create_semaphore("image_available_semaphore");
             let render_finished_semaphore = device.create_semaphore("render_finished_semaphore");
 
-            let global_buffer = graphics::BufferRaw::create_impl(
-                &device,
-                "global_buffer".into(),
-                &graphics::BufferDesc {
-                    size: std::mem::size_of::<GpuGlobalData>(),
-                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-                    memory_location: gpu_allocator::MemoryLocation::CpuToGpu,
-                },
-                None,
-            );
-
             let timestamp_query_pool = unsafe {
                 let create_info = vk::QueryPoolCreateInfo::builder()
                     .query_type(vk::QueryType::TIMESTAMP)
@@ -336,7 +641,6 @@ impl Context {
                         ))
                     })
                     .collect(),
-                global_buffer,
 
                 compiled_graph: CompiledRenderGraph::new(),
                 graph_debug_info: GraphDebugInfo::new(),
@@ -385,13 +689,14 @@ impl Context {
     pub fn record_and_submit(&self, f: impl FnOnce(&graphics::CommandRecorder)) {
         puffin::profile_function!();
         let mut record_submit_stuff = self.record_submit_stuff.lock();
-        
+
         record_submit_stuff.command_pool.reset(&self.device);
-        let recorder = record_submit_stuff.command_pool
+        let recorder = record_submit_stuff
+            .command_pool
             .begin_new(&self.device, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        
+
         f(&recorder);
-        
+
         drop(recorder);
 
         let value = self.device.queue_submit(QueueType::Graphics, record_submit_stuff.command_pool.submit_info());
@@ -416,6 +721,24 @@ impl Context {
         }
 
         transfer_queue.queue_write_buffer(buffer, offset, data);
+    }
+
+    pub fn queue_write_image(
+        &self,
+        image: &graphics::ImageRaw,
+        mip_level: u32,
+        layers: Range<u32>,
+        region: Option<(vk::Offset3D, vk::Extent3D)>,
+        prev_access: AccessKind,
+        data: &[u8],
+    ) {
+        let mut transfer_queue = self.transfer_queue.lock();
+
+        if transfer_queue.pending_bytes() >= STAGING_PAGE_SIZE {
+            transfer_queue.submit(&self.device);
+        }
+
+        transfer_queue.queue_write_image(image, mip_level, layers, region, prev_access, data);
     }
 
     pub fn submit_pending(&mut self) {
@@ -455,8 +778,6 @@ impl Drop for Context {
             for command_pool in frame.command_pools.iter() {
                 command_pool.lock().destroy(&self.device);
             }
-
-            graphics::BufferRaw::destroy_impl(&self.device, &frame.global_buffer);
 
             for graph::CompiledGraphResource {
                 resource,
@@ -1171,10 +1492,6 @@ impl Context {
         self.frame_context.as_ref().unwrap().acquired_image_handle
     }
 
-    pub fn get_global_buffer_index(&self) -> u32 {
-        self.frames[self.frame_index].global_buffer.descriptor_index.unwrap()
-    }
-
     pub fn get_resource_descriptor_index<T>(&self, handle: GraphHandle<T>) -> Option<graphics::DescriptorIndex> {
         self.graph.resources[handle.resource_index].descriptor_index
     }
@@ -1257,6 +1574,7 @@ impl Context {
             size: data.len(),
             usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             memory_location: gpu_allocator::MemoryLocation::GpuOnly,
+            ..Default::default()
         };
         let desc = graphics::AnyResourceDesc::Buffer(buffer_desc);
         let (mut cache, cache_needs_rename) = self.transient_resource_cache.get(&name, &desc).unwrap_or_else(|| {
@@ -1377,26 +1695,15 @@ impl Context {
         puffin::profile_function!();
         let frame_context = self.frame_context.take().unwrap();
 
-        unsafe {
-            let screen_size = frame_context.acquired_image.extent;
-            self.frames[self.frame_index]
-                .global_buffer
-                .mapped_ptr
-                .unwrap()
-                .cast::<GpuGlobalData>()
-                .as_ptr()
-                .write(GpuGlobalData {
-                    screen_size: [screen_size.width, screen_size.height],
-                    elapsed_frames: self.elapsed_frames as u32,
-                    elapsed_time: self.start.elapsed().as_secs_f32(),
-                })
-        };
         let frame = &mut self.frames[self.frame_index];
 
         frame.uses_async_transfer = false;
-        
+
         self.transfer_queue.get_mut().submit(&self.device);
         let last_transfer_fence = self.transfer_queue.get_mut().last_fence_value;
+
+        let image_transfers: Vec<ImagePostTransferOp> =
+            self.transfer_queue.get_mut().pending_image_transfers.drain(..).collect();
 
         frame.graph_debug_info.clear();
 
@@ -1440,6 +1747,11 @@ impl Context {
                             batch_ref,
                             batch_debug_info,
                             transfer_semaphore,
+                            if batch_index == 0 {
+                                image_transfers.as_slice()
+                            } else {
+                                &[]
+                            },
                         );
 
                         (rayon::current_thread_index().unwrap(), command_index)
@@ -1453,9 +1765,8 @@ impl Context {
             let mut command_batches = Vec::new();
             let mut semaphore_infos = Vec::new();
             for (pool_index, batch_index) in batch_cmd_indices.iter().copied() {
-                let (command_buffer, wait_semaphores, signal_semaphores) = frame.command_pools[pool_index]
-                    .get_mut()
-                    .get_batch(batch_index);
+                let (command_buffer, wait_semaphores, signal_semaphores) =
+                    frame.command_pools[pool_index].get_mut().get_batch(batch_index);
 
                 let wait_start = semaphore_infos.len();
                 semaphore_infos.extend(wait_semaphores);
@@ -1471,11 +1782,14 @@ impl Context {
                     signal_semaphore_range: signal_start..signal_end,
                 });
             }
-            
-            frame.in_flight_fence_value = self.device.queue_submit(QueueType::Graphics, graphics::SubmitInfo {
-                batches: &command_batches,
-                semaphores: &semaphore_infos
-            });
+
+            frame.in_flight_fence_value = self.device.queue_submit(
+                QueueType::Graphics,
+                graphics::SubmitInfo {
+                    batches: &command_batches,
+                    semaphores: &semaphore_infos,
+                },
+            );
         }
         {
             puffin::profile_scope!("queue_present");
@@ -1508,6 +1822,7 @@ fn record_batch(
     batch_ref: graph::BatchRef,
     batch_debug_info: &mut GraphBatchDebugInfo,
     transfer_fence: Option<u64>,
+    image_trasnfers: &[ImagePostTransferOp],
 ) -> usize {
     puffin::profile_scope!("batch_record", format!("{batch_index}"));
 
@@ -1536,6 +1851,25 @@ fn record_batch(
 
     for (semaphore, stage) in batch_ref.signal_semaphores {
         recorder.signal_semaphore(semaphore.handle, *stage, None);
+    }
+
+    image_barriers.reserve(image_trasnfers.len());
+    for image_transfer in image_trasnfers {
+        let Some((src_queue_family_index, dst_queue_family_index)) = image_transfer.queue_transfer else {
+            continue;
+        };
+        let barrier = vk::ImageMemoryBarrier2 {
+            dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            dst_access_mask: vk::AccessFlags2::MEMORY_READ,
+            old_layout: image_transfer.access.image_layout(),
+            new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            src_queue_family_index,
+            dst_queue_family_index,
+            image: image_transfer.image,
+            subresource_range: image_transfer.subresource.to_subresource_range(),
+            ..Default::default()
+        };
+        image_barriers.push(barrier);
     }
 
     let memory_barrier = if graphics::is_memory_barrier_not_useless(&batch_ref.memory_barrier) {

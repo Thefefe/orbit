@@ -167,6 +167,15 @@ impl<'a> CommandRecorder<'a> {
         self.wait_semaphore_range.end += 1;
     }
 
+    pub fn wait_queue(&mut self, queue: graphics::QueueType, stage: vk::PipelineStageFlags2, value: u64) {
+        let current_queue_family = self.device.get_queue(self.command_pool.queue_type).family.index;
+        let wait_queue = self.device.get_queue(queue);
+        
+        if current_queue_family == wait_queue.family.index { return; }
+
+        self.wait_semaphore(wait_queue.semaphore, stage, Some(value))
+    }
+
     pub fn signal_semaphore(&mut self, handle: vk::Semaphore, stage: vk::PipelineStageFlags2, value: Option<u64>) {
         if !self.added_signal_semaphore {
             self.added_signal_semaphore = true;

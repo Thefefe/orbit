@@ -4,6 +4,7 @@ use ash::{
     extensions::{ext, khr},
     vk::{self, Handle},
 };
+use cstr::cstr;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 
@@ -73,7 +74,7 @@ impl InstanceMetadata {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum QueueType {
     #[default]
     Graphics,
@@ -830,15 +831,13 @@ impl Device {
         };
 
         // helper closure for simple debug name setting only for this function
-        // let device_handle = device.handle();
-        let set_debug_name = |ty: vk::ObjectType, handle: u64, name: &str| {
+        let set_debug_name = |ty: vk::ObjectType, handle: u64, name: &CStr| {
             if let Some(ref debug_utils) = debug_utils_fns {
                 unsafe {
-                    let cname = CString::new(name).unwrap(); // TODO: cache allocation?
                     let name_info = vk::DebugUtilsObjectNameInfoEXT::builder()
                         .object_type(ty)
                         .object_handle(handle)
-                        .object_name(cname.as_c_str());
+                        .object_name(name);
 
                     debug_utils.set_debug_utils_object_name(device.handle(), &name_info).unwrap();
                 }
@@ -862,14 +861,21 @@ impl Device {
         let async_compute_queue = async_compute_queue_family.map(get_queue);
         let async_transfer_queue = async_transfer_queue_family.map(get_queue);
 
-        set_debug_name(vk::Queue::TYPE, graphics_queue.handle.as_raw(), "grahics_queue");
-
+        // log::trace!("graphics queue index: {}, semaphore_handle: {:x}", graphics_queue.family.index, graphics_queue.semaphore.as_raw());
+        set_debug_name(vk::Queue::TYPE, graphics_queue.handle.as_raw(), cstr!("grahics_queue"));
+        set_debug_name(vk::Semaphore::TYPE, graphics_queue.semaphore.as_raw(), cstr!("graphics_queue_semaphore"));
+        
         if let Some(ref queue) = async_compute_queue {
-            set_debug_name(vk::Queue::TYPE, queue.handle.as_raw(), "compute_queue");
+            // log::trace!("compute queue index: {}, semaphore_handle: {:x}", queue.family.index, queue.semaphore.as_raw());
+            set_debug_name(vk::Queue::TYPE, queue.handle.as_raw(), cstr!("compute_queue"));
+            set_debug_name(vk::Semaphore::TYPE, queue.semaphore.as_raw(), cstr!("compute_queue_semaphore"));
         }
+        
+        if let Some(ref queue) = async_transfer_queue {
+            // log::trace!("transfer queue index: {}, semaphore_handle: {:x}", queue.family.index, queue.semaphore.as_raw());
 
-        if let Some(ref queue) = async_compute_queue {
-            set_debug_name(vk::Queue::TYPE, queue.handle.as_raw(), "transfer_queue");
+            set_debug_name(vk::Queue::TYPE, queue.handle.as_raw(), cstr!("transfer_queue"));
+            set_debug_name(vk::Semaphore::TYPE, queue.semaphore.as_raw(), cstr!("transfer_queue_semaphore"));
         }
 
         let mut queue_family_count: u32 = 1;
@@ -961,7 +967,7 @@ impl Device {
                 set_debug_name(
                     vk::DescriptorSetLayout::TYPE,
                     layout.as_raw(),
-                    &format!("bindless_{}_layout", desc_type.name()),
+                    desc_type.set_layout_name(),
                 );
                 layout
             })
@@ -981,7 +987,7 @@ impl Device {
         set_debug_name(
             vk::PipelineLayout::TYPE,
             pipeline_layout.as_raw(),
-            "bindless_pipeline_layout",
+            cstr!("bindless_pipeline_layout"),
         );
 
         let pool_sizes: Vec<_> = DescriptorTableType::all_types()
@@ -1001,7 +1007,7 @@ impl Device {
         set_debug_name(
             vk::DescriptorPool::TYPE,
             descriptor_pool.as_raw(),
-            "bindless_descriptor_pool",
+            cstr!("bindless_descriptor_pool"),
         );
 
         let descriptor_counts: Vec<_> = DescriptorTableType::all_types().map(|ty| ty.max_count(&gpu)).collect();
@@ -1017,9 +1023,9 @@ impl Device {
         let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_info).unwrap() };
 
         let names = [
-            "buffer_descriptor_set",
-            "sampled_image_descriptor_set",
-            "storage_image_descriptor_index",
+            cstr!("buffer_descriptor_set"),
+            cstr!("sampled_image_descriptor_set"),
+            cstr!("storage_image_descriptor_index"),
         ];
 
         for (i, descriptor_set) in descriptor_sets.iter().enumerate() {
@@ -1222,7 +1228,7 @@ pub struct SubmitInfo<'a> {
     pub semaphores: &'a [SemaphoreInfo],
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct SemaphoreInfo {
     pub handle: vk::Semaphore,
     pub stage: vk::PipelineStageFlags2,
@@ -1291,7 +1297,11 @@ impl Device {
             .enumerate()
             .map(|(index, batch)| {
                 let signal_semaphore_range = if index == submit_info.batches.len() - 1 {
-                    batch.signal_semaphore_range.start..batch.signal_semaphore_range.end + 1
+                    if batch.signal_semaphore_range.len() == 0 {
+                        semaphore_infos.len() - 1..semaphore_infos.len()
+                    } else {
+                        batch.signal_semaphore_range.start..batch.signal_semaphore_range.end + 1
+                    }
                 } else {
                     batch.signal_semaphore_range.clone()
                 };
@@ -1417,6 +1427,14 @@ impl DescriptorTableType {
             DescriptorTableType::StorageBuffer => "storage_buffer",
             DescriptorTableType::SampledImage => "sampled_image",
             DescriptorTableType::StorageImage => "storage_image",
+        }
+    }
+
+    fn set_layout_name(self) -> &'static CStr {
+        match self {
+            DescriptorTableType::StorageBuffer => cstr!("bindless_storage_buffer_layout"),
+            DescriptorTableType::SampledImage => cstr!("bindless_sampled_image_layout"),
+            DescriptorTableType::StorageImage => cstr!("bindless_storage_image_layout"),
         }
     }
 

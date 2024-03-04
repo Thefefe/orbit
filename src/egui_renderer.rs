@@ -30,8 +30,8 @@ impl EguiRenderer {
             "egui_vertex_buffer",
             &graphics::BufferDesc {
                 size: Self::PER_FRAME_VERTEX_BYTE_SIZE * graphics::FRAME_COUNT,
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER,
-                memory_location: MemoryLocation::CpuToGpu,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
             },
         );
 
@@ -39,8 +39,8 @@ impl EguiRenderer {
             "egui_index_buffer",
             &graphics::BufferDesc {
                 size: Self::PER_FRAME_INDEX_BYTE_SIZE * graphics::FRAME_COUNT,
-                usage: vk::BufferUsageFlags::INDEX_BUFFER,
-                memory_location: MemoryLocation::CpuToGpu,
+                usage: vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                memory_location: MemoryLocation::GpuOnly,
             },
         );
 
@@ -59,7 +59,7 @@ impl EguiRenderer {
     ) -> Vec<ClippedBatch> {
         puffin::profile_function!();
         for (id, delta) in textures_delta.set.iter() {
-            self.update_texture(&context, *id, delta);
+            self.update_texture(context, *id, delta);
         }
 
         for id in textures_delta.free.iter() {
@@ -124,13 +124,13 @@ impl EguiRenderer {
                     vertex_offset: vertex_cursor as i32,
                 });
 
-                context.immediate_write_buffer(
+                context.queue_write_buffer(
                     &self.vertex_buffer,
                     Self::PER_FRAME_VERTEX_BYTE_SIZE * context.frame_index()
                         + vertex_cursor as usize * std::mem::size_of::<egui::epaint::Vertex>(),
                     vertices,
                 );
-                context.immediate_write_buffer(
+                context.queue_write_buffer(
                     &self.index_buffer,
                     Self::PER_FRAME_INDEX_BYTE_SIZE * context.frame_index()
                         + index_cursor as usize * std::mem::size_of::<u32>(),
@@ -147,7 +147,7 @@ impl EguiRenderer {
 
     pub fn update_texture(
         &mut self,
-        context: &graphics::Context,
+        context: &mut graphics::Context,
         id: egui::TextureId,
         delta: &egui::epaint::ImageDelta,
     ) {
@@ -170,56 +170,47 @@ impl EguiRenderer {
             egui::ImageData::Font(image) => image.srgba_pixels(None).flat_map(|color| color.to_array()).collect(),
         };
 
-        let (image, is_new) = if let Some(image) = self.textures.get(&id) {
-            (image.full_view, false)
-        } else {
-            let image = context.create_image(
-                format!("egui_image_{id}"),
-                &graphics::ImageDesc {
-                    ty: graphics::ImageType::Single2D,
-                    format: Self::IMAGE_FORMAT,
-                    dimensions: [width as u32, height as u32, 1],
-                    mip_levels: 1,
-                    samples: graphics::MultisampleCount::None,
-                    usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-                    aspect: vk::ImageAspectFlags::COLOR,
-                    subresource_desc: graphics::ImageSubresourceViewDesc::default(),
-                    ..Default::default()
-                },
-            );
-            let image_view = image.full_view;
-            self.textures.insert(id, image);
-            (image_view, true)
-        };
+        let mut is_new = false;
+        let image = self.textures
+            .entry(id)
+            .or_insert_with(|| {
+                is_new = true;
+                context.create_image(
+                    format!("egui_image_{id}"),
+                    &graphics::ImageDesc {
+                        ty: graphics::ImageType::Single2D,
+                        format: Self::IMAGE_FORMAT,
+                        dimensions: [width as u32, height as u32, 1],
+                        mip_levels: 1,
+                        samples: graphics::MultisampleCount::None,
+                        usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+                        aspect: vk::ImageAspectFlags::COLOR,
+                        subresource_desc: graphics::ImageSubresourceViewDesc::default(),
+                        ..Default::default()
+                    },
+                )
+            });
 
-        let offset = delta
-            .pos
-            .map(|[x, y]| vk::Offset3D {
-                x: x as i32,
-                y: y as i32,
-                z: 0,
-            })
-            .unwrap_or_default();
+        let offset = delta.pos.map(|[x, y]| vk::Offset3D { x: x as i32, y: y as i32, z: 0 }).unwrap_or_default();
         let extent = vk::Extent3D {
             width: delta.image.width() as u32,
             height: delta.image.height() as u32,
             depth: 1,
         };
 
-        let prev_access = if is_new {
+        let prev_access = if is_new || delta.is_whole() {
             graphics::AccessKind::None
         } else {
             graphics::AccessKind::FragmentShaderRead
         };
-
-        context.immediate_write_image(
+        
+        context.queue_write_image(
             &image,
             0,
             0..1,
+            delta.pos.is_some().then_some((offset, extent)),
             prev_access,
-            Some(graphics::AccessKind::FragmentShaderRead),
             &bytes,
-            Some((offset, extent)),
         );
     }
 

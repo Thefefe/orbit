@@ -19,7 +19,6 @@ mod egui_renderer;
 mod gltf_loader;
 
 use app::App;
-
 use winit::{event_loop::EventLoop, window::WindowBuilder};
 
 /// An experimental Vulkan 1.3 renderer

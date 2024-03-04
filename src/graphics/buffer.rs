@@ -42,6 +42,16 @@ pub struct BufferDesc {
     pub memory_location: MemoryLocation,
 }
 
+impl Default for BufferDesc {
+    fn default() -> Self {
+        Self {
+            size: Default::default(),
+            usage: Default::default(),
+            memory_location: MemoryLocation::GpuOnly,
+        }
+    }
+}
+
 impl BufferRaw {
     pub(super) fn create_impl(
         device: &graphics::Device,
@@ -188,6 +198,7 @@ impl graphics::Context {
                     size: copy_size,
                     usage: vk::BufferUsageFlags::TRANSFER_SRC,
                     memory_location: MemoryLocation::CpuToGpu,
+                    ..Default::default()
                 },
                 None,
             );
